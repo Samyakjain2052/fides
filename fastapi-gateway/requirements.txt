@@ -1,0 +1,14 @@
+# Pinned for reproducibility.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+# The Fides client is fully async.
+httpx==0.28.1
+pydantic==2.10.4
+# Required by pydantic's EmailStr.
+email-validator==2.2.0
+
+# app-postgres / app-mongo writes for POST /data/subject. Same credentials the
+# Fides ConnectionConfigs use — this endpoint is the only part of the gateway
+# that touches the application databases directly.
+asyncpg==0.30.0
+motor==3.6.0

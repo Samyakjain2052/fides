@@ -1,0 +1,89 @@
+# =============================================================================
+# Fides server configuration
+#
+# Mounted into the `fides` container at /fides-config/fides.toml and selected
+# via FIDES__CONFIG_PATH in docker-compose.yml.
+#
+# Any value here can be overridden by a FIDES__<SECTION>__<KEY> environment
+# variable — docker-compose.yml does exactly that for the secrets, so this file
+# stays safe to commit.
+#
+# Reference: https://ethyca.com/docs/dev-docs/configuration/configuration
+# =============================================================================
+
+[database]
+# Fides' OWN application database (fides-db service). This is not the data
+# being DSAR'd — that lives in app-postgres / app-mongo.
+server = "fides-db"
+port = "5432"
+user = "postgres"
+password = "fidespassword"
+db = "fides"
+# We provision our own resources via the provisioner container, so we do NOT
+# want Fides' bundled "Cookie House" sample project loaded on top of ours.
+load_samples = false
+
+[redis]
+host = "fides-redis"
+port = 6379
+password = "redispassword"
+db_index = 0
+
+[security]
+env = "prod"
+# Overridden from .env in docker-compose.yml.
+app_encryption_key = "demoencryptionkeydemoencryption1"
+oauth_root_client_id = "fidesadmin"
+oauth_root_client_secret = "fidesadminsecret"
+root_username = "root_user"
+root_password = "Testpassword1!"
+cors_origins = [
+  "http://localhost:8080",
+  "http://localhost:8000",
+  "http://localhost:3000",
+]
+# Off by default. With it off, GET /privacy-request/{id}/access-results answers
+# 403 "Access results download is disabled." and the Admin UI hides its download
+# button — so the access package is written but nobody can fetch it through the
+# API. Turned on here because retrieving the data IS the demo.
+subject_request_download_ui_enabled = true
+
+[execution]
+# --- The three settings that make this demo run hands-free -------------------
+# All three already default to `false` in Fides 2.86.x, but they are pinned
+# explicitly because they are exactly what a production deployment would flip
+# ON, and a reader should see that this is a deliberate demo choice.
+#
+# Do not approve each DSAR by hand in the Admin UI.
+require_manual_request_approval = false
+# Do not email the data subject a verification code before executing.
+subject_identity_verification_required = false
+# Do not require a manual "finalize" click after an erasure completes.
+erasure_request_finalization_required = false
+
+# masking_strict = true means Fides will only ever UPDATE (mask) rows, never
+# DELETE them. That is what makes the erasure provable per-column: the row
+# survives with its PII nulled, so you can see exactly what was rewritten.
+# Set to false if you want Fides to fall back to row deletion for collections
+# it cannot mask.
+masking_strict = true
+
+[user]
+# Credentials the `fides` CLI uses for `fides push` (provisioner container).
+username = "root_user"
+password = "Testpassword1!"
+analytics_opt_out = true
+
+[cli]
+server_host = "fides"
+server_port = 8080
+server_protocol = "http"
+
+[logging]
+level = "INFO"
+# Demo-only: lets you see identity values in the Fides logs while debugging.
+# Never enable this in production.
+log_pii = true
+
+[consent]
+tcf_enabled = false

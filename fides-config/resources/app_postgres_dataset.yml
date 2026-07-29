@@ -1,0 +1,111 @@
+# =============================================================================
+# Fides Dataset — app-postgres
+#
+# This is the annotated map of the `users` and `orders` tables. Fides uses it
+# to (a) know which columns are PII, (b) know how to FIND a person's rows, and
+# (c) know how to write an UPDATE to mask them.
+#
+# The three pieces of `fides_meta` that make DSARs work:
+#   identity: email  -> this field is an entrypoint. A privacy request carrying
+#                       an `email` identity starts its traversal here.
+#   primary_key: True -> Fides needs a unique row identifier to build the
+#                       masking UPDATE. Without one, NO update is generated for
+#                       the collection and erasure silently does nothing.
+#   data_categories   -> what the erasure rule targets match against.
+#
+# NOTE (version-sensitive): the metadata block is `fides_meta`. It was called
+# `fidesops_meta` in the old standalone fidesops project and in Fides < 2.x;
+# both are accepted today but `fides_meta` is the current spelling.
+# Reference: https://ethyca.com/docs/dev-docs/configuration/datasets
+# =============================================================================
+dataset:
+  - fides_key: app_postgres_dataset
+    name: App Postgres Dataset
+    description: >-
+      Users and orders held in the demo application's PostgreSQL database.
+    collections:
+      # -----------------------------------------------------------------------
+      # users(id, email, full_name, phone, created_at)
+      # -----------------------------------------------------------------------
+      - name: users
+        description: Registered user accounts.
+        fields:
+          - name: id
+            data_categories: [user.unique_id]
+            fides_meta:
+              # Required for erasure: identifies the row to UPDATE.
+              primary_key: True
+              data_type: integer
+
+          - name: email
+            data_categories: [user.contact.email]
+            fides_meta:
+              # Entrypoint #1 — `SELECT * FROM users WHERE email = <identity>`
+              identity: email
+              data_type: string
+
+          - name: full_name
+            data_categories: [user.name]
+            fides_meta:
+              data_type: string
+
+          - name: phone
+            data_categories: [user.contact.phone_number]
+            fides_meta:
+              data_type: string
+
+          - name: created_at
+            # system.operations = operational metadata, not personal data. It is
+            # deliberately NOT targeted by the erasure rule, so the row survives
+            # with an audit trail of when it was created.
+            #
+            # No `data_type` here: Fides has no timestamp scalar type, and the
+            # hint is only needed for fields that get masked or joined on.
+            data_categories: [system.operations]
+
+      # -----------------------------------------------------------------------
+      # orders(id, user_email, amount, item, created_at)
+      # -----------------------------------------------------------------------
+      - name: orders
+        description: Purchase history, denormalised against the user's email.
+        fields:
+          - name: id
+            data_categories: [system.operations]
+            fides_meta:
+              primary_key: True
+              data_type: integer
+
+          - name: user_email
+            data_categories: [user.contact.email]
+            fides_meta:
+              # Entrypoint #2. `orders` is joined to the subject by email rather
+              # than by a foreign key, so it is its own entrypoint.
+              #
+              # ALTERNATIVE, if your orders table had a real `user_id` FK, you
+              # would replace `identity: email` with a graph edge and let Fides
+              # traverse users -> orders:
+              #
+              #   - name: user_id
+              #     data_categories: [user.unique_id]
+              #     fides_meta:
+              #       references:
+              #         - dataset: app_postgres_dataset
+              #           field: users.id
+              #           direction: from
+              identity: email
+              data_type: string
+
+          # `amount` and `item` are categorised as purchase history, which the
+          # erasure rule deliberately does NOT target — the business keeps
+          # de-identified revenue figures once the person's identifiers are
+          # gone. They still show up in an ACCESS response.
+          - name: amount
+            data_categories: [user.behavior.purchase_history]
+
+          - name: item
+            data_categories: [user.behavior.purchase_history]
+            fides_meta:
+              data_type: string
+
+          - name: created_at
+            data_categories: [system.operations]

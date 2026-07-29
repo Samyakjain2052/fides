@@ -1,0 +1,307 @@
+# =============================================================================
+# fides-dsar-demo
+#
+#   docker compose up
+#
+# brings up, in dependency order:
+#
+#   fides-db        Fides' own Postgres (its application database)
+#   fides-redis     Fides' Redis (Celery broker + DSR result cache)
+#   fides           Fides webserver + Admin UI            -> localhost:8080
+#   fides-worker    Celery worker that executes the DSRs
+#   app-postgres    demo app data: users + orders          -> localhost:6432
+#   app-mongo       demo app data: events                  -> localhost:37017
+#   fides-provisioner  one-shot: loads /fides-config into Fides, then exits 0
+#   fastapi-gateway my DSAR API, Swagger at /docs          -> localhost:8000
+#
+# Base layout follows Fides' own sample deployment (`fides deploy up`), i.e.
+# src/fides/data/sample_project/docker-compose.yml in the fides repo.
+# Reference: https://ethyca.com/docs/dev-docs/get-started/quickstart
+# =============================================================================
+name: fides-dsar-demo
+
+# -----------------------------------------------------------------------------
+# Every Fides process (webserver, worker, provisioner CLI) needs the same
+# config. Defined once here and merged into all three.
+#
+# fides-config/fides.toml holds the non-secret defaults; these FIDES__* env vars
+# override the secrets from .env. Env always wins over the TOML file.
+# Reference: https://ethyca.com/docs/dev-docs/configuration/configuration
+# -----------------------------------------------------------------------------
+x-fides-env: &fides-env
+  FIDES__CONFIG_PATH: /fides-config/fides.toml
+
+  FIDES__DATABASE__SERVER: fides-db
+  FIDES__DATABASE__PORT: "5432"
+  FIDES__DATABASE__USER: ${FIDES_DB_USER}
+  FIDES__DATABASE__PASSWORD: ${FIDES_DB_PASSWORD}
+  FIDES__DATABASE__DB: ${FIDES_DB_NAME}
+
+  FIDES__REDIS__HOST: fides-redis
+  FIDES__REDIS__PORT: "6379"
+  FIDES__REDIS__PASSWORD: ${FIDES_REDIS_PASSWORD}
+
+  FIDES__SECURITY__APP_ENCRYPTION_KEY: ${FIDES_APP_ENCRYPTION_KEY}
+  FIDES__SECURITY__OAUTH_ROOT_CLIENT_ID: ${FIDES_OAUTH_ROOT_CLIENT_ID}
+  FIDES__SECURITY__OAUTH_ROOT_CLIENT_SECRET: ${FIDES_OAUTH_ROOT_CLIENT_SECRET}
+  FIDES__SECURITY__ROOT_USERNAME: ${FIDES_ROOT_USERNAME}
+  FIDES__SECURITY__ROOT_PASSWORD: ${FIDES_ROOT_PASSWORD}
+
+  # DSRs are dispatched to fides-worker over Redis rather than executed inline.
+  # This is the shape a real deployment has, and it is what Fides' "DSR 3.0"
+  # request-task graph expects. Flip to True and drop the worker service if you
+  # want single-process execution.
+  # Reference: https://ethyca.com/docs/dev-docs/configuration/configuration#celery
+  FIDES__CELERY__TASK_ALWAYS_EAGER: "False"
+
+  FIDES__USER__ANALYTICS_OPT_OUT: "True"
+
+services:
+  # ===========================================================================
+  # 1. Fides platform
+  # ===========================================================================
+
+  # --- Fides' own application database ---------------------------------------
+  # postgres:12 matches Fides' sample deployment. Not the DSAR target.
+  fides-db:
+    image: postgres:12
+    environment:
+      POSTGRES_USER: ${FIDES_DB_USER}
+      POSTGRES_PASSWORD: ${FIDES_DB_PASSWORD}
+      POSTGRES_DB: ${FIDES_DB_NAME}
+    volumes:
+      - fides-db-data:/var/lib/postgresql/data
+    ports:
+      # Exposed only for debugging Fides itself.
+      - "${FIDES_DB_HOST_PORT:-7432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${FIDES_DB_USER} -d ${FIDES_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # --- Fides' Redis ----------------------------------------------------------
+  fides-redis:
+    image: redis:6.2-alpine
+    command: redis-server --requirepass ${FIDES_REDIS_PASSWORD}
+    ports:
+      - "${FIDES_REDIS_HOST_PORT:-7379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${FIDES_REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # --- Fides webserver + Admin UI -------------------------------------------
+  fides:
+    # Pinned for reproducibility. Bump via FIDES_IMAGE_TAG in .env.
+    # Tags: https://hub.docker.com/r/ethyca/fides/tags
+    image: ethyca/fides:${FIDES_IMAGE_TAG:-2.86.2}
+    command: fides webserver
+    depends_on:
+      fides-db:
+        condition: service_healthy
+      fides-redis:
+        condition: service_healthy
+    environment: *fides-env
+    volumes:
+      - ./fides-config:/fides-config:ro
+      # Access-request packages land here. The `local` storage destination
+      # writes to ./fides_uploads relative to the container's workdir (/fides),
+      # so this bind mount surfaces them on the host.
+      - ./fides_uploads:/fides/fides_uploads
+    ports:
+      - "${FIDES_PORT:-8080}:8080"
+    healthcheck:
+      # The image is python-slim and ships no curl, so use python itself.
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health',
+          timeout=5).status == 200 else 1)"
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      # First boot runs the Alembic migrations, which takes a while.
+      start_period: 120s
+
+  # --- Celery worker: this is the process that actually runs a DSAR ----------
+  fides-worker:
+    image: ethyca/fides:${FIDES_IMAGE_TAG:-2.86.2}
+    command: fides worker
+    depends_on:
+      fides:
+        condition: service_healthy
+    environment: *fides-env
+    volumes:
+      - ./fides-config:/fides-config:ro
+      # Must see the same upload directory as the webserver: the worker is what
+      # writes the access package.
+      - ./fides_uploads:/fides/fides_uploads
+    restart: unless-stopped
+
+  # ===========================================================================
+  # 2. The application data being DSAR'd
+  # ===========================================================================
+
+  # --- app-postgres: users + orders -----------------------------------------
+  app-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${APP_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${APP_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${APP_POSTGRES_DB}
+    volumes:
+      - app-postgres-data:/var/lib/postgresql/data
+      # Runs once, on first volume creation. `docker compose down -v` re-seeds.
+      - ./app-postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${APP_POSTGRES_HOST_PORT:-6432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${APP_POSTGRES_USER} -d ${APP_POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # --- app-mongo: events ----------------------------------------------------
+  app-mongo:
+    image: mongo:7.0
+    environment:
+      # Root user, created in the `admin` database by the image entrypoint.
+      MONGO_INITDB_ROOT_USERNAME: ${APP_MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${APP_MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${APP_MONGO_DB}
+      # Read by init/00_create_app_user.sh, which creates the least-privilege
+      # user that Fides connects as. Fides authenticates against `defaultauthdb`
+      # (= appdb), so the user must live in appdb, not in admin.
+      APP_MONGO_USER: ${APP_MONGO_USER}
+      APP_MONGO_PASSWORD: ${APP_MONGO_PASSWORD}
+    volumes:
+      - app-mongo-data:/data/db
+      - ./app-mongo/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${APP_MONGO_HOST_PORT:-37017}:27017"
+    healthcheck:
+      # `ping` is one of the few commands allowed pre-authentication.
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+
+  # ===========================================================================
+  # 3. One-shot provisioner — this is what makes `docker compose up` leave
+  #    Fides fully configured.
+  # ===========================================================================
+  # Uses the SAME image as the server so the `fides` CLI is available for
+  # `fides push`. Exits 0 when done; `docker compose up` will show it as
+  # "exited (0)" and that is the success signal.
+  fides-provisioner:
+    image: ethyca/fides:${FIDES_IMAGE_TAG:-2.86.2}
+    command: python /fides-config/provision/provision.py
+    depends_on:
+      fides:
+        condition: service_healthy
+      # Both app databases must be reachable: the provisioner verifies each
+      # connection for real (PUT /connection/{key}/secret?verify=true) and
+      # fails the boot if a credential is wrong.
+      app-postgres:
+        condition: service_healthy
+      app-mongo:
+        condition: service_healthy
+    environment:
+      <<: *fides-env
+      FIDES_URL: http://fides:8080
+      FIDES_ROOT_USERNAME: ${FIDES_ROOT_USERNAME}
+      FIDES_ROOT_PASSWORD: ${FIDES_ROOT_PASSWORD}
+      FIDES_CONFIG_DIR: /fides-config
+      # Expanded into fides-config/connections/connections.yml at load time, so
+      # no secret is ever committed.
+      APP_POSTGRES_HOST: ${APP_POSTGRES_HOST}
+      APP_POSTGRES_PORT: ${APP_POSTGRES_PORT}
+      APP_POSTGRES_DB: ${APP_POSTGRES_DB}
+      APP_POSTGRES_USER: ${APP_POSTGRES_USER}
+      APP_POSTGRES_PASSWORD: ${APP_POSTGRES_PASSWORD}
+      APP_MONGO_HOST: ${APP_MONGO_HOST}
+      APP_MONGO_PORT: ${APP_MONGO_PORT}
+      APP_MONGO_DB: ${APP_MONGO_DB}
+      APP_MONGO_USER: ${APP_MONGO_USER}
+      APP_MONGO_PASSWORD: ${APP_MONGO_PASSWORD}
+      # Only used for the "here is where to go next" banner it prints.
+      FIDES_PORT: ${FIDES_PORT:-8080}
+      GATEWAY_PORT: ${GATEWAY_PORT:-8000}
+    volumes:
+      - ./fides-config:/fides-config:ro
+    restart: "no"
+
+  # ===========================================================================
+  # 4. My FastAPI wrapper around the Fides API
+  # ===========================================================================
+  fastapi-gateway:
+    build:
+      context: ./fastapi-gateway
+    depends_on:
+      fides:
+        condition: service_healthy
+      # Wait for provisioning so the policy keys the gateway posts actually
+      # exist by the time the port is open.
+      fides-provisioner:
+        condition: service_completed_successfully
+      # POST /data/subject writes to both application databases directly.
+      app-postgres:
+        condition: service_healthy
+      app-mongo:
+        condition: service_healthy
+    environment:
+      FIDES_URL: ${FIDES_URL:-http://fides:8080}
+      FIDES_ROOT_USERNAME: ${FIDES_ROOT_USERNAME}
+      FIDES_ROOT_PASSWORD: ${FIDES_ROOT_PASSWORD}
+      # Same credentials the Fides ConnectionConfigs use, so anything inserted
+      # through POST /data/subject is reachable by a DSAR.
+      APP_POSTGRES_HOST: ${APP_POSTGRES_HOST}
+      APP_POSTGRES_PORT: ${APP_POSTGRES_PORT}
+      APP_POSTGRES_DB: ${APP_POSTGRES_DB}
+      APP_POSTGRES_USER: ${APP_POSTGRES_USER}
+      APP_POSTGRES_PASSWORD: ${APP_POSTGRES_PASSWORD}
+      APP_MONGO_HOST: ${APP_MONGO_HOST}
+      APP_MONGO_PORT: ${APP_MONGO_PORT}
+      # = the app_mongo_dataset fides_key; see resources/app_mongo_dataset.yml.
+      APP_MONGO_DB: ${APP_MONGO_DB}
+      APP_MONGO_USER: ${APP_MONGO_USER}
+      APP_MONGO_PASSWORD: ${APP_MONGO_PASSWORD}
+      # Must match the keys in fides-config/policies/dsr_policies.yml.
+      ACCESS_POLICY_KEY: ${ACCESS_POLICY_KEY:-demo_access_policy}
+      ERASURE_POLICY_KEY: ${ERASURE_POLICY_KEY:-demo_erasure_policy}
+      GATEWAY_LOG_LEVEL: ${GATEWAY_LOG_LEVEL:-info}
+      ACCESS_PACKAGE_DIR: /access-packages
+      # The console at /ui links to the Fides Admin UI, which a browser reaches
+      # on the published host port — not at http://fides:8080.
+      FIDES_ADMIN_URL: http://localhost:${FIDES_PORT:-8080}
+    volumes:
+      # Read-only view of the same directory the Fides worker writes access
+      # packages into. Fides has no API that returns the rows for a real privacy
+      # request (`filtered-results` is test-request-only, `access-results` only
+      # returns the storage location), so the gateway reads the package to serve
+      # `data` inline. With an S3/GCS destination it would GET the presigned URL
+      # instead and this mount would go away.
+      - ./fides_uploads:/access-packages:ro
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',
+          timeout=5).status == 200 else 1)"
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  fides-db-data:
+  app-postgres-data:
+  app-mongo-data:

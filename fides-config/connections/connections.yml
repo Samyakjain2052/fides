@@ -1,0 +1,61 @@
+# =============================================================================
+# Fides ConnectionConfigs — how Fides physically reaches each database.
+#
+# Loaded by fides-config/provision/provision.py, which:
+#   1. expands $VARS below from the provisioner container's environment,
+#   2. upserts each entry via  PATCH /api/v1/connection,
+#   3. writes the secrets via  PUT   /api/v1/connection/{key}/secret,
+#   4. links the dataset via   PATCH /api/v1/connection/{key}/datasetconfig,
+#   5. attaches the system via PATCH /api/v1/system/{fides_key}/connection.
+#
+# This file's shape intentionally mirrors Fides' own sample_connections.yml
+# (src/fides/data/sample_project/sample_connections/sample_connections.yml) so
+# it reads the same as upstream — including the `dataset` and `system_key`
+# convenience keys, which are not part of the raw ConnectionConfig API.
+#
+# NO SECRET VALUES LIVE HERE. Only $ENV_VAR references, resolved at runtime
+# from .env. Safe to commit.
+#
+# Reference: https://ethyca.com/docs/dev-docs/configuration/connections
+# =============================================================================
+connection:
+  # ---------------------------------------------------------------------------
+  # app-postgres  (users + orders)
+  # ---------------------------------------------------------------------------
+  - key: app_postgres_connection
+    name: App Postgres Connection
+    description: Demo application's PostgreSQL database (users, orders).
+    connection_type: postgres
+    # `write` is REQUIRED for erasure. With `read`, Fides will happily run
+    # access requests and silently skip every masking update.
+    access: write
+    dataset: app_postgres_dataset
+    system_key: app_postgres_system
+    secrets:
+      host: "$APP_POSTGRES_HOST"
+      port: "$APP_POSTGRES_PORT"
+      dbname: "$APP_POSTGRES_DB"
+      username: "$APP_POSTGRES_USER"
+      password: "$APP_POSTGRES_PASSWORD"
+
+  # ---------------------------------------------------------------------------
+  # app-mongo  (events)
+  # ---------------------------------------------------------------------------
+  - key: app_mongo_connection
+    name: App Mongo Connection
+    description: Demo application's MongoDB database (events).
+    connection_type: mongodb
+    access: write
+    dataset: app_mongo_dataset
+    system_key: app_mongo_system
+    secrets:
+      host: "$APP_MONGO_HOST"
+      port: "$APP_MONGO_PORT"
+      # `defaultauthdb` is ONLY the database Fides authenticates against — it is
+      # NOT the database it queries. The queried database is the dataset's
+      # fides_key (see the note at the top of resources/app_mongo_dataset.yml).
+      # Both are `app_mongo_dataset` here so the two agree; the app user is
+      # created inside that database by app-mongo/init/00_create_app_user.sh.
+      defaultauthdb: "$APP_MONGO_DB"
+      username: "$APP_MONGO_USER"
+      password: "$APP_MONGO_PASSWORD"

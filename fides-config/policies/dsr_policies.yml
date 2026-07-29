@@ -1,0 +1,108 @@
+# =============================================================================
+# DSR (Data Subject Request) Policies
+#
+# IMPORTANT — two different things in Fides are called a "policy":
+#   * a fideslang `policy:` resource   = data-governance rules for the data map,
+#                                        pushed with `fides push`.
+#   * a DSR policy (this file)         = what an access/erasure request actually
+#                                        DOES. It has no `fides push` support
+#                                        and must be created through the API.
+#
+# Loaded by fides-config/provision/provision.py via:
+#   PATCH /api/v1/dsr/policy
+#   PATCH /api/v1/dsr/policy/{policy_key}/rule
+#   PATCH /api/v1/dsr/policy/{policy_key}/rule/{rule_key}/target
+# All three are upserts, so re-running the provisioner is safe.
+#
+# A rule's TARGETS are data categories, and they are HIERARCHICAL: targeting
+# `user.contact` also covers `user.contact.email` and
+# `user.contact.phone_number`. Fides then applies the rule to every field in
+# every dataset carrying a matching category — which is precisely how one
+# request fans out across Postgres and Mongo without either being named here.
+#
+# Reference: https://ethyca.com/docs/dev-docs/configuration/policies
+# =============================================================================
+policy:
+  # ---------------------------------------------------------------------------
+  # ACCESS — "give me a copy of my data"
+  # ---------------------------------------------------------------------------
+  - key: demo_access_policy
+    name: Demo Access Policy
+    # NOTE — no `drp_action` here, deliberately.
+    #
+    # `drp_action` makes a policy addressable by the Data Rights Protocol, and
+    # it is UNIQUE across the whole Fides instance (`ix_policy_drp_action`).
+    # Fides ships `default_access_policy` (drp_action=access) and
+    # `default_erasure_policy` (drp_action=deletion) out of the box, so claiming
+    # either value here fails the push with a Postgres UniqueViolation. Our
+    # gateway addresses these policies by `policy_key`, which needs no
+    # drp_action. To use DRP instead, first clear the field on the default
+    # policy that holds it.
+    rules:
+      - key: demo_access_rule
+        name: Return all personal data
+        action_type: access
+        # Where the assembled access package is written. The provisioner
+        # creates this local storage destination first (see provision.py).
+        # In production this would be an S3/GCS destination instead.
+        storage_destination_key: demo_local_storage
+        targets:
+          # Return everything categorised as personal data. `user` is the root
+          # of the personal-data branch of the taxonomy, so this one target
+          # covers name, contact details, behaviour, device data, everything.
+          - key: demo_access_target_user
+            name: All user data
+            data_category: user
+
+  # ---------------------------------------------------------------------------
+  # ERASURE — "delete my data"
+  # ---------------------------------------------------------------------------
+  - key: demo_erasure_policy
+    name: Demo Erasure Policy
+    # See the note on demo_access_policy: `drp_action: deletion` is already
+    # taken by Fides' built-in default_erasure_policy.
+    rules:
+      - key: demo_erasure_rule
+        name: Null out direct identifiers
+        action_type: erasure
+        masking_strategy:
+          # `null_rewrite` issues UPDATE ... SET <col> = NULL in Postgres and
+          # {$set: {<field>: null}} in Mongo. Same strategy, both engines —
+          # Fides picks the right dialect per connector.
+          #
+          # Other options: string_rewrite, random_string_rewrite, hash, hmac,
+          # aes_encrypt. Fides' own built-in default_erasure_policy uses hmac.
+          # See src/fides/api/service/masking/strategy/ in the fides repo.
+          strategy: null_rewrite
+          configuration: {}
+        targets:
+          # Direct identifiers -> users.email, users.phone, orders.user_email,
+          # events.email. Nulling the email is what makes the follow-up ACCESS
+          # request come back empty: email is the traversal entrypoint, so once
+          # it is gone there is nothing left to join the person to.
+          - key: demo_erasure_target_contact
+            name: Contact details
+            data_category: user.contact
+
+          # users.full_name
+          - key: demo_erasure_target_name
+            name: Name
+            data_category: user.name
+
+          # events.metadata.ip_address, events.metadata.user_agent
+          - key: demo_erasure_target_device
+            name: Device identifiers
+            data_category: user.device
+
+          # events.metadata.session_id
+          - key: demo_erasure_target_pseudonymous
+            name: Pseudonymous identifiers
+            data_category: user.unique_id.pseudonymous
+
+          # DELIBERATELY NOT TARGETED, so you can see erasure is surgical
+          # rather than a table wipe:
+          #   user.behavior.purchase_history -> orders.amount, orders.item
+          #   user.behavior                  -> events.event_type
+          #   system.operations              -> created_at / timestamp
+          #   user.unique_id                 -> users.id (the primary key —
+          #                                     nulling it would break the row)

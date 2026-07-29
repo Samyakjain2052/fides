@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DSAR Console — where is my data?</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1>DSAR Console</h1>
+      <p class="sub">
+        One identity, two independent databases. See where a person's data lives,
+        then have Fides return it or erase it — with a per-collection log as proof.
+      </p>
+    </div>
+    <div class="header-right">
+      <span id="health-gateway" class="pill"><span class="dot"></span>gateway</span>
+      <span id="health-fides" class="pill"><span class="dot"></span>Fides</span>
+      <span id="health-db1" class="pill"><span class="dot"></span>db1</span>
+      <span id="health-db2" class="pill"><span class="dot"></span>db2</span>
+      <button id="theme" class="ghost" type="button" title="Toggle light / dark">◐ Theme</button>
+    </div>
+  </header>
+
+  <!-- ------------------------------------------------------------ subject -->
+  <section>
+    <div class="card">
+      <div class="subject-row">
+        <label class="sr-only" for="email">Data subject email</label>
+        <input id="email" type="email" value="demo@example.com"
+               placeholder="person@example.com" autocomplete="off" spellcheck="false">
+        <button id="locate" class="primary" type="button">Where is my data?</button>
+        <button id="access" type="button">Access request</button>
+        <button id="erasure" class="danger" type="button">Erasure request</button>
+      </div>
+      <div class="quick">
+        Try:
+        <button class="ghost quick-pick" type="button" data-email="demo@example.com">demo@example.com</button>
+        <button class="ghost quick-pick" type="button" data-email="control@example.com">control@example.com</button>
+        <span>— the control subject must never be touched by a DSAR for someone else.</span>
+      </div>
+      <div id="subject-error" class="banner bad hidden"></div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- KPIs -->
+  <section id="kpis-section" class="hidden">
+    <h2>What we found for <span id="found-for" class="mono">—</span></h2>
+    <div class="kpis">
+      <div class="tile hero">
+        <div class="label">Records found for this identity</div>
+        <div class="value" id="kpi-total">—</div>
+        <div class="foot" id="kpi-total-foot">across both databases</div>
+      </div>
+      <div class="tile">
+        <div class="label"><span class="swatch db1"></span>db1 · app-postgres</div>
+        <div class="value" id="kpi-db1">—</div>
+        <div class="foot" id="kpi-db1-foot">users + orders</div>
+      </div>
+      <div class="tile">
+        <div class="label"><span class="swatch db2"></span>db2 · app-mongo</div>
+        <div class="value" id="kpi-db2">—</div>
+        <div class="foot" id="kpi-db2-foot">events</div>
+      </div>
+      <div class="tile">
+        <div class="label">Masked rows remaining</div>
+        <div class="value" id="kpi-masked">—</div>
+        <div class="foot" id="kpi-masked-foot">left behind by earlier erasures</div>
+      </div>
+    </div>
+    <div id="locate-note" class="banner hidden"></div>
+  </section>
+
+  <!-- ------------------------------------------------------------ data map -->
+  <section id="map-section" class="hidden">
+    <h2>Where the data lives — <span id="map-for" class="mono">—</span></h2>
+    <div class="dbs">
+      <div class="card db-card db1" id="card-db1"></div>
+      <div class="card db-card db2" id="card-db2"></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="legend">
+        <span class="item"><span class="swatch db1"></span> db1 — app-postgres (PostgreSQL)</span>
+        <span class="item"><span class="swatch db2"></span> db2 — app-mongo (MongoDB)</span>
+        <span class="item"><span class="col-cat erasable" style="margin:0">user.contact.email</span> = a category the erasure policy nulls</span>
+        <span class="item"><span class="col-cat" style="margin:0">system.operations</span> = kept on erasure</span>
+      </div>
+      <p class="hint">
+        Column subtitles are the Fides data categories from
+        <span class="mono">fides-config/resources/</span>. The erasure policy targets
+        categories, not columns — which is how one request reaches both databases
+        without either being named in it.
+      </p>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- DSAR -->
+  <section id="dsar-section" class="hidden">
+    <h2>Privacy request</h2>
+    <div class="card">
+      <div class="dsar-head">
+        <div>
+          <h3 id="dsar-title">—</h3>
+          <div class="mono" id="dsar-id" style="color:var(--muted);margin-top:3px"></div>
+        </div>
+        <span id="dsar-status" class="pill"><span class="dot"></span>—</span>
+      </div>
+      <div class="kv" id="dsar-kv"></div>
+      <div id="dsar-banner" class="banner hidden"></div>
+
+      <div id="dsar-log-wrap" class="hidden" style="margin-top:16px">
+        <div class="collection-head" style="justify-content:space-between">
+          <h2 style="margin:0">Execution log — the proof</h2>
+          <label class="hint" style="margin:0;display:flex;gap:6px;align-items:center;cursor:pointer">
+            <span id="log-count"></span>
+            <input type="checkbox" id="log-all" style="margin:0"> show every entry
+          </label>
+        </div>
+        <div class="scroll"><table id="dsar-log">
+          <thead><tr>
+            <th>Database</th><th>Dataset : collection</th><th>Action</th>
+            <th>Status</th><th>Result</th><th>Fields touched</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <p class="hint">
+          One row per collection per action. An erasure runs its access phase first —
+          Fides has to find the rows before it can mask them — so both action types
+          legitimately appear.
+        </p>
+      </div>
+
+      <div id="dsar-data-wrap" class="hidden" style="margin-top:16px">
+        <h2 style="margin-bottom:8px">Data returned to the subject</h2>
+        <div id="dsar-data"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ----------------------------------------------------------- add data -->
+  <section>
+    <h2>Add data</h2>
+    <div class="card">
+      <details class="adder">
+        <summary>Write a person into both databases</summary>
+        <p class="hint" style="margin-top:8px">
+          Writes <b>db1</b> app-postgres (<span class="mono">users</span>, <span class="mono">orders</span>)
+          and <b>db2</b> app-mongo (<span class="mono">events</span>) in one call, then re-runs the lookup.
+          The <span class="mono">users</span> row is upserted on email; orders and events append.
+        </p>
+
+        <div class="grid-form">
+          <label class="field"><span>Email *</span>
+            <input id="f-email" type="email" placeholder="newperson@example.com"></label>
+          <label class="field"><span>Full name</span>
+            <input id="f-name" type="text" placeholder="New Person"></label>
+          <label class="field"><span>Phone</span>
+            <input id="f-phone" type="text" placeholder="+1-555-0142"></label>
+        </div>
+
+        <div class="rows">
+          <div class="collection-head">
+            <span class="name"><span class="swatch db1"></span> db1 · orders</span>
+            <button class="ghost" type="button" id="add-order">+ order</button>
+          </div>
+          <div id="orders"></div>
+        </div>
+
+        <div class="rows">
+          <div class="collection-head">
+            <span class="name"><span class="swatch db2"></span> db2 · events</span>
+            <button class="ghost" type="button" id="add-event">+ event</button>
+          </div>
+          <div id="events"></div>
+        </div>
+
+        <div class="form-actions">
+          <button id="submit-subject" class="primary" type="button">Write to both databases</button>
+          <button id="fill-sample" class="ghost" type="button">Fill with sample data</button>
+        </div>
+        <div id="form-result" class="banner hidden"></div>
+      </details>
+    </div>
+  </section>
+
+  <footer>
+    <span id="links"></span>
+    <span id="version"></span>
+  </footer>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

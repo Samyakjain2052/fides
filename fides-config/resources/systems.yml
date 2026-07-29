@@ -1,0 +1,86 @@
+# =============================================================================
+# Fides Systems — the data-map entry for each thing that holds personal data.
+#
+# Pushed with `fides push /fides-config/resources` by the provisioner.
+# A ConnectionConfig is later linked to a System via `system_key` in
+# fides-config/connections/connections.yml, which is what makes each connection
+# show up attached to its system in the Admin UI data map.
+#
+# Reference: https://ethyca.com/docs/dev-docs/configuration/systems
+# =============================================================================
+system:
+  # ---------------------------------------------------------------------------
+  # The umbrella application. Not itself a DSAR target — it exists so the two
+  # databases have a parent in the data map, which is how a real Fides data map
+  # is structured.
+  # ---------------------------------------------------------------------------
+  - fides_key: demo_app
+    name: Demo Application
+    description: >-
+      The customer-facing demo application. Its personal data lives in the two
+      backing databases below.
+    system_type: Application
+    administrating_department: Engineering
+    privacy_declarations:
+      - name: Operate the demo application
+        data_categories:
+          - user.contact
+          - user.name
+        data_use: essential.service
+        data_subjects:
+          - customer
+
+  # ---------------------------------------------------------------------------
+  # app-postgres — users + orders
+  # ---------------------------------------------------------------------------
+  - fides_key: app_postgres_system
+    name: App Postgres Database
+    description: >-
+      PostgreSQL database holding the demo application's user accounts (users)
+      and purchase history (orders).
+    system_type: Database
+    administrating_department: Engineering
+    egress:
+      - fides_key: demo_app
+        type: system
+    privacy_declarations:
+      - name: Store user accounts and order history
+        data_categories:
+          - user.contact.email
+          - user.contact.phone_number
+          - user.name
+          - user.behavior.purchase_history
+        data_use: essential.service
+        data_subjects:
+          - customer
+        # Links this System to the Dataset in app_postgres_dataset.yml.
+        dataset_references:
+          - app_postgres_dataset
+
+  # ---------------------------------------------------------------------------
+  # app-mongo — events
+  # ---------------------------------------------------------------------------
+  - fides_key: app_mongo_system
+    name: App Mongo Database
+    description: >-
+      MongoDB database holding the demo application's product analytics event
+      stream, keyed by the user's email address.
+    system_type: Database
+    administrating_department: Engineering
+    egress:
+      - fides_key: demo_app
+        type: system
+    privacy_declarations:
+      - name: Store product analytics events
+        data_categories:
+          - user.contact.email
+          - user.behavior
+          - user.device.ip_address
+        # Must be an existing key in the Fides data-use taxonomy, or the push
+        # fails with "Invalid privacy declaration referencing unknown DataUse".
+        # List them with: GET /api/v1/data_use
+        data_use: analytics.reporting.system
+        data_subjects:
+          - customer
+        dataset_references:
+          - app_mongo_dataset

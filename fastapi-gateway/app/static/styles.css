@@ -1,0 +1,493 @@
+/* ==========================================================================
+   DSAR Console — styles
+   No external requests: no CDN, no webfont. System sans only.
+
+   Colour tokens are the validated default data-viz palette:
+     db1 (app-postgres) = categorical slot 1, blue
+     db2 (app-mongo)    = categorical slot 2, orange
+   Both validated (all-pairs, light + dark) with the palette validator.
+   Status colours are the reserved status palette and are NEVER reused as an
+   entity colour; every status also carries an icon + label, so meaning never
+   rests on hue alone.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  --plane: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-2: #f3f2ef;
+
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --hairline: #e1e0d9;
+  --border: rgba(11, 11, 11, 0.1);
+
+  /* Entities: the two databases. */
+  --db1: #2a78d6;
+  --db2: #eb6834;
+
+  /* Reserved status palette. */
+  --good: #0ca30c;
+  --good-ink: #006300;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --erase-ink: #d03b3b;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --pad: 16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --plane: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-2: #222221;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --hairline: #2c2c2a;
+    --border: rgba(255, 255, 255, 0.1);
+    --db1: #3987e5;
+    --db2: #d95926;
+    --good-ink: #0ca30c;
+    --erase-ink: #e66767;
+  }
+}
+
+/* The toggle must win in both directions. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-2: #222221;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --hairline: #2c2c2a;
+  --border: rgba(255, 255, 255, 0.1);
+  --db1: #3987e5;
+  --db2: #d95926;
+  --good-ink: #0ca30c;
+  --erase-ink: #e66767;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 20px 20px 64px;
+}
+
+/* ---------------------------------------------------------------- header -- */
+header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 20px;
+}
+
+h1 {
+  font-size: 20px;
+  font-weight: 650;
+  margin: 0 0 2px;
+  letter-spacing: -0.01em;
+}
+
+.sub { color: var(--ink-2); font-size: 13px; margin: 0; }
+
+.header-right {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* ------------------------------------------------------------ components -- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--pad);
+}
+
+.card + .card { margin-top: 16px; }
+
+section { margin-bottom: 20px; }
+
+h2 {
+  font-size: 13px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+  margin: 0 0 10px;
+}
+
+h3 { font-size: 15px; font-weight: 620; margin: 0; }
+
+.hint { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
+
+button {
+  font: inherit;
+  font-weight: 550;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) { background: var(--surface-2); }
+button:focus-visible { outline: 2px solid var(--db1); outline-offset: 2px; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+button.primary {
+  background: var(--ink);
+  color: var(--surface);
+  border-color: var(--ink);
+}
+button.primary:hover:not(:disabled) { opacity: 0.85; background: var(--ink); }
+
+button.danger { border-color: var(--critical); color: var(--critical); }
+button.danger:hover:not(:disabled) { background: rgba(208, 59, 59, 0.08); }
+
+button.ghost { padding: 5px 10px; font-size: 13px; }
+
+input, select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  min-width: 0;
+}
+input:focus-visible { outline: 2px solid var(--db1); outline-offset: 1px; }
+
+a { color: var(--db1); }
+
+/* Status pill — icon + label, never colour alone. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 550;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.pill .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+.pill.good   .dot { background: var(--good); }
+.pill.warn   .dot { background: var(--warning); }
+.pill.serious .dot { background: var(--serious); }
+.pill.bad    .dot { background: var(--critical); }
+.pill.busy .dot { animation: pulse 1.1s ease-in-out infinite; }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .pill.busy .dot { animation: none; } }
+
+/* ------------------------------------------------------------- subject -- */
+.subject-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.subject-row input[type="email"] { flex: 1 1 260px; }
+
+.quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------- KPI row -- */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.tile .label {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+/* The entity swatch carries identity beside the text; the text itself always
+   wears an ink token, never the entity colour. */
+.tile .label .swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: none;
+}
+.swatch.db1 { background: var(--db1); }
+.swatch.db2 { background: var(--db2); }
+
+/* Proportional figures for standalone values (tabular is for columns). */
+.tile .value {
+  font-size: 30px;
+  font-weight: 650;
+  line-height: 1.15;
+  margin-top: 4px;
+  letter-spacing: -0.02em;
+}
+.tile .foot { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.tile.hero .value { font-size: 46px; }
+
+/* ------------------------------------------------------- database cards -- */
+/* One card per row, full width. Two columns fits the eye better but leaves each
+   table ~450px, which clips `created_at`, `item`, `metadata.*` — unacceptable in
+   a tool whose whole job is showing someone all of their data. The KPI row above
+   already carries the db1-vs-db2 comparison. */
+.dbs {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+.db-card { border-top: 3px solid var(--muted); }
+.db-card.db1 { border-top-color: var(--db1); }
+.db-card.db2 { border-top-color: var(--db2); }
+
+.db-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.db-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.collection { margin-top: 14px; }
+.collection-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.collection-head .name { font-weight: 600; font-size: 13.5px; }
+.count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------- tables -- */
+.scroll { overflow-x: auto; }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+th, td {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+thead th {
+  color: var(--ink-2);
+  font-weight: 600;
+  font-size: 12px;
+  vertical-align: bottom;
+}
+tbody tr:last-child td { border-bottom: none; }
+td.null { color: var(--muted); font-style: italic; }
+
+/* Column annotations: the Fides data category, and whether the erasure policy
+   targets it. Text, not colour, does the work. */
+.col-cat {
+  display: block;
+  font-weight: 400;
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0;
+  text-transform: none;
+  margin-top: 2px;
+}
+/* Marked by BOTH a colour and a glyph: colour alone would fail for a
+   colourblind reader, in grayscale print, and under forced-colors. */
+.col-cat.erasable { color: var(--erase-ink); }
+.col-cat.erasable::after { content: " ⌫"; }
+
+.empty {
+  color: var(--ink-2);
+  font-size: 13px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
+/* --------------------------------------------------------------- DSAR -- */
+.dsar-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+.kv {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.kv b { color: var(--ink); font-weight: 600; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.banner {
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--ink);
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.banner .icon { flex: none; font-weight: 700; }
+.banner.good .icon { color: var(--good-ink); }
+.banner.bad .icon { color: var(--critical); }
+
+/* --------------------------------------------------------------- form -- */
+details.adder summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13.5px;
+  list-style: none;
+}
+details.adder summary::-webkit-details-marker { display: none; }
+details.adder summary::before { content: "＋ "; color: var(--muted); }
+details.adder[open] summary::before { content: "－ "; }
+
+.grid-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+label.field { display: block; font-size: 12.5px; color: var(--ink-2); }
+label.field span { display: block; margin-bottom: 4px; }
+label.field input { width: 100%; }
+
+.rows { margin-top: 14px; }
+.row-item {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+.row-item.order { grid-template-columns: 120px 1fr auto; }
+.row-item.event { grid-template-columns: 1fr 1fr 1fr 1fr auto; }
+@media (max-width: 720px) {
+  .row-item.order, .row-item.event { grid-template-columns: 1fr; }
+}
+
+.form-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+/* -------------------------------------------------------------- legend -- */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.legend .item { display: flex; align-items: center; gap: 7px; }
+
+footer {
+  margin-top: 24px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.hidden { display: none !important; }

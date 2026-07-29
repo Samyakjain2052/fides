@@ -1,0 +1,21 @@
+# Secrets — commit .env.example instead
+.env
+
+# Fides access-request result packages written by the "local" storage
+# destination (these contain real personal data pulled during access DSARs).
+fides_uploads/
+
+__pycache__/
+*.pyc
+.DS_Store
+
+# Per-developer Claude Code settings (machine-specific paths / personal
+# permission allowlists). Commit .claude/settings.json if the team wants shared
+# settings; never settings.local.json.
+.claude/settings.local.json
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.env.local

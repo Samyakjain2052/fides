@@ -1,0 +1,86 @@
+# =============================================================================
+# Fides Dataset — app-mongo
+#
+# Maps the `events` collection. Mongo has no schema, so this file IS the schema
+# as far as Fides is concerned: it will only read and mask fields declared here.
+#
+# Nested documents are modelled by giving a field `data_type: object` and its
+# own `fields:` list. Fides masks nested leaves with dotted-path `$set`
+# operations, e.g. `{$set: {"metadata.ip_address": null}}`.
+#
+# !! THE MONGO GOTCHA !!
+# For the mongodb connector, `fides_key` IS THE DATABASE NAME. Fides does
+# `client[node.address.dataset][collection_name]` in both retrieve_data() and
+# mask_data() (see fides/api/service/connectors/mongodb_connector.py) — the
+# `defaultauthdb` secret is only used to authenticate, never to choose the
+# database being queried. So this key must match the physical Mongo database,
+# which is why app-mongo's database is named `app_mongo_dataset`
+# (APP_MONGO_DB in .env) rather than something like `appdb`.
+#
+# Get this wrong and the connection test still passes, the dataset still loads,
+# and every DSAR fails at execution time with
+# `not authorized on <fides_key> to execute command { find: ... }` — Mongo
+# reporting that the *nonexistent* database named after your key is off-limits.
+#
+# The SQL connectors do not behave this way: they query the `dbname` from the
+# connection secrets, so app_postgres_dataset's key is free-form.
+#
+# Reference: https://ethyca.com/docs/dev-docs/configuration/datasets
+# =============================================================================
+dataset:
+  # Must equal the Mongo database name. See the note above.
+  - fides_key: app_mongo_dataset
+    name: App Mongo Dataset
+    description: >-
+      Product analytics events held in the demo application's MongoDB database,
+      keyed by the user's email address.
+    collections:
+      # -----------------------------------------------------------------------
+      # events { _id, email, event_type, metadata{...}, timestamp }
+      # -----------------------------------------------------------------------
+      - name: events
+        description: Per-user product analytics event stream.
+        fields:
+          - name: _id
+            data_categories: [system.operations]
+            fides_meta:
+              # Mongo's ObjectId. Same role as a SQL primary key: without it
+              # Fides generates no update and the erasure is a no-op.
+              primary_key: True
+              data_type: object_id
+
+          - name: email
+            data_categories: [user.contact.email]
+            fides_meta:
+              # Entrypoint #3 — this is what makes the DSAR cross the database
+              # boundary. Postgres and Mongo are independent connections; both
+              # are reached because both declare `identity: email`.
+              identity: email
+              data_type: string
+
+          - name: event_type
+            # Behavioural, but not identifying once the email is gone. Not
+            # targeted by the erasure rule.
+            data_categories: [user.behavior]
+            fides_meta:
+              data_type: string
+
+          - name: metadata
+            fides_meta:
+              data_type: object
+            fields:
+              - name: ip_address
+                data_categories: [user.device.ip_address]
+                fides_meta:
+                  data_type: string
+              - name: user_agent
+                data_categories: [user.device]
+                fides_meta:
+                  data_type: string
+              - name: session_id
+                data_categories: [user.unique_id.pseudonymous]
+                fides_meta:
+                  data_type: string
+
+          - name: timestamp
+            data_categories: [system.operations]
