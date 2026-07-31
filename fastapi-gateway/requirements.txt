@@ -12,3 +12,5 @@ email-validator==2.2.0
 # that touches the application databases directly.
 asyncpg==0.30.0
 motor==3.6.0
+# Direct reads/writes for the third application database (app-mysql).
+PyMySQL==1.1.1

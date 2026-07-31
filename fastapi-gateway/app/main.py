@@ -160,6 +160,12 @@ class EventIn(BaseModel):
     )
 
 
+class SupportTicketIn(BaseModel):
+    """One MySQL `support_tickets` row."""
+
+    subject: str = Field(..., min_length=1, max_length=255, examples=["Question about my order"])
+
+
 class SubjectIn(BaseModel):
     """A person to write across both application databases."""
 
@@ -177,6 +183,9 @@ class SubjectIn(BaseModel):
     )
     events: list[EventIn] = Field(
         default_factory=list, description="Appended to app-mongo. May be empty."
+    )
+    support_tickets: list[SupportTicketIn] = Field(
+        default_factory=list, description="Appended to app-mysql. May be empty."
     )
 
     model_config = {
@@ -204,6 +213,10 @@ class SubjectIn(BaseModel):
                         "session_id": "sess_newp01",
                     },
                 ],
+                "support_tickets": [
+                    {"subject": "Question about my order"},
+                    {"subject": "Delivery status request"},
+                ],
             }
         }
     }
@@ -221,6 +234,9 @@ class SubjectCreated(BaseModel):
     )
     db2_app_mongo: dict[str, Any] = Field(
         ..., description="What landed in db2 (MongoDB): the events documents."
+    )
+    db3_app_mysql: dict[str, Any] = Field(
+        ..., description="What landed in db3 (MySQL): the support-ticket rows."
     )
     next: str = Field(..., description="Suggested follow-up call.")
 
@@ -262,6 +278,7 @@ class SubjectLocation(BaseModel):
     )
     db1_app_postgres: DatabaseData
     db2_app_mongo: DatabaseData
+    db3_app_mysql: DatabaseData
     masked_rows_remaining: dict[str, int] = Field(
         ...,
         description="Rows whose identifying email is NULL, i.e. erased by some "
@@ -397,7 +414,7 @@ async def health() -> dict:
     "/data/subject",
     response_model=SubjectCreated,
     status_code=201,
-    summary="Add a person's data to app-postgres AND app-mongo",
+    summary="Add a person's data to PostgreSQL, MongoDB and MySQL",
     tags=["data"],
 )
 async def create_subject(body: SubjectIn) -> SubjectCreated:
@@ -428,7 +445,8 @@ async def create_subject(body: SubjectIn) -> SubjectCreated:
     db = _db()
     email = str(body.email)
     logger.info(
-        "seeding subject %s (%d orders, %d events)", email, len(body.orders), len(body.events)
+        "seeding subject %s (%d orders, %d events, %d support tickets)",
+        email, len(body.orders), len(body.events), len(body.support_tickets),
     )
 
     try:
@@ -454,6 +472,9 @@ async def create_subject(body: SubjectIn) -> SubjectCreated:
                 for e in body.events
             ],
         )
+        ticket_ids = await db.insert_support_tickets(
+            email, body.full_name, body.phone, [ticket.subject for ticket in body.support_tickets]
+        )
     except Exception as exc:  # noqa: BLE001 - surface the real cause to the caller
         logger.exception("failed to seed subject %s", email)
         raise HTTPException(
@@ -472,6 +493,8 @@ async def create_subject(body: SubjectIn) -> SubjectCreated:
     ]
     if event_count:
         written_to.append(f"db2 app-mongo: events(+{event_count})")
+    if ticket_ids:
+        written_to.append(f"db3 app-mysql: support_tickets(+{len(ticket_ids)})")
 
     return SubjectCreated(
         email=body.email,
@@ -487,6 +510,11 @@ async def create_subject(body: SubjectIn) -> SubjectCreated:
             "database": db.mongo_database,
             "events": {"inserted": event_count},
         },
+        db3_app_mysql={
+            "host": db.mysql_host,
+            "database": db.mysql_database,
+            "support_tickets": {"inserted": len(ticket_ids), "ids": ticket_ids},
+        },
         next=f'GET /data/subject/{email}  then  POST /dsar {{"email": "{email}", "action": "access"}}',
     )
 
@@ -494,7 +522,7 @@ async def create_subject(body: SubjectIn) -> SubjectCreated:
 @app.get(
     "/data/subject/{email}",
     response_model=SubjectLocation,
-    summary="Where is this person's data? (both databases, no Fides involved)",
+    summary="Where is this person's data? (all three databases, no Fides involved)",
     tags=["data"],
 )
 async def locate_subject(
@@ -527,6 +555,7 @@ async def locate_subject(
     try:
         pg = await db.find_in_postgres(email)
         mongo = await db.find_in_mongo(email)
+        mysql = await db.find_in_mysql(email)
         masked = await db.count_masked(email)
     except Exception as exc:  # noqa: BLE001 - surface the real cause
         logger.exception("failed to look up subject %s", email)
@@ -562,13 +591,25 @@ async def locate_subject(
         total=sum(len(r) for r in mongo.values()),
         collections=wrap(mongo),
     )
+    db3 = DatabaseData(
+        label="db3 - app-mysql (MySQL)",
+        host=db.mysql_host,
+        database=db.mysql_database,
+        fides_dataset="app_mysql_dataset",
+        total=sum(len(r) for r in mysql.values()),
+        collections=wrap(mysql),
+    )
 
     found_in = [
         f"{label}: " + ", ".join(f"{n}({len(r)})" for n, r in rows.items() if r)
-        for label, rows in (("db1 app-postgres", pg), ("db2 app-mongo", mongo))
+        for label, rows in (
+            ("db1 app-postgres", pg),
+            ("db2 app-mongo", mongo),
+            ("db3 app-mysql", mysql),
+        )
         if any(rows.values())
     ]
-    total = db1.total + db2.total
+    total = db1.total + db2.total + db3.total
 
     note = None
     if total == 0:
@@ -592,6 +633,7 @@ async def locate_subject(
         found_in=found_in,
         db1_app_postgres=db1,
         db2_app_mongo=db2,
+        db3_app_mysql=db3,
         masked_rows_remaining=masked,
         note=note,
     )
