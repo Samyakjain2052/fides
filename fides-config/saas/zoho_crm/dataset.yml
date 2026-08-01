@@ -1,0 +1,42 @@
+##
+# Dataset (field/data-category map) for the Zoho CRM custom SaaS connector.
+#
+# Mirrors the shape of ../../resources/app_postgres_dataset.yml, but this file
+# is NOT pushed via `fides push` — it ships inside the connector template zip
+# (see config.yml's header comment) and Fides generates the real Dataset +
+# DatasetConfig for it automatically when provision.py calls
+# POST /connection/instantiate/zoho_crm.
+##
+dataset:
+  - fides_key: <instance_fides_key>
+    name: Zoho CRM Dataset
+    description: >-
+      Contact records held in Zoho CRM, matched to the demo application's
+      users by email address.
+    collections:
+      - name: contacts
+        description: Zoho CRM "Contacts" module records.
+        fields:
+          - name: id
+            data_categories: [system.operations]
+            fides_meta:
+              primary_key: True
+              read_only: True
+              data_type: string
+          - name: Email
+            data_categories: [user.contact.email]
+            fides_meta:
+              identity: email
+              data_type: string
+          - name: First_Name
+            data_categories: [user.name]
+            fides_meta:
+              data_type: string
+          - name: Last_Name
+            data_categories: [user.name]
+            fides_meta:
+              data_type: string
+          - name: Phone
+            data_categories: [user.contact.phone_number]
+            fides_meta:
+              data_type: string

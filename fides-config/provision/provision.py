@@ -16,22 +16,30 @@ available here and we use it for the parts it covers.
     | Connection secrets            | PUT   /api/v1/connection/{k}/secret  |
     | Dataset <-> connection link   | PATCH /api/v1/connection/{k}/        |
     |                               |         datasetconfig                |
-    | Connection <-> system link    | PATCH /api/v1/system/{k}/connection  |
+    | Connection <-> system link    | PUT   /api/v1/connection/{k}/        |
+    |                               |         system-links                 |
+    | Custom SaaS connector template| POST  /api/v1/connector-templates/   |
+    |  (Zoho CRM — no built-in      |         register                     |
+    |  Fides connector exists)      |                                       |
+    | SaaS connection + its dataset | POST  /api/v1/connection/instantiate/|
+    |  (created together)           |         {connector_type}             |
     | DSR policies / rules / targets| PATCH /api/v1/dsr/policy[/...]       |
     +-------------------------------+--------------------------------------+
 
-The CLI has no commands for the bottom five, which is why they go through the
-API. Everything is an upsert, so this script is idempotent: run it as many
+The CLI has no commands for the API rows above, which is why they go through
+the API. Everything is an upsert, so this script is idempotent: run it as many
 times as you like.
 """
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import sys
 import time
 from typing import Any
+from zipfile import ZipFile
 
 import requests
 import yaml
@@ -48,6 +56,10 @@ CONFIG_DIR = os.environ.get("FIDES_CONFIG_DIR", "/fides-config")
 RESOURCES_DIR = f"{CONFIG_DIR}/resources"
 CONNECTIONS_FILE = f"{CONFIG_DIR}/connections/connections.yml"
 POLICIES_FILE = f"{CONFIG_DIR}/policies/dsr_policies.yml"
+# Each subdirectory is a custom SaaS connector template: a config.yml +
+# dataset.yml pair, registered with Fides before any `saas_connection` entry
+# in connections.yml can reference it. See register_saas_connector_templates().
+SAAS_DIR = f"{CONFIG_DIR}/saas"
 
 # Where access-request packages get written inside the Fides container.
 # Bind-mounted to ./fides_uploads on the host by docker-compose.yml.
@@ -119,6 +131,18 @@ class Fides:
             return r.json()
         except ValueError:
             return None
+
+    def exists(self, path: str) -> bool:
+        """GET path and report whether it resolves (200) or not (404).
+
+        Unlike call(), this needs the actual status code rather than a
+        JSON-or-None body — a 404 still comes back with a JSON error body, so
+        `call(..., ok=(200, 404))` can't distinguish "found" from "not found".
+        """
+        r = self.s.request("GET", f"{API}{path}", timeout=TIMEOUT)
+        if r.status_code in (200, 404):
+            return r.status_code == 200
+        die(f"GET {path} -> HTTP {r.status_code}\n{r.text}")
 
     @staticmethod
     def check_bulk(label: str, resp: Any) -> None:
@@ -312,22 +336,173 @@ def configure_connections(f: Fides) -> None:
             )
 
         # 3d. Attach the connection to its System so the Admin UI data map
-        #     shows the integration under the right system.
+        #     shows the integration under the right system. PATCH
+        #     /system/{key}/connection is deprecated and (as of 2.86) doesn't
+        #     populate the newer system<->connection join table the Admin UI
+        #     actually reads from — PUT /connection/{key}/system-links does.
         system_key = c.get("system_key")
         if system_key:
             log(f"  [{key}] attaching to system '{system_key}' ...")
             f.call(
-                "PATCH",
-                f"/system/{system_key}/connection",
-                [
-                    {
-                        "key": key,
-                        "name": c.get("name", key),
-                        "connection_type": c["connection_type"],
-                        "access": c.get("access", "write"),
-                    }
-                ],
+                "PUT",
+                f"/connection/{key}/system-links",
+                {"links": [{"system_fides_key": system_key}]},
             )
+
+
+# --------------------------------------------------------------------------
+# Step 3.5 — Custom SaaS connectors (Zoho CRM)
+#
+# A SaaS API (reached over HTTPS, no native driver) can't use the postgres/
+# mongodb path above, and Fides ships no built-in Zoho CRM connector — so this
+# is a two-part process instead of the DB connectors' upsert-then-link:
+#   1. register_saas_connector_templates(): teach Fides the `zoho_crm`
+#      connector type at all, by uploading fides-config/saas/zoho_crm/ as a
+#      connector template zip.
+#   2. configure_saas_connections(): create the ConnectionConfig + its
+#      auto-generated Dataset together from that template, in one call.
+# --------------------------------------------------------------------------
+def register_saas_connector_templates(f: Fides) -> None:
+    """Upload every fides-config/saas/<connector>/ directory as a connector
+    template zip via POST /connector-templates/register.
+
+    Idempotent: re-registering the same connector type just overwrites its
+    stored template (CustomConnectorTemplateLoader.save_template upserts).
+    """
+    if not os.path.isdir(SAAS_DIR):
+        return
+
+    for connector_type in sorted(os.listdir(SAAS_DIR)):
+        connector_dir = os.path.join(SAAS_DIR, connector_type)
+        config_path = os.path.join(connector_dir, "config.yml")
+        dataset_path = os.path.join(connector_dir, "dataset.yml")
+        if not (os.path.isfile(config_path) and os.path.isfile(dataset_path)):
+            continue
+
+        log(f"registering custom SaaS connector template '{connector_type}' ...")
+        buf = io.BytesIO()
+        with ZipFile(buf, "w") as zf:
+            zf.write(config_path, "config.yml")
+            zf.write(dataset_path, "dataset.yml")
+        buf.seek(0)
+
+        r = requests.post(
+            f"{API}/connector-templates/register",
+            headers=f.s.headers,
+            files={"file": (f"{connector_type}.zip", buf, "application/zip")},
+            timeout=TIMEOUT,
+        )
+        if r.status_code != 200:
+            die(f"registering connector template '{connector_type}' -> HTTP {r.status_code}\n{r.text}")
+        log(f"  [{connector_type}] template registered")
+
+
+def refresh_zoho_access_token() -> str:
+    """Exchange the long-lived Zoho refresh token for a short-lived access
+    token, using Zoho's own OAuth endpoint (this call goes to Zoho, not Fides).
+
+    Zoho access tokens expire after an hour; the refresh token does not
+    expire, so this runs once per `docker compose up` rather than needing
+    Fides' own OAuth2 token-refresh machinery (which — see config.yml's header
+    comment — hardcodes a header format Zoho doesn't accept anyway).
+    """
+    accounts_domain = os.environ.get("ZOHO_CRM_ACCOUNTS_DOMAIN", "accounts.zoho.com")
+    client_id = os.environ.get("ZOHO_CRM_CLIENT_ID")
+    client_secret = os.environ.get("ZOHO_CRM_CLIENT_SECRET")
+    refresh_token = os.environ.get("ZOHO_CRM_REFRESH_TOKEN")
+    if not (client_id and client_secret and refresh_token):
+        die(
+            "ZOHO_CRM_CLIENT_ID, ZOHO_CRM_CLIENT_SECRET and ZOHO_CRM_REFRESH_TOKEN "
+            "must all be set in .env to provision the Zoho CRM connection."
+        )
+
+    log(f"refreshing Zoho CRM access token via {accounts_domain} ...")
+    r = requests.post(
+        f"https://{accounts_domain}/oauth/v2/token",
+        data={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+        },
+        timeout=TIMEOUT,
+    )
+    body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    access_token = body.get("access_token")
+    if r.status_code != 200 or not access_token:
+        die(f"Zoho CRM token refresh failed: HTTP {r.status_code} {r.text}")
+    log("Zoho CRM access token refreshed")
+    return access_token
+
+
+def configure_saas_connections(f: Fides) -> None:
+    """Create (or refresh the secrets of) each `saas_connection:` entry.
+
+    Unlike the DB connectors in configure_connections(), a SaaS connector's
+    ConnectionConfig and Dataset are created together in one call — see
+    POST /connection/instantiate/{connector_type} — so there's no separate
+    datasetconfig-linking step.
+    """
+    doc = load_yaml(CONNECTIONS_FILE, expand=True)
+    saas_connections = doc.get("saas_connection", [])
+    if not saas_connections:
+        return
+
+    for c in saas_connections:
+        key = c["key"]
+        secrets = dict(c["secrets"])
+
+        # access_token is a deliberate placeholder in connections.yml (never
+        # set in .env) — it's always overwritten here with a freshly
+        # refreshed, short-lived token, so it must be excluded from the
+        # unresolved-$VAR check below.
+        if "access_token" in secrets:
+            secrets["access_token"] = refresh_zoho_access_token()
+
+        for name, value in secrets.items():
+            if isinstance(value, str) and value.startswith("$"):
+                die(
+                    f"saas_connection '{key}' secret '{name}' is unresolved "
+                    f"({value}). Is it set in .env?"
+                )
+
+        existing = f.exists(f"/connection/{key}")
+        if not existing:
+            log(f"instantiating SaaS connection '{key}' from template '{c['connector_type']}' ...")
+            f.call(
+                "POST",
+                f"/connection/instantiate/{c['connector_type']}",
+                {
+                    "key": key,
+                    "name": c.get("name", key),
+                    "description": c.get("description"),
+                    "secrets": secrets,
+                    "instance_key": c["instance_key"],
+                },
+                ok=(200, 201),
+            )
+        else:
+            log(f"  [{key}] connection already exists; refreshing secrets ...")
+            result = f.call("PUT", f"/connection/{key}/secret?verify=true", secrets)
+            if (result or {}).get("test_status") != "succeeded":
+                die(
+                    f"connection '{key}' failed its connectivity test "
+                    f"(test_status={(result or {}).get('test_status')!r}, "
+                    f"failure_reason={(result or {}).get('failure_reason')!r})"
+                )
+
+        # See the note in configure_connections() above: PUT .../system-links
+        # is the endpoint that actually populates what the Admin UI reads,
+        # unlike the deprecated PATCH /system/{key}/connection.
+        system_key = c.get("system_key")
+        if system_key:
+            log(f"  [{key}] attaching to system '{system_key}' ...")
+            f.call(
+                "PUT",
+                f"/connection/{key}/system-links",
+                {"links": [{"system_fides_key": system_key}]},
+            )
+        log(f"  [{key}] SaaS connection configured")
 
 
 # --------------------------------------------------------------------------
@@ -425,6 +600,18 @@ def verify(f: Fides) -> None:
         else:
             problems.append(f"  [{dataset_key}] NOT reachable: {result}")
 
+    for c in doc.get("saas_connection", []):
+        dataset_key = c.get("instance_key")
+        if not dataset_key:
+            continue
+        result = f.call(
+            "GET", f"/connection/{c['key']}/dataset/{dataset_key}/reachability"
+        )
+        if result and result.get("reachable"):
+            log(f"  [{dataset_key}] reachable")
+        else:
+            problems.append(f"  [{dataset_key}] NOT reachable: {result}")
+
     if problems:
         die("dataset reachability check failed:\n" + "\n".join(problems))
 
@@ -449,7 +636,9 @@ def main() -> None:
 
     f = Fides(login())
     configure_storage(f)
+    register_saas_connector_templates(f)
     configure_connections(f)
+    configure_saas_connections(f)
     configure_policies(f)
     verify(f)
 

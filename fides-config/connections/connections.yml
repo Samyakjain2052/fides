@@ -59,3 +59,40 @@ connection:
       defaultauthdb: "$APP_MONGO_DB"
       username: "$APP_MONGO_USER"
       password: "$APP_MONGO_PASSWORD"
+
+# =============================================================================
+# Fides SaaS ConnectionConfigs — third-party REST APIs (not databases).
+#
+# Postgres/Mongo above are native DB connectors: Fides opens a direct SQL/Mongo
+# connection and runs SELECT/UPDATE statements. A SaaS API like Zoho CRM has no
+# such connection — it's reached over HTTPS with a JSON schema Fides doesn't
+# know in advance. That's what fides-config/saas/zoho_crm/{config,dataset}.yml
+# describe, and it's why this needs a different provisioning path:
+#   1. the connector template zip is registered via
+#      POST /api/v1/connector-templates/register (see provision.py's
+#      `register_saas_connector_templates()`), which is what teaches Fides
+#      about the `zoho_crm` connector type at all — it is NOT one of Fides'
+#      built-in SaaS connectors (unlike Stripe/HubSpot/Salesforce/etc.).
+#   2. the connection + its dataset are created together in one call via
+#      POST /api/v1/connection/instantiate/{connector_type} (see
+#      `configure_saas_connections()`), rather than the datasetconfig-linking
+#      dance used for `connection:` entries above.
+#
+# `instance_key` becomes the fides_key of the Dataset Fides generates for this
+# connection — that's what resources/systems.yml's dataset_references points
+# at, and what dataset.yml's `<instance_fides_key>` placeholders resolve to.
+# =============================================================================
+saas_connection:
+  - key: zoho_crm_connection
+    name: Zoho CRM
+    description: Zoho CRM contacts, via a custom SaaS connector template.
+    connector_type: zoho_crm
+    instance_key: zoho_crm_instance
+    system_key: zoho_crm_system
+    secrets:
+      domain: "$ZOHO_CRM_DOMAIN"
+      # Provisioner-managed: overwritten with a freshly refreshed access token
+      # (using ZOHO_CRM_CLIENT_ID/SECRET/REFRESH_TOKEN) before it's ever sent
+      # to Fides — see provision.py's `refresh_zoho_access_token()`. There is
+      # no ZOHO_CRM_ACCESS_TOKEN in .env; that's intentional.
+      access_token: "$ZOHO_CRM_ACCESS_TOKEN"

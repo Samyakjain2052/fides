@@ -1,9 +1,9 @@
 """
 fastapi-gateway — a thin, opinionated DSAR API in front of Fides.
 
-    GET  /health              gateway + Fides + app-database liveness
+    GET  /health              gateway + Fides + app-database + Zoho CRM liveness
     POST /data/subject        write a person into db1 (postgres) AND db2 (mongo)
-    GET  /data/subject/{email} where that person's data lives, in both databases
+    GET  /data/subject/{email} where that person's data lives, across all three systems
     POST /dsar                {"email": ..., "action": "access"|"erasure"}
     GET  /dsar/{id}           status + per-collection execution log + data
 
@@ -12,10 +12,12 @@ are (1) hiding Fides' auth handshake, (2) mapping a friendly `action` onto the
 right DSR policy key, and (3) flattening Fides' several status/log/result
 endpoints into one response a human (or a regulator) can read.
 
-The two `/data/subject` endpoints are the exception — they talk to the two
-application databases directly (see db.py), because you need a way to create test
-subjects beyond the ones the seed scripts insert, and a raw view of both databases
-to check Fides' answers against.
+`GET /data/subject/{email}` is the exception — it talks to app-postgres and
+app-mongo (see db.py) AND Zoho CRM (see zoho_client.py) directly, with no Fides
+in the path, because you need a raw view to check Fides' answers against.
+`POST /data/subject` only writes to app-postgres/app-mongo — creating a Zoho
+Contact is a manual step done directly against Zoho's own API/UI, so this
+stays a two-database write.
 """
 
 from __future__ import annotations
@@ -23,20 +25,22 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path as FilePath
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Path, Query
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 from .db import AppDatabases
 from .fides_client import FidesClient, FidesError
+from .zoho_client import ZohoClient, ZohoError
 
 # --------------------------------------------------------------------------
 # Config — all from the environment, nothing hardcoded.
@@ -50,6 +54,16 @@ POLICY_KEYS = {
     "access": os.environ.get("ACCESS_POLICY_KEY", "demo_access_policy"),
     "erasure": os.environ.get("ERASURE_POLICY_KEY", "demo_erasure_policy"),
 }
+
+# Same secrets provision.py uses to configure Fides' own Zoho CRM connection
+# (see fides-config/provision/provision.py's refresh_zoho_access_token). Used
+# here so GET /data/subject/{email} can check Zoho directly, the same way it
+# already checks app-postgres/app-mongo directly, with no Fides in the path.
+ZOHO_CRM_ACCOUNTS_DOMAIN = os.environ.get("ZOHO_CRM_ACCOUNTS_DOMAIN")
+ZOHO_CRM_DOMAIN = os.environ.get("ZOHO_CRM_DOMAIN")
+ZOHO_CRM_CLIENT_ID = os.environ.get("ZOHO_CRM_CLIENT_ID")
+ZOHO_CRM_CLIENT_SECRET = os.environ.get("ZOHO_CRM_CLIENT_SECRET")
+ZOHO_CRM_REFRESH_TOKEN = os.environ.get("ZOHO_CRM_REFRESH_TOKEN")
 
 # Where Fides' `local` storage destination drops access packages, bind-mounted
 # read-only into this container (same host directory as ./fides_uploads). The
@@ -76,6 +90,31 @@ logger = logging.getLogger("gateway")
 # --------------------------------------------------------------------------
 # Schemas
 # --------------------------------------------------------------------------
+_EMAIL_SHAPE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _validate_identity(value: str) -> str:
+    """A permissive email-*shape* check (local@domain.tld) — deliberately
+    looser than pydantic's `EmailStr`. This gateway only ever uses this value
+    as a lookup/match key (against Postgres/Mongo columns and Zoho CRM's
+    `email` field) and never sends mail with it, but `EmailStr`'s underlying
+    `email_validator` library unconditionally rejects RFC 2606 reserved TLDs
+    (`.invalid`, `.test`, `.localhost`, etc. — see `SPECIAL_USE_DOMAIN_NAMES`
+    in email_validator/__init__.py; there is no keyword argument that allows
+    them). Those are exactly the kind of deliberately-synthetic addresses a
+    privacy demo (or a real system!) is likely to hold — e.g. a Zoho contact
+    seeded with `*@noemail.invalid`. Rejecting the identity at the gateway
+    would hide the very data a subject access request is supposed to find.
+    """
+    value = value.strip()
+    if not _EMAIL_SHAPE.match(value):
+        raise ValueError("must look like an email address (local@domain.tld)")
+    return value
+
+
+Identity = Annotated[str, AfterValidator(_validate_identity)]
+
+
 class DSARAction(str, Enum):
     """Maps 1:1 onto a Fides DSR policy."""
 
@@ -84,7 +123,7 @@ class DSARAction(str, Enum):
 
 
 class DSARRequest(BaseModel):
-    email: EmailStr = Field(
+    email: Identity = Field(
         ...,
         description="The data subject's email. This is the identity Fides uses "
         "to locate the person — it matches every field marked "
@@ -102,7 +141,7 @@ class DSARCreated(BaseModel):
     request_id: str = Field(..., description="Fides privacy request id. Poll GET /dsar/{request_id}.")
     action: DSARAction
     policy_key: str = Field(..., description="The Fides DSR policy that will execute.")
-    email: EmailStr
+    email: Identity
     status: str | None = Field(None, description="Fides status at creation time, usually 'pending'.")
     created_at: str | None = None
 
@@ -163,7 +202,7 @@ class EventIn(BaseModel):
 class SubjectIn(BaseModel):
     """A person to write across both application databases."""
 
-    email: EmailStr = Field(
+    email: Identity = Field(
         ...,
         description="The identity that ties everything together. Used as "
         "`users.email`, `orders.user_email` and `events.email` — which is what "
@@ -210,7 +249,7 @@ class SubjectIn(BaseModel):
 
 
 class SubjectCreated(BaseModel):
-    email: EmailStr
+    email: Identity
     written_to: list[str] = Field(
         ...,
         description="Which of the two databases this call actually wrote to.",
@@ -249,24 +288,26 @@ class DatabaseData(BaseModel):
 
 
 class SubjectLocation(BaseModel):
-    """Answer to 'where is my data?', straight from the two databases."""
+    """Answer to 'where is my data?', straight from the source systems."""
 
-    email: EmailStr
+    email: Identity
     found: bool = Field(..., description="True if any record matches this email.")
     total_records: int
     found_in: list[str] = Field(
         ...,
-        description="Human summary — which database and which collections hold "
+        description="Human summary — which system and which collections hold "
         "records for this subject.",
         examples=[["db1 app-postgres: users(1), orders(3)", "db2 app-mongo: events(4)"]],
     )
     db1_app_postgres: DatabaseData
     db2_app_mongo: DatabaseData
+    db3_zoho_crm: DatabaseData
     masked_rows_remaining: dict[str, int] = Field(
         ...,
         description="Rows whose identifying email is NULL, i.e. erased by some "
         "earlier DSAR. They cannot be matched to any email — which is the point "
-        "— so they are reported as a count only.",
+        "— so they are reported as a count only. Zoho CRM has no equivalent: an "
+        "erasure there deletes the contact rather than masking a field.",
     )
     note: str | None = Field(
         None, description="Set when nothing was found, to explain what that means."
@@ -321,12 +362,20 @@ async def lifespan(app: FastAPI):
         password=FIDES_ROOT_PASSWORD,
     )
     app.state.db = AppDatabases()
+    app.state.zoho = ZohoClient(
+        accounts_domain=ZOHO_CRM_ACCOUNTS_DOMAIN,
+        api_domain=ZOHO_CRM_DOMAIN,
+        client_id=ZOHO_CRM_CLIENT_ID,
+        client_secret=ZOHO_CRM_CLIENT_SECRET,
+        refresh_token=ZOHO_CRM_REFRESH_TOKEN,
+    )
     logger.info("gateway up; Fides at %s; policies=%s", FIDES_URL, POLICY_KEYS)
     try:
         yield
     finally:
         await app.state.fides.aclose()
         await app.state.db.aclose()
+        await app.state.zoho.aclose()
 
 
 app = FastAPI(
@@ -355,6 +404,10 @@ def _db() -> AppDatabases:
     return app.state.db
 
 
+def _zoho() -> ZohoClient:
+    return app.state.zoho
+
+
 @app.get("/", include_in_schema=False)
 async def root() -> RedirectResponse:
     """Land on the console; Swagger stays at /docs."""
@@ -370,9 +423,9 @@ async def root() -> RedirectResponse:
 async def health() -> dict:
     """Returns 200 only if Fides is also reachable — a green check here means
     the whole chain is up, not just this container. The two application
-    databases are reported alongside but do not fail the check: the DSAR
-    endpoints work without the gateway itself being able to reach them (Fides
-    connects to them independently)."""
+    databases and Zoho CRM are reported alongside but do not fail the check:
+    the DSAR endpoints work without the gateway itself being able to reach
+    them (Fides connects to them independently)."""
     try:
         fides_health = await _fides().health()
     except FidesError as exc:
@@ -387,6 +440,7 @@ async def health() -> dict:
         "fides_url": FIDES_URL,
         "policies": POLICY_KEYS,
         "app_databases": await _db().ping(),
+        "zoho_crm": await _zoho().ping(),
         # Read by the console to link out to the Fides Admin UI.
         "fides_admin_url": FIDES_ADMIN_URL,
     }
@@ -494,11 +548,11 @@ async def create_subject(body: SubjectIn) -> SubjectCreated:
 @app.get(
     "/data/subject/{email}",
     response_model=SubjectLocation,
-    summary="Where is this person's data? (both databases, no Fides involved)",
+    summary="Where is this person's data? (all three systems, no Fides involved)",
     tags=["data"],
 )
 async def locate_subject(
-    email: EmailStr = Path(
+    email: Identity = Path(
         ...,
         description="The data subject's email.",
         examples=["demo@example.com"],
@@ -507,13 +561,18 @@ async def locate_subject(
         True, description="Set false for counts only — useful for large subjects."
     ),
 ) -> SubjectLocation:
-    """Reads both application databases directly and reports where the person's
-    records live, collection by collection.
+    """Reads app-postgres, app-mongo AND Zoho CRM directly and reports where
+    the person's records live, collection by collection.
 
-    This is the **raw** view: it queries app-postgres and app-mongo itself, with
-    no Fides in the path. Use it to check Fides' work — the collections listed
-    here are exactly the ones an access DSAR should return, and after an erasure
-    both should agree that nothing matches the email any more.
+    This is the **raw** view: it queries all three systems itself, with no
+    Fides in the path. Use it to check Fides' work — the collections listed
+    here are exactly the ones an access DSAR should return, and after an
+    erasure all three should agree that nothing matches the email any more.
+
+    A Zoho CRM lookup failure (not configured, network error, expired
+    credentials) does not fail the whole call — it is reported as its own
+    `db3_zoho_crm` entry with `total: 0` and the reason folded into `note`, so
+    a Zoho outage never hides what app-postgres/app-mongo found.
 
     `masked_rows_remaining` counts rows whose identifying email is `NULL`. Those
     are the leftovers of an earlier erasure: the row survives with its PII nulled
@@ -523,6 +582,7 @@ async def locate_subject(
     subject who was never here at all.
     """
     db = _db()
+    zoho = _zoho()
 
     try:
         pg = await db.find_in_postgres(email)
@@ -535,6 +595,14 @@ async def locate_subject(
             detail=f"could not read the application databases: "
             f"{type(exc).__name__}: {exc}",
         )
+
+    zoho_error: str | None = None
+    try:
+        contacts = await zoho.find_contacts_by_email(email)
+    except ZohoError as exc:
+        logger.warning("Zoho CRM lookup failed for %s: %s", email, exc)
+        contacts = []
+        zoho_error = str(exc)
 
     def wrap(rows_by_collection: dict[str, list[dict[str, Any]]]) -> dict[str, CollectionData]:
         return {
@@ -562,18 +630,30 @@ async def locate_subject(
         total=sum(len(r) for r in mongo.values()),
         collections=wrap(mongo),
     )
+    db3 = DatabaseData(
+        label="db3 — Zoho CRM (SaaS)",
+        host=zoho.api_domain or "not configured",
+        database="Contacts module",
+        fides_dataset="zoho_crm_instance",
+        total=len(contacts),
+        collections=wrap({"contacts": contacts}),
+    )
 
     found_in = [
         f"{label}: " + ", ".join(f"{n}({len(r)})" for n, r in rows.items() if r)
-        for label, rows in (("db1 app-postgres", pg), ("db2 app-mongo", mongo))
+        for label, rows in (
+            ("db1 app-postgres", pg),
+            ("db2 app-mongo", mongo),
+            ("db3 Zoho CRM", {"contacts": contacts}),
+        )
         if any(rows.values())
     ]
-    total = db1.total + db2.total
+    total = db1.total + db2.total + db3.total
 
     note = None
     if total == 0:
         note = (
-            f"No record in either database matches {email}. "
+            f"No record in any system matches {email}. "
             + (
                 f"There are {sum(masked.values())} masked row(s) with a NULL "
                 "identifier, so this subject may have been erased by a previous "
@@ -584,6 +664,8 @@ async def locate_subject(
                 "in the system."
             )
         )
+    if zoho_error:
+        note = (note + " " if note else "") + f"Zoho CRM lookup skipped: {zoho_error}"
 
     return SubjectLocation(
         email=email,
@@ -592,6 +674,7 @@ async def locate_subject(
         found_in=found_in,
         db1_app_postgres=db1,
         db2_app_mongo=db2,
+        db3_zoho_crm=db3,
         masked_rows_remaining=masked,
         note=note,
     )
