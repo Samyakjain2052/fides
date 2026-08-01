@@ -13,6 +13,7 @@
 #   app-mongo       demo app data: events                  -> localhost:37017
 #   fides-provisioner  one-shot: loads /fides-config into Fides, then exits 0
 #   fastapi-gateway my DSAR API, Swagger at /docs          -> localhost:8000
+#   presidio        PII detection microservice (Presidio)  -> localhost:8001
 #
 # Base layout follows Fides' own sample deployment (`fides deploy up`), i.e.
 # src/fides/data/sample_project/docker-compose.yml in the fides repo.
@@ -316,6 +317,30 @@ services:
       timeout: 10s
       retries: 10
       start_period: 20s
+    restart: unless-stopped
+
+  # ===========================================================================
+  # 5. Presidio-based PII detection microservice
+  # ===========================================================================
+  # Standalone FastAPI wrapper around Presidio (+ custom IN_PAN/IN_AADHAAR
+  # recognizers). Not wired into the DSAR flow yet — exposed standalone so
+  # other services can POST /detect against it.
+  presidio:
+    build:
+      context: ./presidio
+    ports:
+      - "${PRESIDIO_PORT:-8001}:8001"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health',
+          timeout=5).status == 200 else 1)"
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     restart: unless-stopped
 
 volumes:
