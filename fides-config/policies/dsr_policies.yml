@@ -99,6 +99,11 @@ policy:
             name: Pseudonymous identifiers
             data_category: user.unique_id.pseudonymous
 
+          # support_tickets.subject
+          - key: demo_erasure_target_content
+            name: User Content
+            data_category: user.content
+
           # DELIBERATELY NOT TARGETED, so you can see erasure is surgical
           # rather than a table wipe:
           #   user.behavior.purchase_history -> orders.amount, orders.item

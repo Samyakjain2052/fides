@@ -84,3 +84,28 @@ system:
           - customer
         dataset_references:
           - app_mongo_dataset
+
+  # ---------------------------------------------------------------------------
+  # app-mysql — support tickets
+  # ---------------------------------------------------------------------------
+  - fides_key: app_mysql_system
+    name: App MySQL Database
+    description: >-
+      MySQL database holding customer support tickets, keyed by customer email.
+    system_type: Database
+    administrating_department: Engineering
+    egress:
+      - fides_key: demo_app
+        type: system
+    privacy_declarations:
+      - name: Store customer support tickets
+        data_categories:
+          - user.contact.email
+          - user.contact.phone_number
+          - user.name
+          - user.content
+        data_use: essential.service
+        data_subjects:
+          - customer
+        dataset_references:
+          - app_mysql_dataset

@@ -22,6 +22,7 @@ from typing import Any
 import asyncpg
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient
+import pymysql
 
 logger = logging.getLogger("gateway.db")
 
@@ -48,7 +49,7 @@ def _clean(row: dict[str, Any]) -> dict[str, Any]:
 
 
 class AppDatabases:
-    """Lazy connections to app-postgres and app-mongo.
+    """Connections to app-postgres, app-mongo and app-mysql.
 
     Both are opened on first use rather than at startup: a database being down
     should fail the one request that needs it, not stop the gateway from booting
@@ -67,6 +68,21 @@ class AppDatabases:
             f"{os.environ.get('APP_MONGO_HOST', 'app-mongo')}:"
             f"{os.environ.get('APP_MONGO_PORT', '27017')}"
         )
+        self.mysql_host = (
+            f"{os.environ.get('APP_MYSQL_HOST', 'app-mysql')}:"
+            f"{os.environ.get('APP_MYSQL_PORT', '3306')}"
+        )
+        self.mysql_database = os.environ.get("APP_MYSQL_DB", "appmysql")
+        self._mysql_connect = {
+            "host": os.environ.get("APP_MYSQL_HOST", "app-mysql"),
+            "port": int(os.environ.get("APP_MYSQL_PORT", "3306")),
+            "user": os.environ.get("APP_MYSQL_USER", "mysqluser"),
+            "password": os.environ.get("APP_MYSQL_PASSWORD", "mysqlpassword"),
+            "database": self.mysql_database,
+            "cursorclass": pymysql.cursors.DictCursor,
+            "autocommit": True,
+            "connect_timeout": 10,
+        }
 
         self._pg_dsn = (
             f"postgresql://{os.environ.get('APP_POSTGRES_USER', 'appuser')}:"
@@ -201,6 +217,35 @@ class AppDatabases:
         result = await self._events().insert_many(events)
         return len(result.inserted_ids)
 
+    # ------------------------------------------------------------- app-mysql --
+    async def insert_support_tickets(
+        self, email: str, full_name: str | None, phone: str | None, subjects: list[str]
+    ) -> list[int]:
+        """Append support tickets to MySQL for this identity."""
+        if not subjects:
+            return []
+
+        def insert() -> list[int]:
+            connection = pymysql.connect(**self._mysql_connect)
+            try:
+                with connection.cursor() as cursor:
+                    ticket_ids = []
+                    for subject in subjects:
+                        cursor.execute(
+                            """
+                            INSERT INTO support_tickets
+                                (customer_email, customer_name, phone, subject)
+                            VALUES (%s, %s, %s, %s)
+                            """,
+                            (email, full_name, phone, subject),
+                        )
+                        ticket_ids.append(cursor.lastrowid)
+                    return ticket_ids
+            finally:
+                connection.close()
+
+        return await asyncio.to_thread(insert)
+
     # ------------------------------------------------------------- lookups --
     # Read-only; used by GET /data/subject/{email} to answer "where is my data?"
     # without going through Fides. Fides' own answer to that question is an
@@ -246,6 +291,28 @@ class AppDatabases:
         events = await cursor.to_list(length=self.MAX_ROWS)
         return {"events": [_clean(doc) for doc in events]}
 
+    async def find_in_mysql(self, email: str) -> dict[str, list[dict[str, Any]]]:
+        """Rows in app-mysql whose customer email matches."""
+        def find() -> list[dict[str, Any]]:
+            connection = pymysql.connect(**self._mysql_connect)
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, customer_email, customer_name, phone, subject, created_at
+                          FROM support_tickets
+                         WHERE customer_email = %s
+                         ORDER BY id
+                         LIMIT %s
+                        """,
+                        (email, self.MAX_ROWS),
+                    )
+                    return list(cursor.fetchall())
+            finally:
+                connection.close()
+
+        return {"support_tickets": [_clean(row) for row in await asyncio.to_thread(find)]}
+
     async def count_masked(self, email: str) -> dict[str, int]:
         """Rows whose identifying email is NULL — i.e. previously erased.
 
@@ -262,7 +329,17 @@ class AppDatabases:
                 "SELECT count(*) FROM orders WHERE user_email IS NULL"
             )
         events = await self._events().count_documents({"email": None})
-        return {"users": users or 0, "orders": orders or 0, "events": events}
+        def count_mysql_masked() -> int:
+            connection = pymysql.connect(**self._mysql_connect)
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT count(*) AS total FROM support_tickets WHERE customer_email IS NULL")
+                    return int(cursor.fetchone()["total"])
+            finally:
+                connection.close()
+
+        tickets = await asyncio.to_thread(count_mysql_masked)
+        return {"users": users or 0, "orders": orders or 0, "events": events, "support_tickets": tickets}
 
     # ----------------------------------------------------------------- checks --
     async def ping(self) -> dict[str, str]:
@@ -279,4 +356,17 @@ class AppDatabases:
             status["app_mongo"] = "ok"
         except Exception as exc:  # noqa: BLE001
             status["app_mongo"] = f"unreachable: {type(exc).__name__}"
+        try:
+            def ping_mysql() -> None:
+                connection = pymysql.connect(**self._mysql_connect)
+                try:
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT 1")
+                finally:
+                    connection.close()
+
+            await asyncio.to_thread(ping_mysql)
+            status["app_mysql"] = "ok"
+        except Exception as exc:  # noqa: BLE001
+            status["app_mysql"] = f"unreachable: {type(exc).__name__}"
         return status

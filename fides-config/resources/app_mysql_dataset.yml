@@ -1,0 +1,38 @@
+# =============================================================================
+# Fides Dataset — app-mysql
+#
+# Maps customer support tickets in the third demo datastore. The email field is
+# an identity just like Postgres users.email and Mongo events.email, so one
+# request reaches all three databases.
+# =============================================================================
+dataset:
+  - fides_key: app_mysql_dataset
+    name: App MySQL Dataset
+    description: Customer support tickets, keyed by customer email.
+    collections:
+      - name: support_tickets
+        fields:
+          - name: id
+            data_categories: [system.operations]
+            fides_meta:
+              primary_key: True
+              data_type: integer
+          - name: customer_email
+            data_categories: [user.contact.email]
+            fides_meta:
+              identity: email
+              data_type: string
+          - name: customer_name
+            data_categories: [user.name]
+            fides_meta:
+              data_type: string
+          - name: phone
+            data_categories: [user.contact.phone_number]
+            fides_meta:
+              data_type: string
+          - name: subject
+            data_categories: [user.content]
+            fides_meta:
+              data_type: string
+          - name: created_at
+            data_categories: [system.operations]
