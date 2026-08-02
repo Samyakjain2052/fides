@@ -10,7 +10,7 @@
 // ============================================================================
 import StatusBadge from "./StatusBadge";
 
-function Toggle({ checked, disabled, onChange, label }) {
+function Toggle({ checked, disabled, onChange, label, title }) {
   return (
     <button
       type="button"
@@ -18,6 +18,7 @@ function Toggle({ checked, disabled, onChange, label }) {
       aria-checked={checked}
       aria-label={label}
       disabled={disabled}
+      title={title}
       onClick={() => onChange?.(!checked)}
       className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition
         ${checked ? "bg-teal" : "bg-line"}
@@ -32,6 +33,8 @@ function Toggle({ checked, disabled, onChange, label }) {
 }
 
 export default function ConsentCard({
+  // `{}` when the module is live, so live call sites need pass nothing.
+  lock = {},
   notice,
   consent,
   checked,
@@ -112,7 +115,8 @@ export default function ConsentCard({
         <div className="flex flex-col items-end gap-2">
           <Toggle
             checked={mandatory ? true : checked}
-            disabled={mandatory}
+            disabled={mandatory || Boolean(lock.disabled)}
+            title={lock.title}
             onChange={onChange}
             label={`Consent for ${notice.purpose}`}
           />

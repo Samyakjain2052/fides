@@ -9,6 +9,7 @@ import { getConsents, getNotices, updateConsent } from "../../api";
 import { useApp } from "../../context/AppContext";
 import ConsentCard from "../../components/common/ConsentCard";
 import ConfirmModal from "../../components/common/ConfirmModal";
+import { previewLock } from "../../config/modules";
 
 const TABS = [
   { id: "all", label: "All" },
@@ -160,6 +161,7 @@ export default function PreferenceCentre() {
             variant="preference"
             daysToExpiry={days}
             checked={consent.status === "active"}
+            lock={previewLock("consent", "Changing a consent")}
             onChange={(value) => requestChange({ consent, notice }, value)}
             onHistory={() => navigate("/user/consent-history")}
           />

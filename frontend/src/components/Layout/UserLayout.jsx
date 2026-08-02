@@ -3,21 +3,23 @@
 // The language switcher and the notification bell live in the header, so both
 // appear on every user-facing screen as the brief requires.
 // ============================================================================
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
 import { MOCK_ORG } from "../../api";
 import LanguageSwitcher from "../common/LanguageSwitcher";
 import NotificationBell from "../common/NotificationBell";
 import Toast from "../common/Toast";
+import PreviewBanner, { PreviewBadge } from "../common/PreviewBanner";
+import { moduleForPath } from "../../config/modules";
 
 const NAV = [
   { to: "/user/dashboard", label: "Dashboard", icon: "▦" },
-  { to: "/user/preferences", label: "Preference Centre", icon: "☑" },
-  { to: "/user/consent-history", label: "Consent History", icon: "⏱" },
-  { to: "/user/dsar", label: "Data Requests", icon: "📋" },
-  { to: "/user/dsar/status", label: "Request Status", icon: "◷" },
-  { to: "/user/grievance", label: "File a Complaint", icon: "✉" },
-  { to: "/user/grievance/status", label: "Complaint Status", icon: "◔" },
+  { to: "/user/preferences", label: "Preference Centre", icon: "☑", module: "consent" },
+  { to: "/user/consent-history", label: "Consent History", icon: "⏱", module: "consent" },
+  { to: "/user/dsar", label: "Data Requests", icon: "📋", module: "dsar" },
+  { to: "/user/dsar/status", label: "Request Status", icon: "◷", module: "dsar" },
+  { to: "/user/grievance", label: "File a Complaint", icon: "✉", module: "grievance" },
+  { to: "/user/grievance/status", label: "Complaint Status", icon: "◔", module: "grievance" },
 ];
 
 const DEMO = [
@@ -28,6 +30,7 @@ const DEMO = [
 export default function UserLayout() {
   const { user, signOut, t } = useApp();
   const navigate = useNavigate();
+  const activeModule = moduleForPath(useLocation().pathname);
 
   const linkClass = ({ isActive }) =>
     `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition ${
@@ -45,7 +48,8 @@ export default function UserLayout() {
           {NAV.map((item) => (
             <NavLink key={item.to} to={item.to} className={linkClass}>
               <span aria-hidden="true" className="w-4 text-center">{item.icon}</span>
-              {t(item.label)}
+              <span className="min-w-0 flex-1 truncate">{t(item.label)}</span>
+              <PreviewBadge module={item.module} />
             </NavLink>
           ))}
         </nav>
@@ -71,6 +75,7 @@ export default function UserLayout() {
             <p className="truncate text-xs text-muted">{MOCK_ORG.name}</p>
           </div>
           <div className="flex items-center gap-2">
+            <NavLink to="/roadmap" className="btn-ghost text-sm">What's live</NavLink>
             <LanguageSwitcher />
             <NotificationBell audience="user" />
             <button
@@ -101,11 +106,13 @@ export default function UserLayout() {
               }
             >
               {t(item.label)}
+              <PreviewBadge module={item.module} className="ml-1.5" />
             </NavLink>
           ))}
         </nav>
 
-        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6">
+        <main className="mx-auto w-full max-w-6xl flex-1 space-y-5 px-4 py-6 sm:px-6">
+          {activeModule && <PreviewBanner module={activeModule} />}
           <Outlet />
         </main>
 

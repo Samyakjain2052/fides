@@ -21,18 +21,21 @@ curl -s localhost:8100/health | jq
 open http://localhost:8100/docs
 ```
 
-`cms-db` creates the two database roles on first boot; `cms-backend` runs
-`alembic upgrade head` before starting uvicorn, so a deploy can never serve an
-un-migrated schema.
+`cms-db` creates the two database roles on first boot. Migrations run in their
+own one-shot service, `cms-migrate`, which `cms-backend` waits on
+(`condition: service_completed_successfully`) — so a deploy still cannot serve an
+un-migrated schema, but two replicas cannot race each other to migrate, and the
+app image needs no schema-altering rights.
 
 ### Tests
 
 ```bash
-docker compose run --rm --no-deps \
-  -e DS_DATABASE_URL="postgresql+asyncpg://datashield_app:apppassword@cms-db:5432/datashield" \
-  -e DS_DATABASE_OWNER_URL="postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield" \
-  cms-backend pytest -q
+docker compose run --rm cms-test
 ```
+
+`cms-test` builds the image's `dev` target — the runtime layers plus pytest. The
+deployed image (`runtime`) has neither pytest nor a compiler, so the tests run
+against the same layers that ship without those layers carrying test tooling.
 
 Tests run **in the container, against a real PostgreSQL**, and that is not
 negotiable: row-level security, the append-only trigger and advisory locks do not

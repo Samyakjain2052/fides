@@ -14,6 +14,15 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 5173,
     proxy: {
+      // Mirrors nginx in production (frontend/nginx.conf.template). Keeping the
+      // two the same shape is deliberate: an auth bug caused by crossing an
+      // origin boundary should show up here, not for the first time on a
+      // customer's browser.
+      "/api": {
+        target: process.env.BACKEND_URL || "http://localhost:8100",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ""),
+      },
       "/gateway": {
         target: process.env.GATEWAY_URL || "http://localhost:8000",
         changeOrigin: true,

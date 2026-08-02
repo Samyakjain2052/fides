@@ -9,6 +9,7 @@ import { getAuditLogs, getRetentionPolicies, runPurge, updateRetentionPolicy } f
 import { useApp } from "../../context/AppContext";
 import ConfirmModal from "../../components/common/ConfirmModal";
 import StatusBadge from "../../components/common/StatusBadge";
+import { previewLock } from "../../config/modules";
 
 const DAY = 864e5;
 
@@ -149,7 +150,7 @@ export default function DataRetentionPolicy() {
                   </span>
                 </label>
                 <div className="flex gap-3">
-                  <button type="button" className="btn-primary" onClick={save} disabled={busy}>
+                  <button type="button" className="btn-primary" onClick={save} disabled={busy} {...previewLock("retention", "Saving a retention policy")}>
                     {busy ? "Saving…" : "Save policy"}
                   </button>
                   <button type="button" className="btn-ghost" onClick={() => setEditing(null)}>
@@ -191,7 +192,7 @@ export default function DataRetentionPolicy() {
                   <button type="button" className="btn-secondary" onClick={() => startEdit(p)}>
                     Edit policy
                   </button>
-                  <button type="button" className="btn-danger" onClick={() => setPurging(p)}>
+                  <button type="button" className="btn-danger" onClick={() => setPurging(p)} {...previewLock("retention", "Running a purge")}>
                     Run Manual Purge
                   </button>
                 </div>

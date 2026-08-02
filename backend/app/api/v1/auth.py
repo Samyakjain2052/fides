@@ -25,7 +25,10 @@ def _set_refresh_cookie(response: Response, token: str, expires: datetime) -> No
     Secure      never sent over plain HTTP.
     SameSite    Strict blocks it being sent on cross-site requests, which is the
                 CSRF defence for the refresh endpoint.
-    path        scoped to /v1/auth so it is not attached to every API call.
+    path        scoped to <external_path_prefix>/v1/auth so it is not attached
+                to every API call. The prefix matters: behind a proxy that mounts
+                this API at /api, a cookie scoped to /v1/auth is never sent back,
+                and every reload silently signs the user out.
     """
     response.set_cookie(
         key=_settings.refresh_cookie_name,
@@ -34,7 +37,7 @@ def _set_refresh_cookie(response: Response, token: str, expires: datetime) -> No
         secure=_settings.cookie_secure,
         samesite="strict",
         domain=_settings.cookie_domain,
-        path=f"{_settings.api_prefix}/auth",
+        path=f"{_settings.external_path_prefix}{_settings.api_prefix}/auth",
         expires=int((expires - datetime.now(UTC)).total_seconds()),
     )
 
@@ -42,7 +45,7 @@ def _set_refresh_cookie(response: Response, token: str, expires: datetime) -> No
 def _clear_refresh_cookie(response: Response) -> None:
     response.delete_cookie(
         key=_settings.refresh_cookie_name,
-        path=f"{_settings.api_prefix}/auth",
+        path=f"{_settings.external_path_prefix}{_settings.api_prefix}/auth",
         domain=_settings.cookie_domain,
     )
 

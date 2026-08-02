@@ -17,7 +17,7 @@
 // rows. Vite proxies /gateway to it, so there is no CORS to configure.
 // See ../../vite.config.js and the repo README.
 // ---------------------------------------------------------------------------
-export const USE_REAL_DSAR_BACKEND = false;
+export const USE_REAL_DSAR_BACKEND = true;
 const GATEWAY = "/gateway";
 
 const delay = (ms = 220) => new Promise((r) => setTimeout(r, ms));
@@ -34,6 +34,27 @@ export const MOCK_USER = {
   email: "priya@example.com",
   language: "en",
 };
+
+// The Data Principal these screens act as.
+//
+// This used to be MOCK_USER everywhere, including on the DSAR path that now
+// really executes — so a buyer who signed up as themselves would have fired an
+// access request against priya@example.com and been shown her requests as their
+// own. Wrong data to the wrong person, from a product selling privacy.
+//
+// AppContext sets this from the real session. The fallback keeps the preview
+// modules working for a signed-out visitor on the standalone consent surfaces.
+let subject = { ...MOCK_USER };
+
+export function setSubjectIdentity(user) {
+  subject = user
+    ? { id: user.id, name: user.name, email: user.email, language: user.language || "en" }
+    : { ...MOCK_USER };
+}
+
+export function subjectIdentity() {
+  return { ...subject };
+}
 
 export const MOCK_ORG = {
   id: "org001",
@@ -93,11 +114,14 @@ let consents = [
 ];
 export const MOCK_CONSENTS = clone(consents);
 
-let dsarRequests = [
-  { id: "d1", user_id: "u001", user_email: "priya@example.com", type: "access", status: "completed", submitted_at: "2026-06-01T08:00:00Z", deadline_at: "2026-07-01T08:00:00Z", resolved_at: "2026-06-20T08:00:00Z", reference: "DSAR-2026-001", verification: "otp", export_url: "#mock-export" },
-  { id: "d2", user_id: "u002", user_email: "rahul@example.com", type: "erase", status: "in_progress", submitted_at: "2026-07-10T08:00:00Z", deadline_at: "2026-08-09T08:00:00Z", reference: "DSAR-2026-002", verification: "digilocker" },
-  { id: "d3", user_id: "u003", user_email: "anita@example.com", type: "correct", status: "pending", submitted_at: "2026-07-20T08:00:00Z", deadline_at: "2026-08-19T08:00:00Z", reference: "DSAR-2026-003", verification: "otp", correction: { field: "Phone", current: "+91 90000 00000", corrected: "+91 98765 43210" } },
-];
+// Starts EMPTY, unlike every other fixture here.
+//
+// DSAR is the one module marked "live", and requests submitted from these
+// screens really execute against the Fides engine. Seeding it with three
+// invented requests would have put fabricated rows in the same list as real
+// ones, and made the dashboard's "open requests" count — which is presented as
+// a real figure — a mix of the two. An empty queue is the honest starting state.
+let dsarRequests = [];
 export const MOCK_DSAR_REQUESTS = clone(dsarRequests);
 
 let grievances = [
@@ -184,20 +208,16 @@ let reports = [
 ];
 
 // Chart series for the admin dashboard.
-export const DSAR_BY_TYPE_30D = [
-  { label: "Access", value: 24 },
-  { label: "Correct", value: 9 },
-  { label: "Erase", value: 14 },
-];
+// Removed: a hardcoded [24, 9, 14] rendered under the heading "Last 30 days".
+// It was not derived from anything — it was three numbers that looked like a
+// measurement. On a compliance dashboard that is the most damaging artifact in
+// the product, so the chart now derives from real requests and renders an
+// honest empty state when there are none.
 
-export const CONSENTS_6M = [
-  { month: "Feb", given: 320, withdrawn: 42 },
-  { month: "Mar", given: 410, withdrawn: 55 },
-  { month: "Apr", given: 385, withdrawn: 61 },
-  { month: "May", given: 470, withdrawn: 88 },
-  { month: "Jun", given: 505, withdrawn: 74 },
-  { month: "Jul", given: 548, withdrawn: 96 },
-];
+// Removed with the same reasoning: a six-month "given vs withdrawn" trend
+// climbing 320 -> 548 is a claim about a history that never happened, and a
+// trend line is a stronger claim than a single number because it implies
+// sustained real usage.
 
 // ============================================================================
 // AUDIT TRAIL — every mutation lands here
@@ -222,7 +242,7 @@ export function appendAuditLog(entry) {
     source_ip: "192.168.1.1",
     consent_status: "-",
     purpose_id: "-",
-    user_id: MOCK_USER.id,
+    user_id: subject.id,
     ...entry,
     audit_hash: fakeHash(entry.action_type),
   };
@@ -263,8 +283,8 @@ export async function login({ email, password, role }) {
   if (!email || !password) throw new Error("Email and password are required.");
   const known = usersAdmin.find((u) => u.email === email);
   const profile = {
-    id: known?.id || (role === "data_principal" ? MOCK_USER.id : "adm01"),
-    name: known?.name || (role === "data_principal" ? MOCK_USER.name : "Compliance Officer"),
+    id: known?.id || (role === "data_principal" ? subject.id : "adm01"),
+    name: known?.name || (role === "data_principal" ? subject.name : "Compliance Officer"),
     email,
     role,
   };
@@ -303,7 +323,7 @@ export async function getNotices() {
   return clone(MOCK_NOTICES);
 }
 
-export async function getConsents(userId = MOCK_USER.id) {
+export async function getConsents(userId = subject.id) {
   await delay();
   return clone(consents.filter((c) => c.user_id === userId));
 }
@@ -334,12 +354,12 @@ export async function saveConsentChoices(choices, { language = "English", method
   Object.entries(choices).forEach(([noticeId, granted]) => {
     const notice = MOCK_NOTICES.find((n) => n.id === noticeId);
     if (!notice) return;
-    let row = consents.find((c) => c.notice_id === noticeId && c.user_id === MOCK_USER.id);
+    let row = consents.find((c) => c.notice_id === noticeId && c.user_id === subject.id);
     const status = granted ? "active" : "withdrawn";
     if (!row) {
       row = {
         id: "c" + (consents.length + 1),
-        user_id: MOCK_USER.id,
+        user_id: subject.id,
         notice_id: noticeId,
         purpose: notice.purpose,
         status,
@@ -381,7 +401,7 @@ export async function submitGuardianConsent({ guardianEmail, childName }) {
 }
 
 // Consent history: derived from the audit trail, which is the real source.
-export async function getConsentHistory(userId = MOCK_USER.id) {
+export async function getConsentHistory(userId = subject.id) {
   await delay();
   const consentActions = ["grant", "withdraw", "update", "renew"];
   return clone(auditLogs)
@@ -445,12 +465,12 @@ export async function submitDSAR({ type, verification, details = {} }) {
     const resp = await fetch(`${GATEWAY}/dsar`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: MOCK_USER.email, action: type === "erase" ? "erasure" : "access" }),
+      body: JSON.stringify({ email: subject.email, action: type === "erase" ? "erasure" : "access" }),
     });
     if (!resp.ok) throw new Error("Gateway rejected the request");
     const created = await resp.json();
     const row = {
-      id: created.request_id, user_id: MOCK_USER.id, user_email: MOCK_USER.email,
+      id: created.request_id, user_id: subject.id, user_email: subject.email,
       type, status: "in_progress", submitted_at: nowIso(),
       deadline_at: deadlineFor(nowIso()), reference: created.request_id,
       verification, details, real: true,
@@ -466,8 +486,8 @@ export async function submitDSAR({ type, verification, details = {} }) {
   const submitted = nowIso();
   const row = {
     id: "d" + n,
-    user_id: MOCK_USER.id,
-    user_email: MOCK_USER.email,
+    user_id: subject.id,
+    user_email: subject.email,
     type,
     status: "pending",
     submitted_at: submitted,
@@ -479,7 +499,7 @@ export async function submitDSAR({ type, verification, details = {} }) {
   dsarRequests = [row, ...dsarRequests];
   appendAuditLog({ action_type: "dsar_submitted", purpose_id: "-", consent_status: type });
   notifications = [
-    { id: "nt" + (notifications.length + 1), audience: "user", to: MOCK_USER.email, subject: `We received your ${type} request ${row.reference}`, scenario: "dsar_update", channel: "Email", status: "delivered", sent_at: submitted, language: "English" },
+    { id: "nt" + (notifications.length + 1), audience: "user", to: subject.email, subject: `We received your ${type} request ${row.reference}`, scenario: "dsar_update", channel: "Email", status: "delivered", sent_at: submitted, language: "English" },
     ...notifications,
   ];
   return clone(row);
@@ -550,8 +570,8 @@ export async function submitGrievance({ category, description, relatedDsar, lang
   const n = grievances.length + 1;
   const row = {
     id: "g" + n,
-    user_id: MOCK_USER.id,
-    user_email: MOCK_USER.email,
+    user_id: subject.id,
+    user_email: subject.email,
     category,
     description,
     status: "open",
@@ -736,7 +756,7 @@ export async function generateReport({ type, range, format, signed, by }) {
 // ============================================================================
 const DAY = 864e5;
 
-export async function getUserDashboard(userId = MOCK_USER.id) {
+export async function getUserDashboard(userId = subject.id) {
   await delay();
   const mine = consents.filter((c) => c.user_id === userId);
   const soon = mine.filter(
@@ -789,13 +809,20 @@ export async function getAdminDashboard() {
       consents_expiring_7: clone(expiring7),
     },
     charts: {
-      dsar_by_type: DSAR_BY_TYPE_30D,
-      consents_6m: CONSENTS_6M,
+      // Derived from the requests that actually exist. Empty is a legitimate
+      // answer and the dashboard renders it as one, rather than filling the
+      // space with numbers nobody measured.
+      dsar_by_type: ["access", "correct", "erase"]
+        .map((type) => ({
+          label: type[0].toUpperCase() + type.slice(1),
+          value: dsarRequests.filter((r) => r.type === type).length,
+        }))
+        .filter((d) => d.value > 0),
       status_split: [
         { label: "Active", value: consents.filter((c) => c.status === "active").length, tone: "success" },
         { label: "Withdrawn", value: consents.filter((c) => c.status === "withdrawn").length, tone: "danger" },
         { label: "Expired", value: consents.filter((c) => c.status === "expired").length, tone: "warning" },
-      ],
+      ].filter((d) => d.value > 0),
     },
   };
 }

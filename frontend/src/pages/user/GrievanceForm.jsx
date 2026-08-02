@@ -9,11 +9,12 @@ import {
   getDSARRequests,
   GRIEVANCE_CATEGORIES,
   MOCK_ORG,
-  MOCK_USER,
+  subjectIdentity,
   submitGrievance,
 } from "../../api";
 import { useApp } from "../../context/AppContext";
 import LanguageSwitcher from "../../components/common/LanguageSwitcher";
+import { previewLock } from "../../config/modules";
 
 const MIN_CHARS = 50;
 const RESPONSE_DAYS = 15;
@@ -33,7 +34,7 @@ export default function GrievanceForm() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    getDSARRequests({ userId: MOCK_USER.id }).then(setMyRequests);
+    getDSARRequests({ userId: subjectIdentity().id }).then(setMyRequests);
   }, []);
 
   const submit = async (e) => {
@@ -77,7 +78,7 @@ export default function GrievanceForm() {
           <p className="font-semibold text-ink">What happens now</p>
           <ul className="mt-2 space-y-1.5 text-muted">
             <li>• {MOCK_ORG.grievanceOfficer} (Grievance Officer) is notified.</li>
-            <li>• A confirmation email has been sent to {MOCK_USER.email}.</li>
+            <li>• A confirmation email has been sent to {subjectIdentity().email}.</li>
             <li>• You can track the status and add feedback once it is resolved.</li>
           </ul>
           <div className="mt-4 flex flex-wrap gap-3">
@@ -194,7 +195,8 @@ export default function GrievanceForm() {
         )}
 
         <button type="submit" className="btn-primary w-full sm:w-auto"
-                disabled={busy || description.length < MIN_CHARS}>
+                disabled={busy || description.length < MIN_CHARS}
+                {...previewLock("grievance", "Submitting a complaint")}>
           {busy ? "Submitting…" : "Submit Complaint"}
         </button>
       </form>

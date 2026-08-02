@@ -13,6 +13,7 @@ import {
 } from "../../api";
 import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/common/StatusBadge";
+import { previewLock } from "../../config/modules";
 
 const TABS = [
   { id: "user", label: "User Notifications" },
@@ -236,6 +237,7 @@ export default function NotificationCenter() {
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <button type="button" className="btn-primary"
+                      {...previewLock("notifications", "Saving a template")}
                       onClick={() => notify(`Template saved for ${templateLang}.`)}>
                 Save template
               </button>

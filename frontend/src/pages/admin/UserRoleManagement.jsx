@@ -9,6 +9,7 @@ import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/common/StatusBadge";
 import ConfirmModal from "../../components/common/ConfirmModal";
 import AuditHashBadge from "../../components/common/AuditHashBadge";
+import { previewLock } from "../../config/modules";
 
 const ROLE_LABEL = {
   data_principal: "Data Principal",
@@ -86,7 +87,7 @@ export default function UserRoleManagement() {
             Who can see and do what. Every role change is written to the audit trail.
           </p>
         </div>
-        <button type="button" className="btn-primary" onClick={() => setAdding((v) => !v)}>
+        <button type="button" className="btn-primary" onClick={() => setAdding((v) => !v)} {...previewLock("users", "Adding a user")}>
           {adding ? "Cancel" : "Add user"}
         </button>
       </div>
@@ -111,7 +112,7 @@ export default function UserRoleManagement() {
             </select>
           </div>
           <div className="flex items-end">
-            <button type="submit" className="btn-primary w-full" disabled={busy}>
+            <button type="submit" className="btn-primary w-full" disabled={busy} {...previewLock("users", "Creating a user")}>
               {busy ? "Adding…" : "Create user"}
             </button>
           </div>

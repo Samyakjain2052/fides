@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { generateReport, getAdminDashboard, getReports } from "../../api";
 import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/common/StatusBadge";
+import { previewLock } from "../../config/modules";
 
 const REPORT_TYPES = [
   {
@@ -117,6 +118,7 @@ export default function Reports() {
                   className="btn-secondary"
                   onClick={() => make(r.id, f, r.signed)}
                   disabled={busy === r.id + f}
+                  {...previewLock("reports", "Generating a report")}
                 >
                   {busy === r.id + f ? "Generating…" : `Generate ${f}`}
                 </button>

@@ -17,7 +17,15 @@
 //    from the cookie.
 // ============================================================================
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8100/v1";
+// Same-origin by default, in dev as well as production.
+//
+// This used to default to http://localhost:8100/v1 — a different origin from
+// the app. The backend's refresh cookie is SameSite=Strict, so a cross-origin
+// deployment would have had the browser silently withhold it: sign-in succeeds,
+// every reload signs you out, and nothing appears in any log. Dev proxies /api
+// to the backend (vite.config.js) and nginx proxies it in production, so both
+// environments exercise the same path and that failure cannot be prod-only.
+const API = import.meta.env.VITE_API_URL || "/api/v1";
 
 // In memory, not localStorage. See rule 2 above.
 let accessToken = null;

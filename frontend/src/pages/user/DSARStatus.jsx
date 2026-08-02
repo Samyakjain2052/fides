@@ -5,7 +5,7 @@
 // ============================================================================
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getDSARRequests, getNotifications, MOCK_USER } from "../../api";
+import { getDSARRequests, getNotifications, subjectIdentity } from "../../api";
 import StatusBadge from "../../components/common/StatusBadge";
 import SLACountdown from "../../components/common/SLACountdown";
 import TimelineTracker, { DSAR_STEPS } from "../../components/common/TimelineTracker";
@@ -18,7 +18,7 @@ export default function DSARStatus() {
   const [notifications, setNotifications] = useState([]);
 
   useEffect(() => {
-    getDSARRequests({ userId: MOCK_USER.id }).then((r) => {
+    getDSARRequests({ userId: subjectIdentity().id }).then((r) => {
       setRows(r);
       setSelected((prev) => prev || r[0] || null);
     });

@@ -4,7 +4,7 @@
 // useState + useContext only — no Redux, per the brief.
 // ============================================================================
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { LANGUAGES, ROLES } from "../api";
+import { LANGUAGES, ROLES, setSubjectIdentity } from "../api";
 import { clearSession, logout as apiLogout, restoreSession } from "../api/auth";
 
 const AppContext = createContext(null);
@@ -84,6 +84,13 @@ export function AppProvider({ children }) {
   useEffect(() => {
     localStorage.removeItem(STORE_USER);
   }, []);
+
+  // Keep the API layer's Data Principal in step with the real session. The DSAR
+  // path executes for real now, so acting as the wrong identity is not a
+  // cosmetic bug — it would run one person's erasure against another's records.
+  useEffect(() => {
+    setSubjectIdentity(user);
+  }, [user]);
 
   useEffect(() => {
     localStorage.setItem(STORE_LANG, language);

@@ -9,6 +9,7 @@ import { Link } from "react-router-dom";
 import { COOKIE_CATEGORIES, saveCookiePreferences } from "../../api";
 import { useApp } from "../../context/AppContext";
 import LanguageSwitcher from "../../components/common/LanguageSwitcher";
+import { previewLock } from "../../config/modules";
 
 export default function CookieConsent() {
   const { notify } = useApp();
@@ -163,14 +164,14 @@ export default function CookieConsent() {
           )}
 
           <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-line pt-4">
-            <button type="button" className="btn-primary" onClick={acceptAll} disabled={busy}>
+            <button type="button" className="btn-primary" onClick={acceptAll} disabled={busy} {...previewLock("consent", "Accepting all cookies")}>
               Accept All
             </button>
-            <button type="button" className="btn-secondary" onClick={declineAll} disabled={busy}>
+            <button type="button" className="btn-secondary" onClick={declineAll} disabled={busy} {...previewLock("consent", "Declining optional cookies")}>
               Decline All
             </button>
             {customizing ? (
-              <button type="button" className="btn-secondary" onClick={() => save()} disabled={busy}>
+              <button type="button" className="btn-secondary" onClick={() => save()} disabled={busy} {...previewLock("consent", "Saving cookie preferences")}>
                 {busy ? "Saving…" : "Save Preferences"}
               </button>
             ) : (

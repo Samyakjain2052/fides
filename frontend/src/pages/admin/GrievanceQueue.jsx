@@ -14,6 +14,7 @@ import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/common/StatusBadge";
 import SlideOver from "../../components/common/SlideOver";
 import ConfirmModal from "../../components/common/ConfirmModal";
+import { previewLock } from "../../config/modules";
 
 const FILTERS = ["All", "Open", "In Progress", "Resolved", "Escalated"];
 const DAY = 864e5;
@@ -146,16 +147,16 @@ export default function GrievanceQueue() {
         footer={
           selected && (
             <div className="flex flex-wrap items-center gap-3">
-              <button type="button" className="btn-primary" onClick={() => save({ status })} disabled={busy}>
+              <button type="button" className="btn-primary" onClick={() => save({ status })} disabled={busy} {...previewLock("grievance", "Updating a grievance")}>
                 {busy ? "Saving…" : "Save & Notify User"}
               </button>
               {!selected.escalated && selected.status !== "resolved" && (
-                <button type="button" className="btn-secondary" onClick={() => setConfirmEscalate(true)}>
+                <button type="button" className="btn-secondary" onClick={() => setConfirmEscalate(true)} {...previewLock("grievance", "Escalating a grievance")}>
                   Escalate to DPO
                 </button>
               )}
               {selected.status !== "resolved" && (
-                <button type="button" className="btn-secondary" onClick={() => setConfirmResolve(true)}>
+                <button type="button" className="btn-secondary" onClick={() => setConfirmResolve(true)} {...previewLock("grievance", "Resolving a grievance")}>
                   Mark Resolved
                 </button>
               )}

@@ -9,12 +9,13 @@ import {
   getGrievances,
   GRIEVANCE_ESCALATION_DAYS,
   MOCK_ORG,
-  MOCK_USER,
+  subjectIdentity,
   submitGrievanceFeedback,
 } from "../../api";
 import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/common/StatusBadge";
 import TimelineTracker, { GRIEVANCE_STEPS } from "../../components/common/TimelineTracker";
+import { previewLock } from "../../config/modules";
 
 const DAY = 864e5;
 
@@ -27,7 +28,7 @@ export default function GrievanceStatus() {
   const [busy, setBusy] = useState(false);
 
   const load = () =>
-    getGrievances({ userId: MOCK_USER.id }).then((r) => {
+    getGrievances({ userId: subjectIdentity().id }).then((r) => {
       setRows(r);
       setSelected((prev) => (prev ? r.find((x) => x.id === prev.id) || r[0] : r[0]) || null);
     });
@@ -184,6 +185,7 @@ export default function GrievanceStatus() {
                         aria-label="Feedback comment"
                       />
                       <button type="button" className="btn-primary mt-3" disabled={!rating || busy}
+                              {...previewLock("grievance", "Sending feedback")}
                               onClick={sendFeedback}>
                         {busy ? "Sending…" : "Submit feedback"}
                       </button>

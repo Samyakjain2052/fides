@@ -299,12 +299,57 @@ services:
       timeout: 5s
       retries: 20
 
-  cms-backend:
+  # Migrations, as their own unit of work.
+  #
+  # This used to be `alembic upgrade head && uvicorn ...` inside cms-backend's
+  # command. That is fine with exactly one replica and wrong with two: both race
+  # to migrate on boot. It also meant the image could not be deployed without
+  # also granting it schema-altering rights, which defeats the point of running
+  # the app on a restricted role. Runs to completion, then the app starts.
+  cms-migrate:
     build:
       context: ./backend
+      target: runtime
     depends_on:
       cms-db:
         condition: service_healthy
+    environment:
+      DS_ENV: ${DS_ENV:-dev}
+      DS_DATABASE_URL: postgresql+asyncpg://datashield_app:apppassword@cms-db:5432/datashield
+      DS_DATABASE_OWNER_URL: postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield
+      DS_JWT_SECRET: ${DS_JWT_SECRET}
+      DS_AUDIT_HMAC_KEY: ${DS_AUDIT_HMAC_KEY}
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  # Test runner. Uses the `dev` target, which is the runtime image plus pytest —
+  # so the tests exercise the same layers that deploy, without pytest shipping
+  # to production. Run: docker compose run --rm cms-test
+  cms-test:
+    profiles: ["test"]
+    build:
+      context: ./backend
+      target: dev
+    depends_on:
+      cms-db:
+        condition: service_healthy
+    environment:
+      DS_DATABASE_URL: postgresql+asyncpg://datashield_app:apppassword@cms-db:5432/datashield
+      DS_DATABASE_OWNER_URL: postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield
+      DS_JWT_SECRET: ${DS_JWT_SECRET}
+      DS_AUDIT_HMAC_KEY: ${DS_AUDIT_HMAC_KEY}
+    command: ["pytest", "-q"]
+    restart: "no"
+
+  cms-backend:
+    build:
+      context: ./backend
+      target: runtime
+    depends_on:
+      cms-db:
+        condition: service_healthy
+      cms-migrate:
+        condition: service_completed_successfully
     environment:
       DS_ENV: ${DS_ENV:-dev}
       DS_DEBUG: ${DS_DEBUG:-true}
@@ -313,14 +358,15 @@ services:
       DS_JWT_SECRET: ${DS_JWT_SECRET}
       DS_AUDIT_HMAC_KEY: ${DS_AUDIT_HMAC_KEY}
       DS_COOKIE_SECURE: ${DS_COOKIE_SECURE:-false}
+      # nginx mounts this API at /api, so the refresh cookie must be scoped there.
+      # Scoped to /v1/auth instead, the browser holds a cookie it never sends
+      # back: sign-in works, the next reload signs you out, and nothing is logged.
+      DS_EXTERNAL_PATH_PREFIX: ${DS_EXTERNAL_PATH_PREFIX:-/api}
       DS_CORS_ORIGINS: '["http://localhost:${CMS_PORT:-5173}"]'
     ports:
       - "${CMS_BACKEND_PORT:-8100}:8100"
-    # Migrations run as the owner role, then the app starts as the restricted
-    # role. One command so a deploy can never serve an un-migrated schema.
-    command: >-
-      sh -c "alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8100"
+    # No command override: the image's CMD starts uvicorn. Migrations already
+    # ran in cms-migrate, which this service waits for.
     restart: unless-stopped
 
   # ===========================================================================
@@ -330,12 +376,43 @@ services:
   # :8000/ui. It runs on mock data by default (see frontend/src/api/index.js);
   # flip USE_REAL_DSAR_BACKEND there to route its DSAR calls through the /gateway
   # proxy into Fides.
+  # The production image, and the ONLY service that should ever be published to
+  # the internet. nginx serves the built app and reverse-proxies /api and
+  # /gateway from the same origin — see frontend/nginx.conf.template for why
+  # that is a correctness requirement and not a deployment preference.
   cms-frontend:
     build:
       context: ./frontend
+      args:
+        # Stamped into the bundle so a running container names its own commit.
+        VITE_BUILD_SHA: ${BUILD_SHA:-dev}
     environment:
-      # Where the Vite dev-server proxy sends /gateway requests. Inside the
-      # compose network the gateway is reachable by service name.
+      BACKEND_URL: http://cms-backend:8100
+      GATEWAY_URL: http://fastapi-gateway:8000
+    ports:
+      # 8080 inside the container. The host port defaults to 8090 because Fides
+      # already owns 8080 locally; in Azure this is the app's only ingress.
+      - "${WEB_PORT:-8090}:8080"
+    depends_on:
+      fastapi-gateway:
+        condition: service_started
+      cms-backend:
+        condition: service_started
+    restart: unless-stopped
+
+  # Hot-reload development server. Not started by default — bring it up
+  # explicitly with `docker compose --profile dev up cms-frontend-dev`, or just
+  # run `npm run dev` on the host. It is kept because losing hot reload would be
+  # a real cost to whoever is building screens, but it must never be the thing
+  # that gets deployed, so it sits behind a profile.
+  cms-frontend-dev:
+    profiles: ["dev"]
+    build:
+      context: ./frontend
+      target: build
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
+    environment:
+      BACKEND_URL: http://cms-backend:8100
       GATEWAY_URL: http://fastapi-gateway:8000
     volumes:
       # Source mounted for hot reload; node_modules stays the image's copy so a
@@ -344,9 +421,6 @@ services:
       - /app/node_modules
     ports:
       - "${CMS_PORT:-5173}:5173"
-    depends_on:
-      fastapi-gateway:
-        condition: service_started
     restart: unless-stopped
 
   # ===========================================================================

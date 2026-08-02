@@ -1,0 +1,117 @@
+# =============================================================================
+# The single public ingress.
+#
+# Everything the browser talks to is served from ONE origin: the static app, the
+# CMS API, and the DSAR gateway. That is not a tidiness preference — it is what
+# makes authentication work at all.
+#
+# The backend sets its refresh cookie with SameSite=Strict. If the app were
+# served from one hostname and the API from another, the browser would simply
+# not send that cookie: sign-in would appear to succeed and every reload would
+# drop the session, with nothing in any log to explain it. Relaxing to
+# SameSite=None is not a fix — Safari's ITP and Brave block third-party cookies
+# outright, so it would still be broken there, and we would additionally owe a
+# CSRF token on every mutating request.
+#
+# Same-origin also removes the CORS surface completely.
+#
+# BACKEND_URL and GATEWAY_URL are substituted at container start by the
+# nginx:alpine entrypoint (it runs envsubst over /etc/nginx/templates/*.template).
+# =============================================================================
+
+server {
+    # 8080, not 80: binding a privileged port would mean running as root, and
+    # this container is the one thing exposed to the internet.
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Uploads are capped here too, not only in the app. The edge is the only
+    # place a limit cannot be bypassed by calling the API directly.
+    client_max_body_size 10m;
+
+    # --- security headers ----------------------------------------------------
+    # A procurement reviewer will look for these, and they are cheap.
+    add_header X-Content-Type-Options    "nosniff"          always;
+    add_header X-Frame-Options           "DENY"             always;
+    add_header Referrer-Policy           "same-origin"      always;
+    add_header Cross-Origin-Opener-Policy "same-origin"     always;
+    # HSTS is set at the TLS terminator, not here: this server also answers
+    # plain HTTP health probes inside the cluster, and sending HSTS over those
+    # would be meaningless at best.
+
+    gzip              on;
+    gzip_vary         on;
+    gzip_min_length   1024;
+    gzip_proxied      any;
+    gzip_types        text/plain text/css application/javascript application/json
+                      image/svg+xml application/xml font/woff font/woff2;
+
+    # --- the CMS API ---------------------------------------------------------
+    # Trailing slashes on both sides: /api/v1/auth/login -> /v1/auth/login
+    location /api/ {
+        proxy_pass         ${BACKEND_URL}/;
+        proxy_http_version 1.1;
+
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        # The backend marks its cookie Secure. Without this it cannot tell that
+        # the original request arrived over TLS, and would refuse to set it.
+        proxy_set_header   X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 5s;
+        proxy_read_timeout    60s;
+    }
+
+    # --- the DSAR gateway ----------------------------------------------------
+    # A privacy request is queued to a Celery worker and polled, so the timeout
+    # is generous: a slow fan-out across four datastores is normal, not a fault.
+    location /gateway/ {
+        proxy_pass         ${GATEWAY_URL}/;
+        proxy_http_version 1.1;
+
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 5s;
+        proxy_read_timeout   300s;
+    }
+
+    # --- static assets -------------------------------------------------------
+    # Vite fingerprints these, so the filename changes whenever the bytes do and
+    # a year-long immutable cache is safe.
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # index.html must NOT be cached: it is the document that names the current
+    # asset hashes. A stale one points at files that no longer exist, and the
+    # app white-screens for anyone who visited before the deploy.
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        expires -1;
+    }
+
+    # Liveness for the platform's probe. Deliberately not /health — that is the
+    # gateway's, and two different meanings behind one path is how a green
+    # dashboard ends up hiding a broken dependency.
+    location = /healthz {
+        access_log off;
+        default_type application/json;
+        return 200 '{"status":"ok","service":"cms-frontend"}';
+    }
+
+    # --- SPA fallback --------------------------------------------------------
+    # Client-side routing: /roadmap, /admin/dsar and friends are not files on
+    # disk. Anything unmatched returns index.html and React resolves the route.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

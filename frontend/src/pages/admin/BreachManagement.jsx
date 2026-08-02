@@ -16,6 +16,7 @@ import StatusBadge from "../../components/common/StatusBadge";
 import SlideOver from "../../components/common/SlideOver";
 import ConfirmModal from "../../components/common/ConfirmModal";
 import StatCard from "../../components/common/StatCard";
+import { previewLock } from "../../config/modules";
 
 const SEVERITIES = ["low", "medium", "high", "critical"];
 const STATUSES = ["investigating", "contained", "reported_to_dpb", "closed"];
@@ -109,6 +110,7 @@ export default function BreachManagement() {
         <button
           type="button"
           className="btn-primary"
+          {...previewLock("breach", "Recording a breach")}
           onClick={() => {
             setSelected(null);
             setForm({ severity: "medium", affected_users: 0, categories: "", description: "", remediation: "" });
@@ -207,11 +209,11 @@ export default function BreachManagement() {
         }}
         footer={
           <div className="flex flex-wrap items-center gap-3">
-            <button type="button" className="btn-primary" onClick={() => save()} disabled={busy}>
+            <button type="button" className="btn-primary" onClick={() => save()} disabled={busy} {...previewLock("breach", "Saving a breach record")}>
               {busy ? "Saving…" : creating ? "Record breach" : "Save changes"}
             </button>
             {selected && !creating && !selected.reported_at && (
-              <button type="button" className="btn-danger" onClick={() => setConfirmReport(true)}>
+              <button type="button" className="btn-danger" onClick={() => setConfirmReport(true)} {...previewLock("breach", "Reporting to the Board")}>
                 Report to DPB &amp; notify users
               </button>
             )}

@@ -3,12 +3,13 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "DataShield — DPDP Act 2023 Consent Management System (user + admin)",
+  "description": "DataShield \u2014 DPDP Act 2023 Consent Management System (user + admin)",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/check-preview-locks.mjs && vite build",
     "preview": "vite preview --host",
-    "lint": "echo \"no linter configured\" && exit 0"
+    "lint": "echo \"no linter configured\" && exit 0",
+    "check:preview": "node scripts/check-preview-locks.mjs"
   },
   "dependencies": {
     "react": "18.3.1",

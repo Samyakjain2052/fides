@@ -3,7 +3,12 @@
 # End-to-end acceptance test. Run it after changing anything — especially after
 # adding a datastore, editing a dataset, or touching the policies.
 #
-#     ./scripts/acceptance.sh        (or: make test)
+#     ./scripts/acceptance.sh                          local, direct to the gateway
+#     ./scripts/acceptance.sh http://localhost:8080    local, through nginx
+#     ./scripts/acceptance.sh https://demo.example.in  a deployed environment
+#
+# The same suite verifies local and deployed. That is the point: a deploy that
+# cannot run its acceptance test is a deploy nobody has actually checked.
 #
 # It uses a throwaway subject so it never disturbs demo@example.com, and it
 # checks the one thing that matters: a single privacy request reaches EVERY
@@ -15,10 +20,41 @@
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
-# shellcheck disable=SC1091
-set -a; source .env; set +a
 
-GW="http://localhost:${GATEWAY_PORT:-8000}"
+# .env is a local-development convenience and is absent on a deployed host, so
+# sourcing it is best-effort. Everything the script needs has a default.
+# shellcheck disable=SC1091
+if [ -f .env ]; then set -a; source .env; set +a; fi
+
+# Where the gateway is.
+#
+# Behind nginx it is under /gateway; run directly it is at the root of its own
+# port. Rather than make the caller know which, probe: ask both and use whichever
+# answers as the gateway. A wrong guess here would fail every later assertion for
+# a reason that has nothing to do with the product.
+BASE="${1:-${BASE_URL:-http://localhost:${GATEWAY_PORT:-8000}}}"
+BASE="${BASE%/}"
+
+resolve_gateway() {
+  local candidate
+  for candidate in "$BASE" "$BASE/gateway"; do
+    if curl -sf -m 10 "$candidate/health" 2>/dev/null | grep -q '"gateway"'; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if ! GW="$(resolve_gateway)"; then
+  printf "\033[31mCannot reach the gateway.\033[0m\n"
+  printf "  Tried %s/health and %s/gateway/health\n" "$BASE" "$BASE"
+  printf "  Is the stack up? For a deployed environment pass its base URL:\n"
+  printf "      ./scripts/acceptance.sh https://demo.example.in\n"
+  exit 1
+fi
+
+printf "\033[1mAcceptance — %s\033[0m\n" "$GW"
 SUBJECT="acceptance-$(date +%s)@example.com"
 FAILURES=0
 SKIPPED=0

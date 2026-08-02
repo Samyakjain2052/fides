@@ -10,9 +10,20 @@ import { getAdminDashboard, GRIEVANCE_ESCALATION_DAYS } from "../../api";
 import StatCard from "../../components/common/StatCard";
 import StatusBadge from "../../components/common/StatusBadge";
 import SLACountdown from "../../components/common/SLACountdown";
-import { BarChart, LineChart, DonutChart, CHART_COLORS } from "../../components/common/Charts";
+import { BarChart, DonutChart } from "../../components/common/Charts";
+import { SampleTag } from "../../components/common/PreviewBanner";
+import { isPreview } from "../../config/modules";
 
 const DAY = 864e5;
+
+/** An empty chart states that it is empty. It does not invent a shape. */
+function EmptyChart({ children }) {
+  return (
+    <div className="rounded-lg border border-dashed border-line bg-canvas px-4 py-8 text-center">
+      <p className="text-sm text-muted">{children}</p>
+    </div>
+  );
+}
 
 export default function AdminDashboard() {
   const [data, setData] = useState(null);
@@ -34,10 +45,30 @@ export default function AdminDashboard() {
         </p>
       </div>
 
+      {/* This screen aggregates several modules at once, so it inherits their
+          honesty problem: the DSAR figures are real, the consent and grievance
+          figures are sample. Saying so once, at the top, beats tagging each
+          tile and hoping the reader assembles the caveat themselves. */}
+      <div role="status" className="rounded-lg border border-warning/50 bg-warning/10 px-4 py-3">
+        <div className="flex flex-wrap items-start gap-x-3 gap-y-1">
+          <span className="rounded-full bg-warning px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+            Mixed
+          </span>
+          <p className="min-w-0 flex-1 text-sm text-ink">
+            <strong className="font-semibold">Data request figures are real.</strong>{" "}
+            Consent and grievance figures on this page are sample data — those
+            modules are still in preview.{" "}
+            <Link to="/roadmap" className="text-teal underline">
+              See what is live today
+            </Link>
+          </p>
+        </div>
+      </div>
+
       {/* ---------------------------------------------------------- stats -- */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-        <StatCard label="Total active consents" value={stats.active_consents} tone="success" />
-        <StatCard label="Withdrawn this month" value={stats.withdrawn_this_month} tone="neutral" />
+        <StatCard label="Total active consents" value={stats.active_consents} tone="success" sample />
+        <StatCard label="Withdrawn this month" value={stats.withdrawn_this_month} tone="neutral" sample />
         <StatCard label="Open DSAR requests" value={stats.open_dsar} tone="info" to="/admin/dsar" />
         <StatCard
           label="DSAR overdue"
@@ -52,39 +83,39 @@ export default function AdminDashboard() {
             ) : null
           }
         />
-        <StatCard label="Open grievances" value={stats.open_grievances} tone="warning" to="/admin/grievances" />
-        <StatCard label="Expiring in 30 days" value={stats.expiring_30} tone="warning" />
+        <StatCard label="Open grievances" value={stats.open_grievances} tone="warning" to="/admin/grievances" sample />
+        <StatCard label="Expiring in 30 days" value={stats.expiring_30} tone="warning" sample />
       </div>
 
       {/* --------------------------------------------------------- charts -- */}
       <div className="grid gap-5 lg:grid-cols-2">
         <section className="card p-5">
-          <h2 className="font-semibold text-ink">DSAR requests by type</h2>
-          <p className="text-xs text-muted">Last 30 days</p>
+          <h2 className="font-semibold text-ink">Data requests by type</h2>
+          <p className="text-xs text-muted">All requests on this account</p>
           <div className="mt-4">
-            <BarChart data={charts.dsar_by_type} />
+            {charts.dsar_by_type.length ? (
+              <BarChart data={charts.dsar_by_type} />
+            ) : (
+              <EmptyChart>
+                No requests yet. Submit one from the Data Requests screen and it
+                will appear here — this chart counts real requests only.
+              </EmptyChart>
+            )}
           </div>
         </section>
 
         <section className="card p-5">
-          <h2 className="font-semibold text-ink">Consent status distribution</h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="font-semibold text-ink">Consent status distribution</h2>
+            {isPreview("consent") && <SampleTag />}
+          </div>
           <p className="text-xs text-muted">All consent records</p>
           <div className="mt-4">
-            <DonutChart data={charts.status_split} />
-          </div>
-        </section>
-
-        <section className="card p-5 lg:col-span-2">
-          <h2 className="font-semibold text-ink">Consents given vs withdrawn</h2>
-          <p className="text-xs text-muted">Last 6 months</p>
-          <div className="mt-4">
-            <LineChart
-              data={charts.consents_6m}
-              series={[
-                { key: "given", label: "Given", color: CHART_COLORS.teal },
-                { key: "withdrawn", label: "Withdrawn", color: CHART_COLORS.danger },
-              ]}
-            />
+            {charts.status_split.length ? (
+              <DonutChart data={charts.status_split} />
+            ) : (
+              <EmptyChart>No consent records yet.</EmptyChart>
+            )}
           </div>
         </section>
       </div>

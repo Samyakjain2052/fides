@@ -22,6 +22,7 @@ import {
 import { useApp } from "../../context/AppContext";
 import ConsentCard from "../../components/common/ConsentCard";
 import LanguageSwitcher from "../../components/common/LanguageSwitcher";
+import { previewLock } from "../../config/modules";
 
 export default function ConsentBanner() {
   const { t, language, notify } = useApp();
@@ -151,7 +152,7 @@ export default function ConsentBanner() {
           <p className="text-xs text-muted">
             Mandatory purposes are required to hold an account and cannot be switched off.
           </p>
-          <button type="button" className="btn-primary" onClick={save} disabled={busy}>
+          <button type="button" className="btn-primary" onClick={save} disabled={busy} {...previewLock("consent", "Saving your choices")}>
             {busy ? "Saving…" : t("Save My Choices")}
           </button>
         </div>
@@ -235,7 +236,7 @@ function GuardianConsentFlow({ onBack }) {
           </div>
           {error && <p className="text-sm text-danger">{error}</p>}
           <div className="flex flex-wrap gap-3">
-            <button type="submit" className="btn-primary" disabled={busy}>
+            <button type="submit" className="btn-primary" disabled={busy} {...previewLock("consent", "Sending a guardian consent request")}>
               {busy ? "Sending…" : "Send consent request"}
             </button>
             <button type="button" className="btn-secondary" onClick={() => setStep(2)}>
@@ -286,7 +287,7 @@ function GuardianConsentFlow({ onBack }) {
                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
                  aria-label="Six digit code" />
           {error && <p className="text-sm text-danger">{error}</p>}
-          <button type="button" className="btn-primary" onClick={verify} disabled={busy}>
+          <button type="button" className="btn-primary" onClick={verify} disabled={busy} {...previewLock("consent", "Recording consent")}>
             {busy ? "Verifying…" : "Verify and record consent"}
           </button>
         </div>

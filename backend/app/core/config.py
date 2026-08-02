@@ -79,6 +79,18 @@ class Settings(BaseSettings):
     argon2_memory_cost: int = 65536  # KiB
     argon2_parallelism: int = 4
 
+    # The path prefix the BROWSER sees, when this API is served under one.
+    #
+    # The refresh cookie is scoped to `<prefix>/v1/auth` so it is not attached to
+    # every request. That scoping breaks the moment a reverse proxy mounts the
+    # API somewhere other than the root: nginx serves it at /api, the browser
+    # asks for /api/v1/auth/refresh, and a cookie scoped to /v1/auth is simply
+    # not sent. Sign-in succeeds, the next reload signs you out, and nothing is
+    # logged anywhere because the request genuinely arrived without a cookie.
+    #
+    # Empty when the API is served at the root (running it directly).
+    external_path_prefix: str = ""
+
     cookie_domain: str | None = None
     cookie_secure: bool = True
     refresh_cookie_name: str = "ds_refresh"
@@ -96,6 +108,21 @@ class Settings(BaseSettings):
         if v.lower().startswith(("changeme", "secret", "example", "test-secret")):
             raise ValueError("refusing to start with a placeholder secret")
         return v
+
+    @model_validator(mode="after")
+    def _normalise_paths(self) -> Settings:
+        """A malformed prefix produces a cookie the browser silently drops.
+
+        That failure is invisible — no error, no log, just a session that does
+        not survive a reload — so it is worth rejecting at boot instead.
+        """
+        prefix = self.external_path_prefix.strip().rstrip("/")
+        if prefix and not prefix.startswith("/"):
+            raise ValueError(
+                f"external_path_prefix must start with '/' (got {prefix!r})"
+            )
+        object.__setattr__(self, "external_path_prefix", prefix)
+        return self
 
     @model_validator(mode="after")
     def _prod_guardrails(self) -> Settings:

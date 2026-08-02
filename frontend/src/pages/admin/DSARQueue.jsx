@@ -16,6 +16,7 @@ import SLACountdown, { slaTone } from "../../components/common/SLACountdown";
 import SlideOver from "../../components/common/SlideOver";
 import ConfirmModal from "../../components/common/ConfirmModal";
 import AuditHashBadge from "../../components/common/AuditHashBadge";
+import { previewLock } from "../../config/modules";
 
 const FILTERS = ["All", "Access", "Correct", "Erase", "Pending", "In Progress", "Completed", "Overdue"];
 const STATUSES = ["pending", "in_progress", "completed", "rejected"];
@@ -237,7 +238,7 @@ export default function DSARQueue() {
         footer={
           selected && (
             <div className="flex flex-wrap items-center gap-3">
-              <button type="button" className="btn-primary" onClick={() => save()} disabled={busy}>
+              <button type="button" className="btn-primary" onClick={() => save()} disabled={busy} {...previewLock("dsar_workflow", "Updating a request")}>
                 {busy ? "Saving…" : "Save & Notify User"}
               </button>
               <button type="button" className="btn-ghost" onClick={() => setSelected(null)}>
@@ -298,7 +299,7 @@ export default function DSARQueue() {
                   <p className="text-sm text-muted">
                     Collect every piece of personal data held about this person and package it.
                   </p>
-                  <button type="button" className="btn-secondary mt-3" onClick={doExport} disabled={busy}>
+                  <button type="button" className="btn-secondary mt-3" onClick={doExport} disabled={busy} {...previewLock("dsar_workflow", "Preparing an export")}>
                     Prepare Data Export
                   </button>
                   {selected.export_url && (
@@ -342,7 +343,7 @@ export default function DSARQueue() {
                     Erasure removes personal data across every connected system. Records held under a
                     legal obligation are retained and reported back to the user.
                   </p>
-                  <button type="button" className="btn-danger" onClick={() => setConfirmErase(true)}
+                  <button type="button" className="btn-danger" onClick={() => setConfirmErase(true)} {...previewLock("dsar_workflow", "Initiating erasure from the queue")}
                           disabled={busy}>
                     Initiate Erasure
                   </button>

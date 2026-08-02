@@ -9,9 +9,15 @@ for real `fetch()` calls one function at a time.
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173     (or: make cms  from the repo root)
-npm run build      # production bundle in dist/
+npm run dev        # http://localhost:5173     hot reload
+npm run build      # production bundle in dist/ (runs the preview-lock check first)
+npm run check:preview   # the honesty check on its own
 ```
+
+In Docker, `cms-frontend` is now the **production** image: a multi-stage build
+served by nginx on `http://localhost:8090`, which also reverse-proxies `/api`
+and `/gateway`. It is the only service meant to be publicly exposed. For hot
+reload in Docker instead: `docker compose --profile dev up cms-frontend-dev`.
 
 ## Authentication is real
 
@@ -41,6 +47,29 @@ Two things changed that are worth understanding, not just noting:
 | Grievance Officer | the grievance queue only |
 
 Additional users in other roles are created from **Admin → Users & Roles**.
+
+## What is live, and how the app says so
+
+Five of the seven module groups render sample data. Rather than let a buyer find
+that out by clicking, [src/config/modules.js](src/config/modules.js) is the single
+source of truth and the UI derives everything from it:
+
+- **A preview banner** on every affected screen, rendered once by the layout from
+  the route (not pasted into each page, which is 18 chances to forget one).
+- **A badge** on the nav item.
+- **Every mutating control disabled**, with a tooltip saying why — not a silent
+  no-op, which reads as a bug rather than a deliberate placeholder.
+- **[/roadmap](src/pages/Roadmap.jsx)**, public, listing what is live and what each
+  preview module still needs.
+
+`npm run build` runs `scripts/check-preview-locks.mjs`, which fails the build if a
+preview module gains a mutating control that is not locked. Unknown module keys
+resolve to `preview`, so a typo fails toward telling the truth.
+
+Two modules are live: `auth`, and `dsar` (submit and track — the admin triage
+queue is a separate key, `dsar_workflow`, and is preview). Live modules can still
+carry a caveat: DSAR correction and the OTP/DigiLocker identity check are
+simulated, and the app says so on the screen.
 
 ## Screens
 

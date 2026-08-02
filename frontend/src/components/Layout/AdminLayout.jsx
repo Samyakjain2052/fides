@@ -8,23 +8,28 @@
 //   grievance_officer  → the grievance queue only
 // Route-level guards in App.jsx back this up, so typing a URL doesn't bypass it.
 // ============================================================================
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
+import PreviewBanner, { PreviewBadge } from "../common/PreviewBanner";
+import { moduleForPath } from "../../config/modules";
 import LanguageSwitcher from "../common/LanguageSwitcher";
 import NotificationBell from "../common/NotificationBell";
 import Toast from "../common/Toast";
 
+// `module` ties each nav item to config/modules.js, so the preview badge appears
+// here automatically and disappears the day that module ships — nothing to keep
+// in sync by hand.
 const NAV = [
   { to: "/admin/dashboard", label: "Dashboard", icon: "▦", roles: ["admin"] },
-  { to: "/admin/dsar", label: "DSAR Queue", icon: "📋", roles: ["admin"] },
-  { to: "/admin/consent-validation", label: "Consent Validation", icon: "✓", roles: ["admin"] },
-  { to: "/admin/grievances", label: "Grievance Queue", icon: "✉", roles: ["admin", "grievance_officer"] },
-  { to: "/admin/breaches", label: "Breach Management", icon: "⚠", roles: ["admin"] },
-  { to: "/admin/audit", label: "Audit Logs", icon: "🔒", roles: ["admin", "auditor"] },
-  { to: "/admin/roles", label: "Users & Roles", icon: "👥", roles: ["admin"] },
-  { to: "/admin/retention", label: "Retention Policy", icon: "🗓", roles: ["admin"] },
-  { to: "/admin/notifications", label: "Notification Center", icon: "🔔", roles: ["admin"] },
-  { to: "/admin/reports", label: "Reports", icon: "📄", roles: ["admin", "auditor"] },
+  { to: "/admin/dsar", label: "DSAR Queue", icon: "📋", roles: ["admin"], module: "dsar_workflow" },
+  { to: "/admin/consent-validation", label: "Consent Validation", icon: "✓", roles: ["admin"], module: "consent" },
+  { to: "/admin/grievances", label: "Grievance Queue", icon: "✉", roles: ["admin", "grievance_officer"], module: "grievance" },
+  { to: "/admin/breaches", label: "Breach Management", icon: "⚠", roles: ["admin"], module: "breach" },
+  { to: "/admin/audit", label: "Audit Logs", icon: "🔒", roles: ["admin", "auditor"], module: "audit" },
+  { to: "/admin/roles", label: "Users & Roles", icon: "👥", roles: ["admin"], module: "users" },
+  { to: "/admin/retention", label: "Retention Policy", icon: "🗓", roles: ["admin"], module: "retention" },
+  { to: "/admin/notifications", label: "Notification Center", icon: "🔔", roles: ["admin"], module: "notifications" },
+  { to: "/admin/reports", label: "Reports", icon: "📄", roles: ["admin", "auditor"], module: "reports" },
 ];
 
 export function navFor(role) {
@@ -34,6 +39,7 @@ export function navFor(role) {
 export default function AdminLayout() {
   const { user, role, roleLabel, signOut } = useApp();
   const navigate = useNavigate();
+  const activeModule = moduleForPath(useLocation().pathname);
   const items = navFor(role);
 
   const linkClass = ({ isActive }) =>
@@ -52,7 +58,8 @@ export default function AdminLayout() {
           {items.map((item) => (
             <NavLink key={item.to} to={item.to} className={linkClass}>
               <span aria-hidden="true" className="w-4 text-center">{item.icon}</span>
-              {item.label}
+              <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              <PreviewBadge module={item.module} />
             </NavLink>
           ))}
         </nav>
@@ -77,6 +84,7 @@ export default function AdminLayout() {
             <p className="truncate text-xs text-muted">{roleLabel} · {user?.email}</p>
           </div>
           <div className="flex items-center gap-2">
+            <NavLink to="/roadmap" className="btn-ghost text-sm">What's live</NavLink>
             <LanguageSwitcher compact />
             <NotificationBell audience="fiduciary" />
             <button
@@ -106,11 +114,13 @@ export default function AdminLayout() {
               }
             >
               {item.label}
+              <PreviewBadge module={item.module} className="ml-1.5" />
             </NavLink>
           ))}
         </nav>
 
-        <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6">
+        <main className="mx-auto w-full max-w-7xl flex-1 space-y-5 px-4 py-6 sm:px-6">
+          {activeModule && <PreviewBanner module={activeModule} />}
           <Outlet />
         </main>
       </div>
