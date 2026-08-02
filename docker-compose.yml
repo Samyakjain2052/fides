@@ -14,6 +14,9 @@
 #   fides-provisioner  one-shot: loads /fides-config into Fides, then exits 0
 #   fastapi-gateway my DSAR API, Swagger at /docs          -> localhost:8000
 #   presidio        PII detection microservice (Presidio)  -> localhost:8001
+#   cms-db          the CMS backend's own Postgres           -> localhost:6543
+#   cms-backend     multi-tenant CMS API, Swagger at /docs   -> localhost:8100
+#   cms-frontend    DataShield CMS (DPDP consent management) -> localhost:5173
 #
 # Base layout follows Fides' own sample deployment (`fides deploy up`), i.e.
 # src/fides/data/sample_project/docker-compose.yml in the fides repo.
@@ -191,6 +194,26 @@ services:
       retries: 20
       start_period: 20s
 
+  # --- app-mysql: customer support tickets ---------------------------------
+  app-mysql:
+    image: mysql:8.0.36
+    environment:
+      MYSQL_ROOT_PASSWORD: ${APP_MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${APP_MYSQL_DB}
+      MYSQL_USER: ${APP_MYSQL_USER}
+      MYSQL_PASSWORD: ${APP_MYSQL_PASSWORD}
+    volumes:
+      - app-mysql-data:/var/lib/mysql
+      - ./app-mysql/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${APP_MYSQL_HOST_PORT:-6306}:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+
   # ===========================================================================
   # 3. One-shot provisioner — this is what makes `docker compose up` leave
   #    Fides fully configured.
@@ -210,6 +233,8 @@ services:
       app-postgres:
         condition: service_healthy
       app-mongo:
+        condition: service_healthy
+      app-mysql:
         condition: service_healthy
     environment:
       <<: *fides-env
@@ -238,6 +263,11 @@ services:
       ZOHO_CRM_CLIENT_ID: ${ZOHO_CRM_CLIENT_ID}
       ZOHO_CRM_CLIENT_SECRET: ${ZOHO_CRM_CLIENT_SECRET}
       ZOHO_CRM_REFRESH_TOKEN: ${ZOHO_CRM_REFRESH_TOKEN}
+      APP_MYSQL_HOST: ${APP_MYSQL_HOST}
+      APP_MYSQL_PORT: ${APP_MYSQL_PORT}
+      APP_MYSQL_DB: ${APP_MYSQL_DB}
+      APP_MYSQL_USER: ${APP_MYSQL_USER}
+      APP_MYSQL_PASSWORD: ${APP_MYSQL_PASSWORD}
       # Only used for the "here is where to go next" banner it prints.
       FIDES_PORT: ${FIDES_PORT:-8080}
       GATEWAY_PORT: ${GATEWAY_PORT:-8000}
@@ -246,7 +276,81 @@ services:
     restart: "no"
 
   # ===========================================================================
-  # 4. My FastAPI wrapper around the Fides API
+  # 4. DataShield backend — the multi-tenant CMS API
+  # ===========================================================================
+  # Its own Postgres, separate from app-postgres (demo data being DSAR'd) and
+  # fides-db (Fides' own records). See backend/ARCHITECTURE.md.
+  cms-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${CMS_DB_ROOT_PASSWORD:-postgres}
+      POSTGRES_DB: datashield
+    volumes:
+      - cms-db-data:/var/lib/postgresql/data
+      # Creates the two roles the migration expects: an owner for migrations and
+      # a restricted app role that RLS actually applies to.
+      - ./backend/scripts_bootstrap.sql:/docker-entrypoint-initdb.d/00_roles.sql:ro
+    ports:
+      - "${CMS_DB_HOST_PORT:-6543}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d datashield"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  cms-backend:
+    build:
+      context: ./backend
+    depends_on:
+      cms-db:
+        condition: service_healthy
+    environment:
+      DS_ENV: ${DS_ENV:-dev}
+      DS_DEBUG: ${DS_DEBUG:-true}
+      DS_DATABASE_URL: postgresql+asyncpg://datashield_app:apppassword@cms-db:5432/datashield
+      DS_DATABASE_OWNER_URL: postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield
+      DS_JWT_SECRET: ${DS_JWT_SECRET}
+      DS_AUDIT_HMAC_KEY: ${DS_AUDIT_HMAC_KEY}
+      DS_COOKIE_SECURE: ${DS_COOKIE_SECURE:-false}
+      DS_CORS_ORIGINS: '["http://localhost:${CMS_PORT:-5173}"]'
+    ports:
+      - "${CMS_BACKEND_PORT:-8100}:8100"
+    # Migrations run as the owner role, then the app starts as the restricted
+    # role. One command so a deploy can never serve an un-migrated schema.
+    command: >-
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8100"
+    restart: unless-stopped
+
+  # ===========================================================================
+  # 5. DataShield CMS — the DPDP consent-management frontend
+  # ===========================================================================
+  # A separate React/Vite app from the DSAR console the gateway serves at
+  # :8000/ui. It runs on mock data by default (see frontend/src/api/index.js);
+  # flip USE_REAL_DSAR_BACKEND there to route its DSAR calls through the /gateway
+  # proxy into Fides.
+  cms-frontend:
+    build:
+      context: ./frontend
+    environment:
+      # Where the Vite dev-server proxy sends /gateway requests. Inside the
+      # compose network the gateway is reachable by service name.
+      GATEWAY_URL: http://fastapi-gateway:8000
+    volumes:
+      # Source mounted for hot reload; node_modules stays the image's copy so a
+      # host install (or its absence) can't shadow it.
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "${CMS_PORT:-5173}:5173"
+    depends_on:
+      fastapi-gateway:
+        condition: service_started
+    restart: unless-stopped
+
+  # ===========================================================================
+  # 6. My FastAPI wrapper around the Fides API (the DSAR engine demo)
   # ===========================================================================
   fastapi-gateway:
     build:
@@ -262,6 +366,8 @@ services:
       app-postgres:
         condition: service_healthy
       app-mongo:
+        condition: service_healthy
+      app-mysql:
         condition: service_healthy
     environment:
       FIDES_URL: ${FIDES_URL:-http://fides:8080}
@@ -288,6 +394,11 @@ services:
       ZOHO_CRM_CLIENT_ID: ${ZOHO_CRM_CLIENT_ID}
       ZOHO_CRM_CLIENT_SECRET: ${ZOHO_CRM_CLIENT_SECRET}
       ZOHO_CRM_REFRESH_TOKEN: ${ZOHO_CRM_REFRESH_TOKEN}
+      APP_MYSQL_HOST: ${APP_MYSQL_HOST}
+      APP_MYSQL_PORT: ${APP_MYSQL_PORT}
+      APP_MYSQL_DB: ${APP_MYSQL_DB}
+      APP_MYSQL_USER: ${APP_MYSQL_USER}
+      APP_MYSQL_PASSWORD: ${APP_MYSQL_PASSWORD}
       # Must match the keys in fides-config/policies/dsr_policies.yml.
       ACCESS_POLICY_KEY: ${ACCESS_POLICY_KEY:-demo_access_policy}
       ERASURE_POLICY_KEY: ${ERASURE_POLICY_KEY:-demo_erasure_policy}
@@ -344,6 +455,8 @@ services:
     restart: unless-stopped
 
 volumes:
+  cms-db-data:
   fides-db-data:
   app-postgres-data:
   app-mongo-data:
+  app-mysql-data:

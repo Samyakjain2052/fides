@@ -249,6 +249,32 @@ your datastore should appear as a new card.
 
 ---
 
+## The CMS frontend
+
+[frontend/](frontend/) is a separate React + Vite + Tailwind app — the DPDP
+Consent Management System UI, built to
+[CMS_Lovable_Prompt_Complete.md](CMS_Lovable_Prompt_Complete.md). It is
+independent of the DSAR engine and of the vanilla console at `:8000/ui`.
+
+```bash
+make cms          # npm install + vite dev on :5173, hot reload
+make cms-build    # production bundle into frontend/dist
+make cms-docker   # run it as a compose service instead
+```
+
+Everything it knows about the outside world is
+[frontend/src/api/index.js](frontend/src/api/index.js) — mock data plus one
+function per operation. Replace functions there to wire a real backend; the
+screens don't change. Setting `USE_REAL_DSAR_BACKEND = true` in that file points
+its access and erasure requests at this repo's Fides gateway through the Vite
+`/gateway` proxy.
+
+See [frontend/README.md](frontend/README.md) for the screen list, the compliance
+rules the code enforces and where, and the two places where the brief was
+ambiguous.
+
+---
+
 ## Other common changes
 
 **Change what an erasure nulls** — `fides-config/policies/dsr_policies.yml`, the
@@ -291,6 +317,7 @@ Rebuild rules that trip people up:
 
 | You edited | Do this |
 | --- | --- |
+| `frontend/**` | nothing — Vite hot-reloads (`make cms`) |
 | `fides-config/**` | `make provision` |
 | `fastapi-gateway/**` (incl. static) | `make build` |
 | `docker-compose.yml`, `.env` | `docker compose up -d` |

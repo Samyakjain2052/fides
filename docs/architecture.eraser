@@ -1,0 +1,95 @@
+// =============================================================================
+// DataShield — complete system architecture
+// Eraser diagram-as-code.  Paste into https://app.eraser.io  →  new diagram
+//
+// 11 services in 4 layers.  Ports are in the node names so they survive export.
+//
+// CONNECTOR CONVENTION
+//   >    solid arrow  = built and working today
+//   -->  dotted arrow = designed, not built yet (the roadmap)
+//   <>   bidirectional
+// If your Eraser version rejects `-->`, swap those three lines to `>` and rely on
+// the PLANNED prefix in the label.
+// =============================================================================
+
+title DataShield — DPDP consent management and cross-database DSAR engine
+
+// ─────────────────────────────────────────────────────────────────────────────
+// External actors
+// ─────────────────────────────────────────────────────────────────────────────
+Browser [icon: monitor, color: gray, shape: oval]
+Customer Own Systems [icon: cloud, color: gray, shape: oval]
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER 1 — Product surface.  What a paying customer touches.
+// ─────────────────────────────────────────────────────────────────────────────
+Layer 1 Product Surface [color: lightblue] {
+  CMS Frontend 5173 [icon: react]
+  CMS Backend 8100 [icon: python]
+  CMS Database 6543 RLS [icon: postgresql, shape: cylinder]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER 2 — Integration bridge.  Wraps the engine, serves the proof console.
+// ─────────────────────────────────────────────────────────────────────────────
+Layer 2 Integration Bridge [color: lightgreen] {
+  FastAPI Gateway 8000 [icon: server]
+  Access Package JSON [icon: file-text, shape: document]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER 3 — Privacy engine (Ethyca Fides, Apache 2.0).
+// Brain and hands are separate processes: a DSAR can take minutes, so the API
+// queues it instead of blocking.
+// ─────────────────────────────────────────────────────────────────────────────
+Layer 3 Privacy Engine Fides [color: orange] {
+  Fides Server 8090 Brain [icon: shield]
+  Fides Worker Hands [icon: cpu]
+  Fides Redis Queue 7379 [icon: redis, shape: cylinder]
+  Fides Database 7432 [icon: postgresql, shape: cylinder]
+  Fides Provisioner One Shot [icon: settings]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER 4 — Customer data.  The DSAR targets: two unrelated engines.
+// ─────────────────────────────────────────────────────────────────────────────
+Layer 4 Customer Data [color: purple] {
+  App Postgres 6432 Users Orders [icon: postgresql, shape: cylinder]
+  App Mongo 37017 Events [icon: mongodb, shape: cylinder]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BUILT — solid arrows
+// ─────────────────────────────────────────────────────────────────────────────
+Browser > CMS Frontend 5173: 21 screens, 4 roles
+Browser > FastAPI Gateway 8000: DSAR proof console at /ui
+Browser > Fides Server 8090 Brain: Fides admin UI
+
+CMS Backend 8100 > CMS Database 6543 RLS: tenant-scoped txn, SET LOCAL app.tenant_id
+
+FastAPI Gateway 8000 > Fides Server 8090 Brain: login, token, POST /privacy-request
+Fides Server 8090 Brain > Fides Redis Queue 7379: queue job, answer 202 at once
+Fides Redis Queue 7379 > Fides Worker Hands: worker picks it up
+Fides Server 8090 Brain <> Fides Database 7432: config, requests, execution logs
+Fides Provisioner One Shot > Fides Server 8090 Brain: loads /fides-config, verifies, exits 0
+
+// THE TWO ARROWS THAT ARE THE WHOLE PRODUCT.
+// One request reaches both engines because both datasets declare identity email.
+// The DSR policy targets DATA CATEGORIES, never table names — so a third
+// datastore needs annotation, not a policy change.
+Fides Worker Hands > App Postgres 6432 Users Orders: identity email
+Fides Worker Hands > App Mongo 37017 Events: identity email
+
+Fides Worker Hands > Access Package JSON: writes the access package
+Access Package JSON > FastAPI Gateway 8000: read back to serve GET /dsar
+
+FastAPI Gateway 8000 > App Postgres 6432 Users Orders: direct seed and where-is-my-data
+FastAPI Gateway 8000 > App Mongo 37017 Events: direct seed and where-is-my-data
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLANNED — dotted arrows.  This is the roadmap, and it is the honest part of
+// the diagram: the three pieces are not joined up yet.
+// ─────────────────────────────────────────────────────────────────────────────
+CMS Frontend 5173 --> CMS Backend 8100: PLANNED - today runs on in-memory mock data
+CMS Backend 8100 --> FastAPI Gateway 8000: PLANNED - DSAR execution and proof
+Customer Own Systems --> CMS Backend 8100: PLANNED - public API, key scopes, valid consent right now

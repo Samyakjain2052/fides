@@ -18,6 +18,16 @@ Everything runs locally with `docker compose up`. All Fides configuration is
 version-controlled under [fides-config/](fides-config/) and loaded automatically
 at startup, so a fresh `up` leaves Fides fully configured.
 
+> **Also in this repo:**
+> - **[DataShield backend](backend/)** — the multi-tenant API this product is being
+>   built on: Postgres row-level security for tenant isolation, an HMAC hash-chained
+>   audit trail, server-enforced permissions. `make api` → http://localhost:8100/docs
+> - **[DataShield CMS](frontend/)** — a full Consent Management
+> System UI for India's DPDP Act, 2023 (React + Vite + Tailwind, 21 screens, four
+> roles), built to [CMS_Lovable_Prompt_Complete.md](CMS_Lovable_Prompt_Complete.md).
+> It runs on mock data by default and can be pointed at the real DSAR engine
+> below with a one-line flag. `make cms` → http://localhost:5173
+
 ---
 
 ## Architecture
@@ -81,6 +91,9 @@ pick up a third datastore the moment you annotate one.
 | `app-mongo`       | `localhost:37017`                                | Demo app data: `events`                 |
 | `fides-db`        | `localhost:7432`                                 | Fides' own database (debugging only)    |
 | `fides-redis`     | `localhost:7379`                                 | Fides' Redis (debugging only)           |
+| `cms-backend`     | **http://localhost:8100/docs** ← API Swagger      | Multi-tenant CMS backend (real Postgres) |
+| `cms-db`          | `localhost:6543`                                 | The backend's own database                |
+| `cms-frontend`    | **http://localhost:5173** ← DataShield CMS        | DPDP consent management (mock data)      |
 
 All host ports are overridable in `.env` if something is already bound.
 
@@ -113,6 +126,18 @@ scripts/
   show_data.sh                print the subject's rows from both DBs
 Makefile                      shortcuts for all of the above
 CONTRIBUTING.md               how to add another tool to the DSAR fan-out
+backend/                      DataShield API — multi-tenant, RLS-isolated
+  ARCHITECTURE.md             the plan of record: decisions and why
+  app/core/                   config, security, permissions, logging, errors
+  app/db/                     session + tenant context (where RLS is wired)
+  app/models|schemas|services|api
+  migrations/                 Alembic, incl. RLS policies + append-only trigger
+  tests/                      isolation, auth, audit-chain tamper detection
+frontend/                     DataShield CMS — the DPDP consent-management UI
+  src/api/index.js            all mock data + API functions (one file to replace)
+  src/components/             layouts + 12 reusable components
+  src/pages/{auth,user,admin} 21 screens
+  README.md                   screen list, the rules it enforces, how to wire it
 ```
 
 ---
@@ -219,6 +244,8 @@ make logs        # follow the useful logs        make build      # after editing
 make test        # end-to-end proof              make reset      # wipe + re-seed
 make data        # raw rows from both databases  make open       # console + Fides UI
 make dsar EMAIL=someone@example.com
+make cms         # DataShield CMS with hot reload   make cms-build  # production bundle
+make api         # DataShield backend + its Postgres  make api-test   # backend suite
 ```
 
 `make` is only a shortcut — every target is a plain `docker compose` command, and

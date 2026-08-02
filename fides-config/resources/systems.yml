@@ -96,12 +96,20 @@ system:
       custom Fides SaaS connector since Zoho CRM has no built-in Fides
       connector (see fides-config/saas/zoho_crm/).
     system_type: Third Party
+  # app-mysql — support tickets
+  # ---------------------------------------------------------------------------
+  - fides_key: app_mysql_system
+    name: App MySQL Database
+    description: >-
+      MySQL database holding customer support tickets, keyed by customer email.
+    system_type: Database
     administrating_department: Engineering
     egress:
       - fides_key: demo_app
         type: system
     privacy_declarations:
       - name: Store customer contact records in Zoho CRM
+      - name: Store customer support tickets
         data_categories:
           - user.contact.email
           - user.contact.phone_number
@@ -114,3 +122,9 @@ system:
         # connections.yml's `saas_connection` block and its `instance_key`).
         dataset_references:
           - zoho_crm_instance
+          - user.content
+        data_use: essential.service
+        data_subjects:
+          - customer
+        dataset_references:
+          - app_mysql_dataset

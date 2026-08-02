@@ -52,7 +52,21 @@ const CATEGORIES = {
     "metadata.session_id": ["user.unique_id.pseudonymous", true],
     timestamp: ["system.operations", false],
   },
+  support_tickets: {
+    id: ["system.operations", false],
+    customer_email: ["user.contact.email", true],
+    customer_name: ["user.name", true],
+    phone: ["user.contact.phone_number", true],
+    subject: ["user.content", false],
+    created_at: ["system.operations", false],
+  },
 };
+
+function databaseDisplay(dataset) {
+  if ((dataset || "").includes("mongo")) return ["db2", "db2 mongo"];
+  if ((dataset || "").includes("mysql")) return ["db3", "db3 mysql"];
+  return ["db1", "db1 postgres"];
+}
 
 /* Fides privacy-request statuses -> pill class + icon-ish label. Status colour
    is never the only signal: the label spells the state out. */
@@ -186,6 +200,7 @@ async function loadHealth() {
     setPill($("#health-db1"), dbs.app_postgres === "ok" ? "good" : "bad", "db1 postgres");
     setPill($("#health-db2"), dbs.app_mongo === "ok" ? "good" : "bad", "db2 mongo");
     setPill($("#health-db3"), h.zoho_crm === "ok" ? "good" : "warn", "db3 zoho");
+    setPill($("#health-db3"), dbs.app_mysql === "ok" ? "good" : "bad", "db3 mysql");
 
     state.adminUrl = h.fides_admin_url || null;
     const links = $("#links");
@@ -259,6 +274,7 @@ async function locate(quiet) {
     $("#kpi-db1").textContent = data.db1_app_postgres.total;
     $("#kpi-db2").textContent = data.db2_app_mongo.total;
     $("#kpi-db3").textContent = data.db3_zoho_crm.total;
+    $("#kpi-db3").textContent = data.db3_app_mysql.total;
 
     const masked = data.masked_rows_remaining || {};
     const maskedTotal = Object.values(masked).reduce((a, b) => a + b, 0);
@@ -270,6 +286,7 @@ async function locate(quiet) {
     renderDatabase("#card-db1", data.db1_app_postgres, "db1");
     renderDatabase("#card-db2", data.db2_app_mongo, "db2");
     renderDatabase("#card-db3", data.db3_zoho_crm, "db3");
+    renderDatabase("#card-db3", data.db3_app_mysql, "db3");
 
     const note = $("#locate-note");
     if (data.note) {
@@ -341,6 +358,9 @@ function renderLog(entries) {
     const meta = systemMeta(e.dataset);
     dbCell.appendChild(el("span", "swatch " + meta.cls));
     dbCell.appendChild(document.createTextNode(" " + meta.label));
+    const [databaseClass, databaseLabel] = databaseDisplay(e.dataset);
+    dbCell.appendChild(el("span", "swatch " + databaseClass));
+    dbCell.appendChild(document.createTextNode(" " + databaseLabel));
     tr.appendChild(dbCell);
 
     tr.appendChild(el("td", "mono", e.dataset + " : " + e.collection));
@@ -393,6 +413,9 @@ function renderReturnedData(data) {
     const meta = systemMeta(key.split(":")[0]);
     const label = el("span", "name");
     label.appendChild(el("span", "swatch " + meta.cls));
+    const [databaseClass] = databaseDisplay(key);
+    const label = el("span", "name");
+    label.appendChild(el("span", "swatch " + databaseClass));
     label.appendChild(document.createTextNode(" " + key));
     ch.appendChild(label);
     ch.appendChild(el("span", "count", String(rows.length)));
@@ -615,6 +638,22 @@ function eventRow(type, ip, ua, session) {
   return row;
 }
 
+function ticketRow(subject) {
+  const row = el("div", "row-item ticket");
+  const input = el("input");
+  input.type = "text";
+  input.placeholder = "Question about my order";
+  input.className = "f-ticket-subject";
+  input.value = subject || "";
+  input.setAttribute("aria-label", "Support ticket subject");
+  const rm = el("button", "ghost", "✕");
+  rm.type = "button";
+  rm.title = "Remove this support ticket";
+  rm.addEventListener("click", () => row.remove());
+  row.append(input, rm);
+  return row;
+}
+
 function collectSubject() {
   const orders = [...document.querySelectorAll("#orders .row-item")]
     .map((row) => ({
@@ -632,7 +671,11 @@ function collectSubject() {
     }))
     .filter((e) => e.event_type);
 
-  const body = { email: $("#f-email").value.trim(), orders, events };
+  const support_tickets = [...document.querySelectorAll("#support-tickets .row-item")]
+    .map((row) => ({ subject: row.querySelector(".f-ticket-subject").value.trim() }))
+    .filter((ticket) => ticket.subject);
+
+  const body = { email: $("#f-email").value.trim(), orders, events, support_tickets };
   const name = $("#f-name").value.trim();
   const phone = $("#f-phone").value.trim();
   if (name) body.full_name = name;
@@ -707,6 +750,7 @@ function init() {
 
   $("#add-order").addEventListener("click", () => $("#orders").appendChild(orderRow()));
   $("#add-event").addEventListener("click", () => $("#events").appendChild(eventRow()));
+  $("#add-ticket").addEventListener("click", () => $("#support-tickets").appendChild(ticketRow()));
   $("#submit-subject").addEventListener("click", submitSubject);
   $("#fill-sample").addEventListener("click", () => {
     $("#f-email").value = "newperson@example.com";
@@ -714,6 +758,7 @@ function init() {
     $("#f-phone").value = "+1-555-0142";
     $("#orders").textContent = "";
     $("#events").textContent = "";
+    $("#support-tickets").textContent = "";
     $("#orders").appendChild(orderRow("24.00", "Mechanical keyboard"));
     $("#orders").appendChild(orderRow("9.99", "Mouse pad"));
     $("#events").appendChild(
@@ -722,10 +767,13 @@ function init() {
     $("#events").appendChild(
       eventRow("checkout", "203.0.113.99", "Mozilla/5.0 (X11; Linux x86_64)", "sess_newp01")
     );
+    $("#support-tickets").appendChild(ticketRow("Question about my order"));
+    $("#support-tickets").appendChild(ticketRow("Delivery status request"));
   });
 
   $("#orders").appendChild(orderRow());
   $("#events").appendChild(eventRow());
+  $("#support-tickets").appendChild(ticketRow());
 
   loadHealth();
   locate(true);

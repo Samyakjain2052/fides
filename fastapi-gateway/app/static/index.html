@@ -71,6 +71,9 @@
         <div class="label"><span class="swatch db3"></span>db3 · Zoho CRM</div>
         <div class="value" id="kpi-db3">—</div>
         <div class="foot" id="kpi-db3-foot">contacts</div>
+        <div class="label"><span class="swatch db3"></span>db3 · app-mysql</div>
+        <div class="value" id="kpi-db3">—</div>
+        <div class="foot" id="kpi-db3-foot">support tickets</div>
       </div>
       <div class="tile">
         <div class="label">Masked rows remaining</div>
@@ -94,6 +97,7 @@
         <span class="item"><span class="swatch db1"></span> db1 — app-postgres (PostgreSQL)</span>
         <span class="item"><span class="swatch db2"></span> db2 — app-mongo (MongoDB)</span>
         <span class="item"><span class="swatch db3"></span> db3 — Zoho CRM (SaaS)</span>
+        <span class="item"><span class="swatch db3"></span> db3 — app-mysql (MySQL)</span>
         <span class="item"><span class="col-cat erasable" style="margin:0">user.contact.email</span> = a category the erasure policy nulls</span>
         <span class="item"><span class="col-cat" style="margin:0">system.operations</span> = kept on erasure</span>
       </div>
@@ -154,11 +158,12 @@
     <h2>Add data</h2>
     <div class="card">
       <details class="adder">
-        <summary>Write a person into both databases</summary>
+        <summary>Write a person into all three databases</summary>
         <p class="hint" style="margin-top:8px">
           Writes <b>db1</b> app-postgres (<span class="mono">users</span>, <span class="mono">orders</span>)
-          and <b>db2</b> app-mongo (<span class="mono">events</span>) in one call, then re-runs the lookup.
-          The <span class="mono">users</span> row is upserted on email; orders and events append.
+          <b>db2</b> app-mongo (<span class="mono">events</span>), and <b>db3</b> app-mysql
+          (<span class="mono">support_tickets</span>) in one call, then re-runs the lookup.
+          The <span class="mono">users</span> row is upserted on email; orders, events and tickets append.
         </p>
 
         <div class="grid-form">
@@ -186,8 +191,16 @@
           <div id="events"></div>
         </div>
 
+        <div class="rows">
+          <div class="collection-head">
+            <span class="name"><span class="swatch db3"></span> db3 · support tickets</span>
+            <button class="ghost" type="button" id="add-ticket">+ ticket</button>
+          </div>
+          <div id="support-tickets"></div>
+        </div>
+
         <div class="form-actions">
-          <button id="submit-subject" class="primary" type="button">Write to both databases</button>
+          <button id="submit-subject" class="primary" type="button">Write to all three databases</button>
           <button id="fill-sample" class="ghost" type="button">Fill with sample data</button>
         </div>
         <div id="form-result" class="banner hidden"></div>
