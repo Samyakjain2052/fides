@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    @apply bg-canvas text-ink font-sans;
+  }
+  /* Keyboard navigability is a stated requirement: every interactive element
+     keeps a visible focus ring. */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-teal ring-offset-2 ring-offset-canvas;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface rounded-xl shadow-sm border border-line;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2
+           text-sm font-medium transition disabled:opacity-50
+           disabled:cursor-not-allowed;
+  }
+  .btn-primary { @apply btn bg-navy text-white hover:bg-navy/90; }
+  .btn-secondary { @apply btn border border-navy text-navy hover:bg-navy/5; }
+  .btn-danger { @apply btn border border-danger text-danger hover:bg-danger/5; }
+  .btn-ghost { @apply btn text-muted hover:bg-line/60; }
+  .input {
+    @apply w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm
+           text-ink placeholder:text-muted;
+  }
+  .label { @apply block text-sm font-medium text-ink mb-1; }
+  .th {
+    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide
+           text-muted;
+  }
+  .td { @apply px-4 py-3 text-sm text-ink align-middle; }
+  .tag {
+    @apply inline-flex items-center rounded-full border border-line
+           bg-canvas px-2 py-0.5 text-xs font-medium text-muted;
+  }
+}

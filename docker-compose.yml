@@ -13,6 +13,9 @@
 #   app-mongo       demo app data: events                  -> localhost:37017
 #   fides-provisioner  one-shot: loads /fides-config into Fides, then exits 0
 #   fastapi-gateway my DSAR API, Swagger at /docs          -> localhost:8000
+#   cms-db          the CMS backend's own Postgres           -> localhost:6543
+#   cms-backend     multi-tenant CMS API, Swagger at /docs   -> localhost:8100
+#   cms-frontend    DataShield CMS (DPDP consent management) -> localhost:5173
 #
 # Base layout follows Fides' own sample deployment (`fides deploy up`), i.e.
 # src/fides/data/sample_project/docker-compose.yml in the fides repo.
@@ -236,7 +239,81 @@ services:
     restart: "no"
 
   # ===========================================================================
-  # 4. My FastAPI wrapper around the Fides API
+  # 4. DataShield backend — the multi-tenant CMS API
+  # ===========================================================================
+  # Its own Postgres, separate from app-postgres (demo data being DSAR'd) and
+  # fides-db (Fides' own records). See backend/ARCHITECTURE.md.
+  cms-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${CMS_DB_ROOT_PASSWORD:-postgres}
+      POSTGRES_DB: datashield
+    volumes:
+      - cms-db-data:/var/lib/postgresql/data
+      # Creates the two roles the migration expects: an owner for migrations and
+      # a restricted app role that RLS actually applies to.
+      - ./backend/scripts_bootstrap.sql:/docker-entrypoint-initdb.d/00_roles.sql:ro
+    ports:
+      - "${CMS_DB_HOST_PORT:-6543}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d datashield"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  cms-backend:
+    build:
+      context: ./backend
+    depends_on:
+      cms-db:
+        condition: service_healthy
+    environment:
+      DS_ENV: ${DS_ENV:-dev}
+      DS_DEBUG: ${DS_DEBUG:-true}
+      DS_DATABASE_URL: postgresql+asyncpg://datashield_app:apppassword@cms-db:5432/datashield
+      DS_DATABASE_OWNER_URL: postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield
+      DS_JWT_SECRET: ${DS_JWT_SECRET}
+      DS_AUDIT_HMAC_KEY: ${DS_AUDIT_HMAC_KEY}
+      DS_COOKIE_SECURE: ${DS_COOKIE_SECURE:-false}
+      DS_CORS_ORIGINS: '["http://localhost:${CMS_PORT:-5173}"]'
+    ports:
+      - "${CMS_BACKEND_PORT:-8100}:8100"
+    # Migrations run as the owner role, then the app starts as the restricted
+    # role. One command so a deploy can never serve an un-migrated schema.
+    command: >-
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8100"
+    restart: unless-stopped
+
+  # ===========================================================================
+  # 5. DataShield CMS — the DPDP consent-management frontend
+  # ===========================================================================
+  # A separate React/Vite app from the DSAR console the gateway serves at
+  # :8000/ui. It runs on mock data by default (see frontend/src/api/index.js);
+  # flip USE_REAL_DSAR_BACKEND there to route its DSAR calls through the /gateway
+  # proxy into Fides.
+  cms-frontend:
+    build:
+      context: ./frontend
+    environment:
+      # Where the Vite dev-server proxy sends /gateway requests. Inside the
+      # compose network the gateway is reachable by service name.
+      GATEWAY_URL: http://fastapi-gateway:8000
+    volumes:
+      # Source mounted for hot reload; node_modules stays the image's copy so a
+      # host install (or its absence) can't shadow it.
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "${CMS_PORT:-5173}:5173"
+    depends_on:
+      fastapi-gateway:
+        condition: service_started
+    restart: unless-stopped
+
+  # ===========================================================================
+  # 6. My FastAPI wrapper around the Fides API (the DSAR engine demo)
   # ===========================================================================
   fastapi-gateway:
     build:
@@ -302,6 +379,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  cms-db-data:
   fides-db-data:
   app-postgres-data:
   app-mongo-data:

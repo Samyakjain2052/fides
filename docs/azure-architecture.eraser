@@ -1,0 +1,98 @@
+// =============================================================================
+// DataShield on Azure — deployment architecture
+// Eraser diagram-as-code.  Paste into https://app.eraser.io
+//
+// Follows ADR 0001: PostgreSQL for all product data; the two demo databases stay
+// containerised because they are props standing in for a customer's own systems.
+//
+// CONNECTORS
+//   >    solid  = runtime traffic
+//   -->  dotted = deploy-time / one-shot
+// =============================================================================
+
+title DataShield on Azure — Central India
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Edge
+// ─────────────────────────────────────────────────────────────────────────────
+Internet Users [icon: users, color: gray, shape: oval]
+
+Azure Edge [color: blue] {
+  Azure Front Door WAF [icon: azure-front-doors]
+  Azure Static Web Apps CMS Frontend [icon: azure-static-web-apps]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Compute — all stateless processes, one Container Apps environment
+// ─────────────────────────────────────────────────────────────────────────────
+Container Apps Environment [color: lightblue] {
+  CMS Backend public ingress [icon: azure-container-apps]
+  FastAPI Gateway internal only [icon: azure-container-apps]
+  Fides Server internal only [icon: azure-container-apps]
+  Fides Worker min replicas 1 [icon: azure-container-apps]
+  Fides Provisioner job runs once [icon: azure-container-instances]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Demo-only targets — containers, NOT managed databases (ADR 0001)
+// In a real deployment these are the customer's own systems, reached over a
+// private endpoint or VPN, and are not ours to host.
+// ─────────────────────────────────────────────────────────────────────────────
+Demo DSAR Targets dev only [color: purple] {
+  App Postgres container [icon: postgresql, shape: cylinder]
+  App Mongo container [icon: mongodb, shape: cylinder]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Managed data — this is the evidence, so it is managed, HA and backed up
+// ─────────────────────────────────────────────────────────────────────────────
+Managed Data Services [color: green] {
+  PostgreSQL Flexible Server 16 [icon: azure-database-postgresql, shape: cylinder]
+  Datashield DB tenants users audit [icon: database, shape: cylinder]
+  Fides DB engine records [icon: database, shape: cylinder]
+  Azure Cache for Redis DSR queue [icon: azure-cache-redis, shape: cylinder]
+  Blob Storage DSAR packages [icon: azure-blob-storage]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Platform
+// ─────────────────────────────────────────────────────────────────────────────
+Platform Services [color: orange] {
+  Key Vault JWT and audit HMAC keys [icon: azure-key-vault]
+  Entra ID staff SSO and PG auth [icon: azure-active-directory]
+  Container Registry [icon: azure-container-registry]
+  Log Analytics and App Insights [icon: azure-monitor]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RUNTIME TRAFFIC
+// ─────────────────────────────────────────────────────────────────────────────
+Internet Users > Azure Front Door WAF: TLS, HSTS, WAF, rate limit
+Azure Front Door WAF > Azure Static Web Apps CMS Frontend: static assets via CDN
+Azure Front Door WAF > CMS Backend public ingress: /v1 API
+
+CMS Backend public ingress > PostgreSQL Flexible Server 16: SET LOCAL app.tenant_id, RLS
+PostgreSQL Flexible Server 16 > Datashield DB tenants users audit: our product data
+PostgreSQL Flexible Server 16 > Fides DB engine records: engine data, same server
+
+CMS Backend public ingress > FastAPI Gateway internal only: PLANNED - DSAR execution
+FastAPI Gateway internal only > Fides Server internal only: login, token, POST privacy-request
+Fides Server internal only > Azure Cache for Redis DSR queue: queue job, answer 202
+Azure Cache for Redis DSR queue > Fides Worker min replicas 1: worker picks it up
+
+// The two arrows that are the product. In production these point at the
+// CUSTOMER's databases over a private endpoint, not at our containers.
+Fides Worker min replicas 1 > App Postgres container: identity email
+Fides Worker min replicas 1 > App Mongo container: identity email
+
+Fides Worker min replicas 1 > Blob Storage DSAR packages: writes access package
+Blob Storage DSAR packages > CMS Backend public ingress: presigned download URL
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLATFORM AND DEPLOY-TIME
+// ─────────────────────────────────────────────────────────────────────────────
+Key Vault JWT and audit HMAC keys > CMS Backend public ingress: secrets via managed identity
+Entra ID staff SSO and PG auth > PostgreSQL Flexible Server 16: token auth, no DB password
+Container Registry --> Container Apps Environment: image pull on deploy
+Fides Provisioner job runs once --> Fides Server internal only: loads fides-config, exits 0
+Container Apps Environment --> Log Analytics and App Insights: structured JSON logs with request id

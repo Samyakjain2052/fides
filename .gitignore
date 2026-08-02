@@ -19,3 +19,17 @@ __pycache__/
 .vscode/
 *.swp
 .env.local
+
+# Environment overlays (.env.azure, .env.local) — real credentials
+.env.*
+!.env.example
+
+# Node dependencies and build output (frontend/)
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Local Python venvs
+.venv/
+venv/

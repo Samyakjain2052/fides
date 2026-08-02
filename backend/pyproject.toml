@@ -1,0 +1,55 @@
+[project]
+name = "datashield-backend"
+version = "0.1.0"
+description = "Multi-tenant DPDP Act consent-management backend"
+requires-python = ">=3.11"
+
+# Pinned: a compliance product that drifts on a minor version bump is worse
+# than one that lags. Bump deliberately, with the test suite as the gate.
+dependencies = [
+  "fastapi==0.115.6",
+  "uvicorn[standard]==0.34.0",
+  "pydantic==2.10.4",
+  "pydantic-settings==2.7.0",
+  "email-validator==2.2.0",
+  "sqlalchemy[asyncio]==2.0.36",
+  "asyncpg==0.30.0",
+  "alembic==1.14.0",
+  # Argon2id for passwords, refresh tokens and API keys.
+  "argon2-cffi==23.1.0",
+  # JWT. PyJWT rather than python-jose: smaller surface, actively maintained.
+  "pyjwt==2.10.1",
+  "python-multipart==0.0.20",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.4",
+  "pytest-asyncio==0.25.0",
+  "httpx==0.28.1",
+  "ruff==0.8.4",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# Each test gets its own loop; engines are function-scoped to match. Sharing an
+# engine across loops is the classic asyncio-test footgun.
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+# Our own deprecations should fail the build; a dependency's should not block it.
+filterwarnings = [
+  "error::DeprecationWarning:app.*",
+  "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+# S101 asserts are the point of a test file.
+per-file-ignores = { "tests/*" = ["S101"] }
+
+[tool.setuptools.packages.find]
+include = ["app*"]

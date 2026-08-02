@@ -1,0 +1,176 @@
+"""Tenant and user provisioning."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.errors import Conflict, NotFound
+from app.core.permissions import Role
+from app.core.security import hash_password
+from app.models.audit import AuditAction
+from app.models.tenant import Tenant
+from app.models.user import User
+from app.services import audit_service
+from app.services.audit_service import Actor
+
+
+async def create_tenant(
+    session: AsyncSession,
+    *,
+    slug: str,
+    name: str,
+    admin_email: str,
+    admin_password: str,
+    admin_name: str,
+    legal_name: str | None = None,
+    actor: Actor | None = None,
+) -> tuple[Tenant, User]:
+    """Provision a customer plus their first Admin/DPO.
+
+    A tenant with no admin is unusable, so the two are created in one
+    transaction — either both exist or neither does.
+    """
+    existing = (
+        await session.execute(select(Tenant.id).where(Tenant.slug == slug))
+    ).scalar_one_or_none()
+    if existing:
+        raise Conflict(f"A tenant with slug '{slug}' already exists.")
+
+    tenant = Tenant(slug=slug, name=name, legal_name=legal_name or name)
+    session.add(tenant)
+    await session.flush()
+
+    # Tenant context has to be set before anything tenant-scoped is written —
+    # RLS's WITH CHECK would otherwise reject the insert. Failing closed here is
+    # the policy working, not a bug.
+    from app.db.session import set_tenant_context
+
+    await set_tenant_context(session, tenant.id)
+
+    admin = User(
+        tenant_id=tenant.id,
+        email=admin_email.lower(),
+        password_hash=hash_password(admin_password),
+        full_name=admin_name,
+        role=Role.ADMIN.value,
+        password_changed_at=datetime.now(UTC),
+    )
+    session.add(admin)
+    await session.flush()
+
+    who = actor or Actor(type="system", label="provisioning")
+    await audit_service.record(
+        session, tenant_id=tenant.id, actor=who, action=AuditAction.TENANT_CREATED,
+        entity_type="tenant", entity_id=tenant.id,
+        payload={"slug": slug, "name": name},
+    )
+    await audit_service.record(
+        session, tenant_id=tenant.id, actor=who, action=AuditAction.USER_CREATED,
+        entity_type="user", entity_id=admin.id,
+        payload={"role": admin.role, "bootstrap": True},
+    )
+    return tenant, admin
+
+
+async def create_user(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    email: str,
+    full_name: str,
+    role: str,
+    password: str | None,
+    actor: Actor,
+) -> User:
+    try:
+        Role(role)
+    except ValueError as exc:
+        raise Conflict(f"Unknown role '{role}'.") from exc
+
+    user = User(
+        tenant_id=tenant_id,
+        email=email.lower(),
+        full_name=full_name,
+        role=role,
+        password_hash=hash_password(password) if password else None,
+        password_changed_at=datetime.now(UTC) if password else None,
+    )
+    session.add(user)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        raise Conflict("A user with that email already exists for this tenant.") from exc
+
+    await audit_service.record(
+        session, tenant_id=tenant_id, actor=actor, action=AuditAction.USER_CREATED,
+        entity_type="user", entity_id=user.id, payload={"role": role},
+    )
+    return user
+
+
+async def change_role(
+    session: AsyncSession, *, tenant_id: uuid.UUID, user_id: uuid.UUID, new_role: str, actor: Actor
+) -> User:
+    try:
+        Role(new_role)
+    except ValueError as exc:
+        raise Conflict(f"Unknown role '{new_role}'.") from exc
+
+    user = (
+        await session.execute(
+            select(User).where(User.id == user_id, User.tenant_id == tenant_id)
+        )
+    ).scalar_one_or_none()
+    if user is None:
+        raise NotFound("User not found.")
+
+    old_role = user.role
+    if old_role == new_role:
+        return user
+    user.role = new_role
+    await session.flush()
+
+    # Both values recorded: a role change is only meaningful as a transition.
+    await audit_service.record(
+        session, tenant_id=tenant_id, actor=actor, action=AuditAction.USER_ROLE_CHANGED,
+        entity_type="user", entity_id=user.id,
+        payload={"from": old_role, "to": new_role},
+    )
+    return user
+
+
+async def deactivate_user(
+    session: AsyncSession, *, tenant_id: uuid.UUID, user_id: uuid.UUID, actor: Actor
+) -> User:
+    user = (
+        await session.execute(
+            select(User).where(User.id == user_id, User.tenant_id == tenant_id)
+        )
+    ).scalar_one_or_none()
+    if user is None:
+        raise NotFound("User not found.")
+
+    user.is_active = False
+    # Revoking access has to kill live sessions too, or the user keeps working
+    # with an access token until it expires.
+    from sqlalchemy import update
+
+    from app.models.user import RefreshToken
+
+    await session.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC), revoked_reason="user_deactivated")
+    )
+    await session.flush()
+
+    await audit_service.record(
+        session, tenant_id=tenant_id, actor=actor, action=AuditAction.USER_DEACTIVATED,
+        entity_type="user", entity_id=user.id, payload={"sessions_revoked": True},
+    )
+    return user
