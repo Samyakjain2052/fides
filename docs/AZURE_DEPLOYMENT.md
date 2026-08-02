@@ -1,10 +1,32 @@
 # Azure deployment architecture
 
-How the 11 local services map onto Azure, following
+How the 13 local services map onto Azure, following
 [ADR 0001](adr/0001-postgres-only-for-product-data.md): **PostgreSQL for all
-product data, the two demo databases stay containerised.**
+product data, the demo datastores stay containerised.**
 
-Nothing here is provisioned yet. This is the design to build Bicep/Terraform from.
+**Provisioned so far:** `cms-db` — an Azure Database for PostgreSQL Flexible
+Server 16 (`datashield-pg-5b8c16`, Central India), with the two roles, RLS
+policies and the append-only audit trigger created and verified by
+[`backend/scripts/verify_database.py`](../backend/scripts/verify_database.py).
+Everything else in the table below is still design, to build Bicep/Terraform from.
+
+### Step zero: register the resource providers
+
+A fresh subscription fails with `MissingSubscriptionRegistration` partway through
+provisioning, after some resources already exist — which is the worst time to find
+out. Register up front:
+
+```bash
+for ns in Microsoft.DBforPostgreSQL Microsoft.App Microsoft.ContainerRegistry \
+          Microsoft.KeyVault Microsoft.Cache Microsoft.Storage \
+          Microsoft.OperationalInsights; do
+  az provider register --namespace "$ns"
+done
+az provider show -n Microsoft.DBforPostgreSQL --query registrationState -o tsv
+```
+
+Registration is per-subscription and takes a few minutes; it only has to be done
+once.
 
 ---
 
@@ -32,6 +54,9 @@ Everything below follows from that.
 | **fides-provisioner** | **Container Apps job**, run once on deploy | Already designed as one-shot, exits 0. Maps cleanly to a job with a completion policy. |
 | **app-postgres** | **container** (Container Apps) — dev/demo only | A prop. No HA, no PITR, no managed anything. Per ADR 0001. |
 | **app-mongo** | **container** (Container Apps) — dev/demo only | Same. **Not Cosmos DB** — see the risk note. |
+| **app-mysql** | **container** (Container Apps) — dev/demo only | Same. A prop that exists to prove the DSAR crosses engines, not something a customer's data lives in. |
+| **presidio** | **Container Apps**, min-replicas 0 | PII detection. Nothing calls it yet, so it costs nothing at zero replicas — revisit the sizing when it has a caller. |
+| Zoho CRM | *nothing to provision* | A customer's own SaaS, reached over the internet by the Fides connector. Only its OAuth credentials are ours, and they belong in Key Vault. |
 | `./fides_uploads/` | **Blob Storage** + private container | Today it's a bind mount, which Fides itself documents as test-only. Blob gives presigned URLs and a lifecycle policy. |
 | `.env` secrets | **Key Vault** + managed identity | `DS_JWT_SECRET` and `DS_AUDIT_HMAC_KEY` must live here. The audit key especially: it is what stops someone with database write access forging history. |
 | — | **Front Door + WAF** | TLS termination, HSTS, rate limiting at the edge. |

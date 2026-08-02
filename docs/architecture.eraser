@@ -51,11 +51,20 @@ Layer 3 Privacy Engine Fides [color: orange] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LAYER 4 — Customer data.  The DSAR targets: two unrelated engines.
+// LAYER 4 — Customer data.  The DSAR targets: four unrelated engines, three of
+// them containers and one a remote SaaS.
 // ─────────────────────────────────────────────────────────────────────────────
 Layer 4 Customer Data [color: purple] {
   App Postgres 6432 Users Orders [icon: postgresql, shape: cylinder]
   App Mongo 37017 Events [icon: mongodb, shape: cylinder]
+  App MySQL 6306 Support Tickets [icon: mysql, shape: cylinder]
+  Zoho CRM SaaS Contacts [icon: cloud]
+}
+
+// Built, running, and connected to nothing. Drawn unattached on purpose: an
+// arrow here would claim an integration that does not exist yet.
+Layer 5 Not Yet Wired [color: gray] {
+  Presidio 8001 PII Detection [icon: search]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -73,18 +82,22 @@ Fides Redis Queue 7379 > Fides Worker Hands: worker picks it up
 Fides Server 8090 Brain <> Fides Database 7432: config, requests, execution logs
 Fides Provisioner One Shot > Fides Server 8090 Brain: loads /fides-config, verifies, exits 0
 
-// THE TWO ARROWS THAT ARE THE WHOLE PRODUCT.
-// One request reaches both engines because both datasets declare identity email.
-// The DSR policy targets DATA CATEGORIES, never table names — so a third
-// datastore needs annotation, not a policy change.
+// THE ARROWS THAT ARE THE WHOLE PRODUCT.
+// One request reaches every engine because every dataset declares identity email.
+// The DSR policy targets DATA CATEGORIES, never table names — which is why MySQL
+// and Zoho were both added later without touching the policy.
 Fides Worker Hands > App Postgres 6432 Users Orders: identity email
 Fides Worker Hands > App Mongo 37017 Events: identity email
+Fides Worker Hands > App MySQL 6306 Support Tickets: identity email
+Fides Worker Hands > Zoho CRM SaaS Contacts: identity email, SaaS connector
 
 Fides Worker Hands > Access Package JSON: writes the access package
 Access Package JSON > FastAPI Gateway 8000: read back to serve GET /dsar
 
 FastAPI Gateway 8000 > App Postgres 6432 Users Orders: direct seed and where-is-my-data
 FastAPI Gateway 8000 > App Mongo 37017 Events: direct seed and where-is-my-data
+FastAPI Gateway 8000 > App MySQL 6306 Support Tickets: direct seed and where-is-my-data
+FastAPI Gateway 8000 > Zoho CRM SaaS Contacts: read-only, where-is-my-data
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PLANNED — dotted arrows.  This is the roadmap, and it is the honest part of

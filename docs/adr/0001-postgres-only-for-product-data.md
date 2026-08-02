@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-08-02
 - **Decides:** which database technology holds DataShield's own data, and what we
-  do about the two demo databases
+  do about the demo datastores
 
 ## Context
 
@@ -22,7 +22,7 @@ three:
 
 1. **All product data is PostgreSQL.** `cms-db` is PostgreSQL 16 and will not be
    anything else. `fides-db` is PostgreSQL because Fides requires it — not a choice.
-2. **The two demo databases stay containerised.** They are props representing a
+2. **The demo datastores stay containerised.** They are props representing a
    customer's existing systems. They are not converted to managed Azure database
    services, because managed HA, PITR and geo-redundancy on seed data is money
    spent on nothing.

@@ -294,7 +294,7 @@ goes in `app/db.py`.
 
 **Change the console** — `fastapi-gateway/app/static/{index.html,styles.css,app.js}`.
 Vanilla, no build step. The files are baked into the image, so `make build` after
-editing. Colours: the two databases use the validated categorical blue/orange,
+editing. Colours: the datastores use the validated categorical palette,
 statuses use the reserved status palette and always carry a written label, and
 the erasure marker is a glyph as well as a colour — please keep that.
 
@@ -308,7 +308,7 @@ make logs          # follow worker + gateway, minus known noise
 make build         # after editing fastapi-gateway/
 make provision     # after editing fides-config/
 make test          # end-to-end proof
-make data          # raw rows from both databases
+make data          # raw rows from every database 
 make reset         # wipe volumes and re-seed
 make dsar EMAIL=someone@example.com
 ```

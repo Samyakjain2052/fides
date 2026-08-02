@@ -135,6 +135,17 @@ role can be misconfigured into holding them.
 
 ## Authentication
 
+**Self-serve signup.** `POST /v1/auth/register` creates a tenant and its first
+Admin/DPO in one transaction, writes both audit entries, and signs them in. A
+tenant with no admin is an unusable account, so it is all-or-nothing.
+
+Registration deliberately does not confirm whether a company already exists — a
+taken workspace and a reserved one return the identical "not available", because
+otherwise signup becomes a way for a competitor to enumerate our customers.
+`GET /v1/auth/workspace-available` *does* answer that question, which is a
+considered trade: a form that hides it until submit is hostile, and the same fact
+is obtainable by just attempting to register.
+
 **Humans.** Argon2id passwords · 15-minute JWT access token · opaque refresh token
 stored hashed and delivered as `HttpOnly; Secure; SameSite=Strict`. Rotation is
 single-use, and **presenting a spent token revokes its whole family** — reuse means

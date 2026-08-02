@@ -9,7 +9,7 @@ what was read or erased.
 
 - **Console UI at `/ui`** → see where a person's data lives and drive the whole flow
 - `POST /data/subject` → add a person's data to **both** databases in one call
-- `GET  /data/subject/{email}` → where that person's data lives, db1 and db2
+- `GET  /data/subject/{email}` → where that person's data lives, db1–db4
 - `POST /dsar {action: "access"}` → returns the person's data from Postgres **and** Mongo
 - `POST /dsar {action: "erasure"}` → Fides nulls their PII in **both** databases
 - `GET /dsar/{id}` → status + the execution log a regulator would ask for
@@ -69,16 +69,25 @@ at startup, so a fresh `up` leaves Fides fully configured.
    │         amount, item,     │      │             session_id},      │
    │         created_at)       │      │    timestamp }                │
    └───────────────────────────┘      └───────────────────────────────┘
+   ┌───────────────────────────┐      ┌───────────────────────────────┐
+   │  app-mysql  :6306         │      │  Zoho CRM      (SaaS, remote) │
+   │  ───────────────────────  │      │  ───────────────────────────  │
+   │  support_tickets(         │      │  Contacts module              │
+   │    id, email, subject,    │      │    Email, First_Name,         │
+   │    body, status,          │      │    Last_Name, Phone           │
+   │    created_at)            │      │  optional — needs OAuth creds │
+   └───────────────────────────┘      └───────────────────────────────┘
 
    ── one-shot at startup ────────────────────────────────────────────
    fides-provisioner   `fides push` + Fides API  ──▶  loads /fides-config
                        exits 0 when Fides is configured
 ```
 
-The DSAR crosses the database boundary because **both** datasets declare
-`fides_meta: {identity: email}` on their email field. Neither database is named
-in the policy — Fides matches on **data categories**, so the same policy would
-pick up a third datastore the moment you annotate one.
+The DSAR crosses the database boundary because **every** dataset declares
+`fides_meta: {identity: email}` on its email field. No database is named in the
+policy — Fides matches on **data categories**, so the same unchanged policy picks
+up a new datastore the moment you annotate one. That is not a claim: MySQL and
+Zoho CRM were both added later, and neither required a policy edit.
 
 ### Ports
 
@@ -89,11 +98,22 @@ pick up a third datastore the moment you annotate one.
 | `fides`           | **http://localhost:8080** ← Fides Admin UI       | Login `root_user` / `Testpassword1!`    |
 | `app-postgres`    | `localhost:6432`                                 | Demo app data: `users`, `orders`        |
 | `app-mongo`       | `localhost:37017`                                | Demo app data: `events`                 |
+| `app-mysql`       | `localhost:6306`                                 | Demo app data: `support_tickets`        |
+| `presidio`        | `localhost:8001`                                 | PII detection (`POST /detect`) — **no caller yet** |
 | `fides-db`        | `localhost:7432`                                 | Fides' own database (debugging only)    |
 | `fides-redis`     | `localhost:7379`                                 | Fides' Redis (debugging only)           |
 | `cms-backend`     | **http://localhost:8100/docs** ← API Swagger      | Multi-tenant CMS backend (real Postgres) |
 | `cms-db`          | `localhost:6543`                                 | The backend's own database                |
-| `cms-frontend`    | **http://localhost:5173** ← DataShield CMS        | DPDP consent management (mock data)      |
+| `cms-frontend`    | **http://localhost:5173** ← DataShield CMS        | DPDP consent management (real auth)      |
+
+Zoho CRM is a fourth datastore, reached over the internet through a Fides SaaS
+connector rather than run as a container. It is optional: without OAuth
+credentials in `.env` it reports `not configured`, the console shows db4 amber,
+and every other leg of the demo still works.
+
+**`presidio` is not wired into anything yet.** It builds, runs and answers
+`POST /detect`, but no service calls it. It is here for the PII-discovery work
+in progress, and it is listed as unwired rather than left to look load-bearing.
 
 All host ports are overridable in `.env` if something is already bound.
 
@@ -242,7 +262,7 @@ Or the same thing in three commands:
 make up          # start (safe to re-run)        make provision  # after editing fides-config/
 make logs        # follow the useful logs        make build      # after editing fastapi-gateway/
 make test        # end-to-end proof              make reset      # wipe + re-seed
-make data        # raw rows from both databases  make open       # console + Fides UI
+make data        # raw rows from every database   make open       # console + Fides UI
 make dsar EMAIL=someone@example.com
 make cms         # DataShield CMS with hot reload   make cms-build  # production bundle
 make api         # DataShield backend + its Postgres  make api-test   # backend suite
@@ -283,7 +303,7 @@ and nothing to compile when you edit it.
 │  EXECUTION LOG — THE PROOF        3 of 6 entries □ show every entry   │
 │  DATA RETURNED TO THE SUBJECT                                        │
 ├──────────────────────────────────────────────────────────────────────┤
-│ ADD DATA  ＋ Write a person into both databases                       │
+│ ADD DATA  ＋ Write a person into every database                       │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -302,7 +322,7 @@ What each part is for:
   difference between "erased" and "never existed".
 - **Privacy request** — status pill that live-polls until the request settles, then
   the **execution log**: one row per collection per action, which fields were
-  touched, across both databases. Collapsed to the outcome per collection by
+  touched, across every datastore. Collapsed to the outcome per collection by
   default; *show every entry* reveals Fides' full state-change trail.
 - **Add data** — the `POST /data/subject` form, with *Fill with sample data* for a
   one-click subject, then it re-runs the lookup so the write is immediately visible.
@@ -318,7 +338,7 @@ Two details worth knowing:
 - **`?theme=dark` / `?theme=light`** forces a mode; otherwise the ◐ toggle's choice
   is remembered, falling back to your OS setting.
 
-On the visual design: the two databases are the only colour-coded entities (the
+On the visual design: the datastores are the only colour-coded entities (the
 validated categorical blue/orange, checked against colour-vision-deficiency
 separation in both light and dark), status colours come from the reserved status
 palette and always ship with a written label rather than colour alone, and the
@@ -331,7 +351,7 @@ states honestly and a bar chart would only decorate.
 ## Adding your own data
 
 Two endpoints let you work with the application data directly, without SQL,
-`mongosh`, or Fides in the path:
+`mongosh`, `mysql`, or Fides in the path:
 
 | Route | Does |
 | --- | --- |
@@ -342,10 +362,10 @@ Both live in [db.py](fastapi-gateway/app/db.py) and use the same credentials as
 the Fides ConnectionConfigs, so whatever you write here is reachable by a DSAR,
 and whatever the lookup shows is exactly what an access DSAR should return.
 
-### `POST /data/subject` — write to both databases
+### `POST /data/subject` — write to every database
 
 The seed scripts insert `demo@example.com` and `control@example.com` on first
-boot. To create more subjects, POST to the gateway — one call, both databases:
+boot. To create more subjects, POST to the gateway — one call, every database:
 
 ```bash
 curl -s -X POST localhost:8000/data/subject \
@@ -373,12 +393,15 @@ The response says exactly which database got what:
 {
   "email": "newperson@example.com",
   "written_to": ["db1 app-postgres: users(inserted), orders(+2)",
-                 "db2 app-mongo: events(+2)"],
+                 "db2 app-mongo: events(+2)",
+                 "db3 app-mysql: support_tickets(+1)"],
   "db1_app_postgres": { "host": "app-postgres:5432", "database": "appdb",
                         "users": {"id": 4, "action": "inserted"},
                         "orders": {"inserted": 2, "ids": [8, 9]} },
   "db2_app_mongo":    { "host": "app-mongo:27017", "database": "app_mongo_dataset",
                         "events": {"inserted": 2} },
+  "db3_app_mysql":    { "host": "app-mysql:3306", "database": "appmysql",
+                        "support_tickets": {"inserted": 1, "ids": [5]} },
   "next": "GET /data/subject/newperson@example.com  then  POST /dsar {...}"
 }
 ```
@@ -393,12 +416,18 @@ Then DSAR them exactly like the seeded subject:
 
 | Field | Goes to | Notes |
 | --- | --- | --- |
-| `email` | **db1** `users.email`, **db1** `orders.user_email`, **db2** `events.email` | Required. The identity that later makes one DSAR find all of it. |
+| `email` | **db1** `users.email`, **db1** `orders.user_email`, **db2** `events.email`, **db3** `support_tickets.email` | Required. The identity that later makes one DSAR find all of it. |
 | `full_name`, `phone` | **db1** `users` | Optional. Omitting them on a repeat call leaves the stored values alone (`COALESCE`). |
 | `orders[]` | **db1** app-postgres `orders` | Optional, appended. `amount` is `NUMERIC(10,2)`, must be > 0. |
 | `events[]` | **db2** app-mongo `events` | Optional, appended. `ip_address` / `user_agent` / `session_id` nest under `metadata`. |
+| `support_tickets[]` | **db3** app-mysql `support_tickets` | Optional, appended. |
 
-Send both `orders` and `events` to populate both databases in one call; send only
+Zoho CRM (**db4**) is read-only here: the gateway looks contacts up during
+`GET /data/subject` and Fides erases them during a DSAR, but `POST /data/subject`
+does not create CRM contacts.
+
+Send `orders`, `events` and `support_tickets` to populate all three writable
+databases in one call; send only
 one of them to write to only that database. Either way a `users` row is always
 upserted in db1, since that is the person's identity record.
 
@@ -430,7 +459,8 @@ Everything is also clickable in Swagger at **http://localhost:8000/docs** — th
 
 ### `GET /data/subject/{email}` — where is my data?
 
-Reads both databases directly and reports where the person's records live:
+Reads every datastore directly — the three databases plus Zoho CRM — and
+reports where the person's records live:
 
 ```bash
 curl -s localhost:8000/data/subject/demo@example.com | jq
@@ -443,7 +473,8 @@ curl -s 'localhost:8000/data/subject/demo@example.com?include_rows=false' | jq  
   "found": true,
   "total_records": 8,
   "found_in": ["db1 app-postgres: users(1), orders(3)",
-               "db2 app-mongo: events(4)"],
+               "db2 app-mongo: events(4)",
+               "db3 app-mysql: support_tickets(1)"],
   "db1_app_postgres": {
     "label": "db1 — app-postgres (PostgreSQL)",
     "host": "app-postgres:5432", "database": "appdb",
@@ -472,6 +503,23 @@ curl -s 'localhost:8000/data/subject/demo@example.com?include_rows=false' | jq  
                                        "timestamp": "2025-02-02T13:58:00"}, "..."]}
     }
   },
+  "db3_app_mysql": {
+    "label": "db3 — app-mysql (MySQL)",
+    "host": "app-mysql:3306", "database": "appmysql",
+    "fides_dataset": "app_mysql_dataset",
+    "total": 1,
+    "collections": {
+      "support_tickets": {"count": 1, "rows": [{"id": 1, "email": "demo@example.com",
+                                                "subject": "Refund request", "..." : "..."}]}
+    }
+  },
+  "db4_zoho_crm": {
+    "label": "db4 — Zoho CRM (SaaS)",
+    "host": "www.zohoapis.in", "database": "Contacts module",
+    "fides_dataset": "zoho_crm_instance",
+    "total": 0,
+    "collections": {"contacts": {"count": 0, "rows": []}}
+  },
   "masked_rows_remaining": {"users": 1, "orders": 3, "events": 2},
   "note": null
 }
@@ -489,7 +537,7 @@ check on Fides' work:
 ```json
 { "email": "erased@example.com", "found": false, "total_records": 0,
   "found_in": [], "masked_rows_remaining": {"users": 1, "orders": 3, "events": 2},
-  "note": "No record in either database matches erased@example.com. There are 6
+  "note": "No record in any system matches erased@example.com. There are 6
            masked row(s) with a NULL identifier, so this subject may have been
            erased by a previous DSAR — an erasure nulls the email, which is
            exactly why a lookup by email can no longer find them." }
@@ -579,7 +627,7 @@ Then read it back (`data` is keyed by `dataset:collection`):
 curl -s localhost:8000/dsar/pri_1a2b3c4d-... | jq '.status, .data'
 ```
 
-Three collections, two databases, one request:
+Five collections, four datastores, one request:
 
 ```json
 {

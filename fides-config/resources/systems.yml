@@ -87,6 +87,14 @@ system:
 
   # ---------------------------------------------------------------------------
   # Zoho CRM — third-party SaaS, reached over its REST API (custom connector)
+  #
+  # NOTE: this block and app_mysql_system below were collapsed into one another
+  # by a bad merge — Zoho lost its privacy_declarations entirely, and MySQL
+  # inherited a bodyless declaration plus `user.content` misplaced into
+  # dataset_references. `fides push` rejected it with
+  # "1 validation error for System: privacy_declarations Field required",
+  # which stopped the provisioner and therefore the whole stack. Reconstructed
+  # from the two original branch definitions.
   # ---------------------------------------------------------------------------
   - fides_key: zoho_crm_system
     name: Zoho CRM
@@ -96,6 +104,23 @@ system:
       custom Fides SaaS connector since Zoho CRM has no built-in Fides
       connector (see fides-config/saas/zoho_crm/).
     system_type: Third Party
+    administrating_department: Engineering
+    privacy_declarations:
+      - name: Store customer contact records in Zoho CRM
+        data_categories:
+          - user.contact.email
+          - user.contact.phone_number
+          - user.name
+        data_use: essential.service
+        data_subjects:
+          - customer
+        # Links this System to the Dataset Fides auto-generates when
+        # provision.py instantiates the zoho_crm_connection (see
+        # connections.yml's `saas_connection` block and its `instance_key`).
+        dataset_references:
+          - zoho_crm_instance
+
+  # ---------------------------------------------------------------------------
   # app-mysql — support tickets
   # ---------------------------------------------------------------------------
   - fides_key: app_mysql_system
@@ -108,20 +133,13 @@ system:
       - fides_key: demo_app
         type: system
     privacy_declarations:
-      - name: Store customer contact records in Zoho CRM
       - name: Store customer support tickets
         data_categories:
           - user.contact.email
           - user.contact.phone_number
           - user.name
-        data_use: essential.service
-        data_subjects:
-          - customer
-        # Links this System to the Dataset that Fides auto-generates when
-        # provision.py instantiates the zoho_crm_connection (see
-        # connections.yml's `saas_connection` block and its `instance_key`).
-        dataset_references:
-          - zoho_crm_instance
+          # support_tickets.subject — targeted by the erasure rule, so the
+          # ticket text is masked while the row survives for audit.
           - user.content
         data_use: essential.service
         data_subjects:

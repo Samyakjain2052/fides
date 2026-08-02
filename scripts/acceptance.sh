@@ -21,9 +21,14 @@ set -a; source .env; set +a
 GW="http://localhost:${GATEWAY_PORT:-8000}"
 SUBJECT="acceptance-$(date +%s)@example.com"
 FAILURES=0
+SKIPPED=0
+ZOHO=0
 
 pass() { printf "  \033[32m✓\033[0m %s\n" "$1"; }
 fail() { printf "  \033[31m✗ %s\033[0m\n" "$1"; FAILURES=$((FAILURES + 1)); }
+# A skip is counted and reprinted in the summary. An uncounted skip reads as a
+# pass, which is how you end up believing a datastore is covered when it is not.
+skip() { printf "  \033[33m•\033[0m %s\n" "$1"; SKIPPED=$((SKIPPED + 1)); }
 step() { printf "\n\033[1m%s\033[0m\n" "$1"; }
 
 # jq is optional; python3 does the parsing.
@@ -40,6 +45,16 @@ fi
 [ "$(echo "$health" | get 'd["fides"]["webserver"]')" = "healthy" ] && pass "Fides" || fail "Fides"
 [ "$(echo "$health" | get 'd["app_databases"]["app_postgres"]')" = "ok" ] && pass "db1 app-postgres" || fail "db1 app-postgres"
 [ "$(echo "$health" | get 'd["app_databases"]["app_mongo"]')" = "ok" ] && pass "db2 app-mongo" || fail "db2 app-mongo"
+[ "$(echo "$health" | get 'd["app_databases"]["app_mysql"]')" = "ok" ] && pass "db3 app-mysql" || fail "db3 app-mysql"
+# Zoho needs OAuth credentials that are optional for local work, so an
+# unconfigured connector is reported and skipped rather than failing the run.
+# It is never silently ignored: a *broken* connector still fails.
+zoho="$(echo "$health" | get 'd["zoho_crm"]')"
+case "$zoho" in
+  ok)                pass "db4 Zoho CRM" ; ZOHO=1 ;;
+  "not configured")  skip "db4 Zoho CRM — no credentials, Zoho assertions skipped" ; ZOHO=0 ;;
+  *)                 fail "db4 Zoho CRM: $zoho" ;;
+esac
 
 # --------------------------------------------------------------------------
 step "2. Write a subject into every datastore"
@@ -49,17 +64,26 @@ written="$(curl -s -X POST "$GW/data/subject" -H 'Content-Type: application/json
   \"phone\": \"+1-555-0000\",
   \"orders\": [{\"amount\": \"10.00\", \"item\": \"Test widget\"}],
   \"events\": [{\"event_type\": \"login\", \"ip_address\": \"203.0.113.1\",
-                \"user_agent\": \"acceptance\", \"session_id\": \"sess_acc\"}]
+                \"user_agent\": \"acceptance\", \"session_id\": \"sess_acc\"}],
+  \"support_tickets\": [{\"subject\": \"Acceptance ticket\",
+                        \"body\": \"Written so the MySQL leg is actually exercised.\"}]
 }")"
 echo "$written" | get 'd["written_to"]' | sed 's/^/  /'
 [ "$(echo "$written" | get 'd["db1_app_postgres"]["orders"]["inserted"]')" = "1" ] && pass "db1 wrote an order" || fail "db1 write"
 [ "$(echo "$written" | get 'd["db2_app_mongo"]["events"]["inserted"]')" = "1" ] && pass "db2 wrote an event" || fail "db2 write"
+[ "$(echo "$written" | get 'd["db3_app_mysql"]["support_tickets"]["inserted"]')" = "1" ] && pass "db3 wrote a support ticket" || fail "db3 write"
 
 # --------------------------------------------------------------------------
-step "3. The lookup finds them in both databases"
+step "3. The lookup finds them in every database"
 found="$(curl -s "$GW/data/subject/$SUBJECT")"
 total="$(echo "$found" | get 'd["total_records"]')"
-[ "$total" = "3" ] && pass "3 records (1 user + 1 order + 1 event)" || fail "expected 3 records, got $total"
+[ "$total" = "4" ] && pass "4 records (1 user + 1 order + 1 event + 1 ticket)" || fail "expected 4 records, got $total"
+# Per-datastore, so a miscount cannot be masked by another database over-reporting.
+for pair in "db1_app_postgres:2" "db2_app_mongo:1" "db3_app_mysql:1"; do
+  k="${pair%%:*}" ; want="${pair##*:}"
+  got="$(echo "$found" | get "d[\"$k\"][\"total\"]")"
+  [ "$got" = "$want" ] && pass "$k holds $got" || fail "$k: expected $want, got $got"
+done
 
 # --------------------------------------------------------------------------
 # Poll a privacy request to completion. Fides queues it to its Celery worker,
@@ -81,20 +105,29 @@ step "4. Access request returns data from every datastore"
 access="$(run_dsar access)"
 [ "$(echo "$access" | get 'd["status"]')" = "complete" ] && pass "completed" || fail "status $(echo "$access" | get 'd["status"]')"
 collections="$(echo "$access" | get 'len(d["collections_touched"])')"
-[ "$collections" -ge 3 ] && pass "$collections collections touched" || fail "expected >=3 collections, got $collections"
-keys="$(echo "$access" | get 'len(d["data"] or {})')"
-[ "$keys" -ge 3 ] && pass "$keys collections returned data" || fail "expected data from >=3 collections, got $keys"
-# The cross-database claim, checked explicitly rather than assumed.
-echo "$access" | get '"|".join(sorted(d["data"] or {}))' | grep -q "app_mongo" && pass "db2 mongo data present" || fail "no db2 mongo data in the access package"
-echo "$access" | get '"|".join(sorted(d["data"] or {}))' | grep -q "app_postgres" && pass "db1 postgres data present" || fail "no db1 postgres data in the access package"
+[ "$collections" -ge 4 ] && pass "$collections collections touched" || fail "expected >=4 collections, got $collections"
+# Assert the datastores BY NAME. A ">= N" threshold is what let a whole silent
+# datastore hide here: the count stayed green while MySQL contributed nothing.
+returned="$(echo "$access" | get '"|".join(sorted(d["data"] or {}))')"
+for ds in app_postgres app_mongo app_mysql; do
+  echo "$returned" | grep -q "$ds" && pass "$ds data present" || fail "no $ds data in the access package"
+done
+if [ "$ZOHO" = "1" ]; then
+  echo "$returned" | grep -q "zoho" && pass "Zoho CRM data present" \
+    || skip "no Zoho rows — the connector is up but this subject is not in the CRM"
+fi
 
 step "5. Erasure request masks them in every datastore"
 erasure="$(run_dsar erasure)"
 [ "$(echo "$erasure" | get 'd["status"]')" = "complete" ] && pass "completed" || fail "status $(echo "$erasure" | get 'd["status"]')"
 # Count DISTINCT collections: Fides logs more than one entry per collection
 # (one per request task plus consolidation), so summing entries overstates it.
-masked="$(echo "$erasure" | get 'len({e["dataset"]+":"+e["collection"] for e in d["execution_log"] if e["action_type"]=="erasure" and e["status"]=="complete" and e["collection"]})')"
-[ "$masked" -ge 3 ] && pass "$masked collections masked" || fail "expected >=3 masked collections, got $masked"
+masked_sets="$(echo "$erasure" | get '"|".join(sorted({e["dataset"]+":"+e["collection"] for e in d["execution_log"] if e["action_type"]=="erasure" and e["status"]=="complete" and e["collection"]}))')"
+masked="$(echo "$masked_sets" | tr '|' '\n' | grep -c . || true)"
+[ "$masked" -ge 4 ] && pass "$masked collections masked" || fail "expected >=4 masked collections, got $masked"
+for ds in app_postgres app_mongo app_mysql; do
+  echo "$masked_sets" | grep -q "$ds" && pass "$ds masked" || fail "$ds was never masked"
+done
 
 step "6. The data is gone"
 after="$(curl -s "$GW/data/subject/$SUBJECT")"
@@ -114,6 +147,7 @@ echo
 if [ "$FAILURES" -eq 0 ]; then
   printf "\033[32m\033[1mPASS\033[0m — one request reached every datastore, and the erasure held.\n"
   echo "       test subject was $SUBJECT (its masked rows remain, by design)"
+  [ "$SKIPPED" -gt 0 ] && printf "       \033[33m%s check(s) skipped — coverage is not complete\033[0m\n" "$SKIPPED"
   exit 0
 fi
 printf "\033[31m\033[1mFAIL\033[0m — %d check(s) failed. Try:\n" "$FAILURES"

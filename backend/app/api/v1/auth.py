@@ -11,8 +11,8 @@ from app.api.deps import CurrentUserDep, UnscopedSession, client_ip
 from app.core.config import get_settings
 from app.core.errors import AuthenticationError
 from app.core.permissions import capabilities_for
-from app.schemas.auth import LoginRequest, TokenResponse, UserOut
-from app.services import auth_service
+from app.schemas.auth import LoginRequest, RegisterRequest, SlugCheck, TokenResponse, UserOut
+from app.services import auth_service, registration_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 _settings = get_settings()
@@ -44,6 +44,65 @@ def _clear_refresh_cookie(response: Response) -> None:
         key=_settings.refresh_cookie_name,
         path=f"{_settings.api_prefix}/auth",
         domain=_settings.cookie_domain,
+    )
+
+
+@router.get("/workspace-available", response_model=SlugCheck,
+            summary="Is this workspace id free?")
+async def workspace_available(workspace: str, session: UnscopedSession) -> SlugCheck:
+    """Live feedback for the signup form.
+
+    Unlike the registration error, this does tell you a workspace is taken. That
+    is deliberate: a form that only reveals it on submit is hostile, and the same
+    fact is obtainable by trying to register. Rate-limited at the edge.
+    """
+    available = await registration_service.slug_available(session, workspace)
+    return SlugCheck(
+        workspace=workspace.strip().lower(),
+        available=available,
+        reason=None if available else "That workspace name is not available.",
+    )
+
+
+@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED,
+             summary="Create an organisation and its first admin")
+async def register(
+    payload: RegisterRequest,
+    request: Request,
+    response: Response,
+    session: UnscopedSession,
+) -> TokenResponse:
+    """Self-serve signup.
+
+    Creates the tenant and its first Admin/DPO in one transaction, writes both
+    audit entries, and signs the new admin straight in — there is nothing useful
+    they could do on a second screen before logging in anyway.
+    """
+    reg = await registration_service.register_tenant(
+        session,
+        company_name=payload.company_name,
+        slug=payload.workspace,
+        admin_name=payload.admin_name,
+        admin_email=payload.admin_email,
+        password=payload.password,
+        ip=client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+
+    # Issue the session directly rather than calling authenticate(), which would
+    # re-verify the password we just hashed — a second Argon2 pass for nothing.
+    pair = await auth_service.issue_session(
+        session,
+        user=reg.admin,
+        ip=client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    _set_refresh_cookie(response, pair.refresh_token, pair.refresh_expires_at)
+    return TokenResponse(
+        access_token=pair.access_token,
+        expires_at=pair.access_expires_at,
+        user=UserOut.model_validate(reg.admin),
+        capabilities=sorted(c.value for c in capabilities_for(reg.admin.role)),
     )
 
 

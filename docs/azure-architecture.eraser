@@ -2,7 +2,7 @@
 // DataShield on Azure — deployment architecture
 // Eraser diagram-as-code.  Paste into https://app.eraser.io
 //
-// Follows ADR 0001: PostgreSQL for all product data; the two demo databases stay
+// Follows ADR 0001: PostgreSQL for all product data; the demo datastores stay
 // containerised because they are props standing in for a customer's own systems.
 //
 // CONNECTORS

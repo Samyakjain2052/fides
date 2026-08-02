@@ -13,15 +13,34 @@ npm run dev        # http://localhost:5173     (or: make cms  from the repo root
 npm run build      # production bundle in dist/
 ```
 
-Sign in with any password. The role selector on the login screen swaps in that
-role's demo account, so all four sides of the product are one click apart:
+## Authentication is real
 
-| Role | Account | Lands on | Can reach |
-| --- | --- | --- | --- |
-| Data Principal | `priya@example.com` | `/user/dashboard` | their own consents, requests, complaints |
-| Admin / DPO | `amit@example.com` | `/admin/dashboard` | everything |
-| Auditor | `ravi@example.com` | `/admin/audit` | audit logs + reports, read-only |
-| Grievance Officer | `meena@example.com` | `/admin/grievances` | the grievance queue only |
+**The four demo accounts and "any password is accepted" are gone.** Sign-in and
+sign-up now hit the backend at `http://localhost:8100/v1/auth/*` and create real
+rows in PostgreSQL. Start the API first (`make api` from the repo root), then:
+
+1. Go to **`/signup`**, create an organisation — you become its first Admin/DPO.
+2. Sign in at **`/login`** with your workspace id, email and password.
+
+Two things changed that are worth understanding, not just noting:
+
+- **The role selector is gone.** A client-side role picker is not authentication —
+  it let anyone choose to be an admin. The role now comes from the database and is
+  re-checked server-side on every request.
+- **The user is no longer in `localStorage`.** It used to be, which meant you could
+  write `{"role":"admin"}` into devtools and reload into the admin console. The
+  session is now an HttpOnly refresh cookie the page cannot read, exchanged for a
+  short-lived access token held only in memory. A page reload restores the session
+  through `/auth/refresh`; there is nothing on disk for an XSS payload to steal.
+
+| Role | Reaches |
+| --- | --- |
+| Admin / DPO | everything (what signup creates) |
+| Data Principal | their own consents, requests, complaints |
+| Auditor | audit logs + reports, read-only |
+| Grievance Officer | the grievance queue only |
+
+Additional users in other roles are created from **Admin → Users & Roles**.
 
 ## Screens
 
@@ -69,6 +88,16 @@ languages and persists the choice. English is complete and Hindi is a worked
 sample so the mechanism is visible; every other language falls back to English
 and the UI says so with an "English fallback" tag. That is the honest state until
 a translation service is wired in.
+
+## What is real and what is still mock
+
+| Area | State |
+| --- | --- |
+| **Auth** — signup, login, refresh, logout, roles | **real**, against the backend and PostgreSQL |
+| Consent, DSAR, grievances, retention, reports | mock, in `src/api/index.js`, until backend Phase 3 |
+
+`src/api/auth.js` is the real one; `src/api/index.js` is the mock one. They are
+separate files so it is obvious which is which.
 
 ## Wiring it to a real backend
 

@@ -62,12 +62,6 @@ const CATEGORIES = {
   },
 };
 
-function databaseDisplay(dataset) {
-  if ((dataset || "").includes("mongo")) return ["db2", "db2 mongo"];
-  if ((dataset || "").includes("mysql")) return ["db3", "db3 mysql"];
-  return ["db1", "db1 postgres"];
-}
-
 /* Fides privacy-request statuses -> pill class + icon-ish label. Status colour
    is never the only signal: the label spells the state out. */
 const STATUS = {
@@ -199,8 +193,20 @@ async function loadHealth() {
     const dbs = h.app_databases || {};
     setPill($("#health-db1"), dbs.app_postgres === "ok" ? "good" : "bad", "db1 postgres");
     setPill($("#health-db2"), dbs.app_mongo === "ok" ? "good" : "bad", "db2 mongo");
-    setPill($("#health-db3"), h.zoho_crm === "ok" ? "good" : "warn", "db3 zoho");
+    // Both branches added a "db3" and neither renamed to db4, so the Zoho pill
+    // was computed and then immediately overwritten by the MySQL one. Four
+    // datastores need four pills.
     setPill($("#health-db3"), dbs.app_mysql === "ok" ? "good" : "bad", "db3 mysql");
+    // Zoho reports at the TOP level of /health, not inside app_databases —
+    // it is a SaaS connector, not one of the gateway's own database pools.
+    // "not configured" is warn, not bad: the OAuth credentials are optional
+    // for local work, so their absence is a state, not a failure.
+    const zoho = h.zoho_crm || "not configured";
+    setPill(
+      $("#health-db4"),
+      zoho === "ok" ? "good" : zoho === "not configured" ? "warn" : "bad",
+      zoho === "ok" ? "db4 zoho" : "db4 zoho (" + zoho.split(":")[0] + ")"
+    );
 
     state.adminUrl = h.fides_admin_url || null;
     const links = $("#links");
@@ -273,8 +279,8 @@ async function locate(quiet) {
       : "nothing matches this identity";
     $("#kpi-db1").textContent = data.db1_app_postgres.total;
     $("#kpi-db2").textContent = data.db2_app_mongo.total;
-    $("#kpi-db3").textContent = data.db3_zoho_crm.total;
     $("#kpi-db3").textContent = data.db3_app_mysql.total;
+    $("#kpi-db4").textContent = data.db4_zoho_crm.total;
 
     const masked = data.masked_rows_remaining || {};
     const maskedTotal = Object.values(masked).reduce((a, b) => a + b, 0);
@@ -285,8 +291,8 @@ async function locate(quiet) {
 
     renderDatabase("#card-db1", data.db1_app_postgres, "db1");
     renderDatabase("#card-db2", data.db2_app_mongo, "db2");
-    renderDatabase("#card-db3", data.db3_zoho_crm, "db3");
     renderDatabase("#card-db3", data.db3_app_mysql, "db3");
+    renderDatabase("#card-db4", data.db4_zoho_crm, "db4");
 
     const note = $("#locate-note");
     if (data.note) {
@@ -318,8 +324,8 @@ function systemMeta(datasetKey) {
   const key = datasetKey || "";
   if (key.includes("mongo")) return { cls: "db2", label: "db2 mongo" };
   if (key.includes("postgres")) return { cls: "db1", label: "db1 postgres" };
-  const label = SYSTEM_LABELS[key] || key.replace(/_/g, " ");
-  return { cls: "db3", label };
+  if (key.includes("mysql")) return { cls: "db3", label: "db3 mysql" };
+  return { cls: "db4", label: SYSTEM_LABELS[key] || key.replace(/_/g, " ") };
 }
 
 /* Fides logs every state change, so a finished collection appears twice:
@@ -358,9 +364,6 @@ function renderLog(entries) {
     const meta = systemMeta(e.dataset);
     dbCell.appendChild(el("span", "swatch " + meta.cls));
     dbCell.appendChild(document.createTextNode(" " + meta.label));
-    const [databaseClass, databaseLabel] = databaseDisplay(e.dataset);
-    dbCell.appendChild(el("span", "swatch " + databaseClass));
-    dbCell.appendChild(document.createTextNode(" " + databaseLabel));
     tr.appendChild(dbCell);
 
     tr.appendChild(el("td", "mono", e.dataset + " : " + e.collection));
@@ -413,9 +416,6 @@ function renderReturnedData(data) {
     const meta = systemMeta(key.split(":")[0]);
     const label = el("span", "name");
     label.appendChild(el("span", "swatch " + meta.cls));
-    const [databaseClass] = databaseDisplay(key);
-    const label = el("span", "name");
-    label.appendChild(el("span", "swatch " + databaseClass));
     label.appendChild(document.createTextNode(" " + key));
     ch.appendChild(label);
     ch.appendChild(el("span", "count", String(rows.length)));

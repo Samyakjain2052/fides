@@ -23,6 +23,7 @@
       <span id="health-db1" class="pill"><span class="dot"></span>db1</span>
       <span id="health-db2" class="pill"><span class="dot"></span>db2</span>
       <span id="health-db3" class="pill"><span class="dot"></span>db3</span>
+      <span id="health-db4" class="pill"><span class="dot"></span>db4</span>
       <button id="theme" class="ghost" type="button" title="Toggle light / dark">◐ Theme</button>
     </div>
   </header>
@@ -68,12 +69,14 @@
         <div class="foot" id="kpi-db2-foot">events</div>
       </div>
       <div class="tile">
-        <div class="label"><span class="swatch db3"></span>db3 · Zoho CRM</div>
-        <div class="value" id="kpi-db3">—</div>
-        <div class="foot" id="kpi-db3-foot">contacts</div>
         <div class="label"><span class="swatch db3"></span>db3 · app-mysql</div>
         <div class="value" id="kpi-db3">—</div>
         <div class="foot" id="kpi-db3-foot">support tickets</div>
+      </div>
+      <div class="tile">
+        <div class="label"><span class="swatch db4"></span>db4 · Zoho CRM</div>
+        <div class="value" id="kpi-db4">—</div>
+        <div class="foot" id="kpi-db4-foot">contacts</div>
       </div>
       <div class="tile">
         <div class="label">Masked rows remaining</div>
@@ -91,13 +94,14 @@
       <div class="card db-card db1" id="card-db1"></div>
       <div class="card db-card db2" id="card-db2"></div>
       <div class="card db-card db3" id="card-db3"></div>
+      <div class="card db-card db4" id="card-db4"></div>
     </div>
     <div class="card" style="margin-top:16px">
       <div class="legend">
         <span class="item"><span class="swatch db1"></span> db1 — app-postgres (PostgreSQL)</span>
         <span class="item"><span class="swatch db2"></span> db2 — app-mongo (MongoDB)</span>
-        <span class="item"><span class="swatch db3"></span> db3 — Zoho CRM (SaaS)</span>
         <span class="item"><span class="swatch db3"></span> db3 — app-mysql (MySQL)</span>
+        <span class="item"><span class="swatch db4"></span> db4 — Zoho CRM (SaaS)</span>
         <span class="item"><span class="col-cat erasable" style="margin:0">user.contact.email</span> = a category the erasure policy nulls</span>
         <span class="item"><span class="col-cat" style="margin:0">system.operations</span> = kept on erasure</span>
       </div>

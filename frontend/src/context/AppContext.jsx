@@ -5,6 +5,7 @@
 // ============================================================================
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { LANGUAGES, ROLES } from "../api";
+import { clearSession, logout as apiLogout, restoreSession } from "../api/auth";
 
 const AppContext = createContext(null);
 
@@ -44,22 +45,45 @@ const DICTIONARY = {
 };
 
 export function AppProvider({ children }) {
-  const [user, setUser] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem(STORE_USER) || "null");
-    } catch {
-      return null;
-    }
-  });
+  // The user is NOT read from localStorage any more.
+  //
+  // It used to be, which meant anyone could open devtools, write
+  // {"role":"admin"} into localStorage and reload into the admin console. The
+  // session now comes from the server: an HttpOnly refresh cookie the page
+  // cannot read, exchanged for a short-lived access token held in memory.
+  const [user, setUser] = useState(null);
+  const [capabilities, setCapabilities] = useState([]);
+  // null = still checking. The router waits for this so a signed-in user is not
+  // flashed the login screen on every reload.
+  const [authReady, setAuthReady] = useState(false);
   const [language, setLanguage] = useState(
     () => localStorage.getItem(STORE_LANG) || "English"
   );
   const [toast, setToast] = useState(null);
 
+  // On load, try to restore the session from the refresh cookie. Failure is the
+  // normal "nobody is signed in" case, not an error.
   useEffect(() => {
-    if (user) localStorage.setItem(STORE_USER, JSON.stringify(user));
-    else localStorage.removeItem(STORE_USER);
-  }, [user]);
+    let cancelled = false;
+    restoreSession()
+      .then((session) => {
+        if (cancelled) return;
+        if (session) {
+          setUser(session.user);
+          setCapabilities(session.capabilities || []);
+        }
+      })
+      .finally(() => !cancelled && setAuthReady(true));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Clear the stale key from the previous localStorage-based build, so an old
+  // tab does not leave a forged user object lying around.
+  useEffect(() => {
+    localStorage.removeItem(STORE_USER);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(STORE_LANG, language);
@@ -80,8 +104,21 @@ export function AppProvider({ children }) {
   const value = useMemo(
     () => ({
       user,
-      setUser,
-      signOut: () => setUser(null),
+      authReady,
+      capabilities,
+      /** Adopt a session returned by login or register. */
+      signIn: (session) => {
+        setUser(session.user);
+        setCapabilities(session.capabilities || []);
+      },
+      signOut: async () => {
+        await apiLogout();   // revokes the whole refresh-token family server-side
+        clearSession();
+        setUser(null);
+        setCapabilities([]);
+      },
+      /** Server-granted capability check. The server re-checks on every request. */
+      can: (capability) => capabilities.includes(capability),
       role: user?.role || null,
       roleLabel: ROLES.find((r) => r.id === user?.role)?.label || "",
       language,
@@ -94,7 +131,7 @@ export function AppProvider({ children }) {
       toast,
       notify: (message, tone = "success") => setToast({ message, tone }),
     }),
-    [user, language, t, toast]
+    [user, authReady, capabilities, language, t, toast]
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

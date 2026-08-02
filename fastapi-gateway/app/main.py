@@ -265,7 +265,7 @@ class SubjectCreated(BaseModel):
     email: Identity
     written_to: list[str] = Field(
         ...,
-        description="Which of the two databases this call actually wrote to.",
+        description="Which of the databases this call actually wrote to.",
         examples=[["db1 app-postgres: users, orders", "db2 app-mongo: events"]],
     )
     db1_app_postgres: dict[str, Any] = Field(
@@ -317,8 +317,8 @@ class SubjectLocation(BaseModel):
     )
     db1_app_postgres: DatabaseData
     db2_app_mongo: DatabaseData
-    db3_zoho_crm: DatabaseData
     db3_app_mysql: DatabaseData
+    db4_zoho_crm: DatabaseData
     masked_rows_remaining: dict[str, int] = Field(
         ...,
         description="Rows whose identifying email is NULL, i.e. erased by some "
@@ -576,8 +576,7 @@ async def create_subject(body: SubjectIn) -> SubjectCreated:
 @app.get(
     "/data/subject/{email}",
     response_model=SubjectLocation,
-    summary="Where is this person's data? (all three systems, no Fides involved)",
-    summary="Where is this person's data? (all three databases, no Fides involved)",
+    summary="Where is this person's data? (all four systems, no Fides involved)",
     tags=["data"],
 )
 async def locate_subject(
@@ -661,18 +660,20 @@ async def locate_subject(
         collections=wrap(mongo),
     )
     db3 = DatabaseData(
-        label="db3 — Zoho CRM (SaaS)",
-        host=zoho.api_domain or "not configured",
-        database="Contacts module",
-        fides_dataset="zoho_crm_instance",
-        total=len(contacts),
-        collections=wrap({"contacts": contacts}),
-        label="db3 - app-mysql (MySQL)",
+        label="db3 — app-mysql (MySQL)",
         host=db.mysql_host,
         database=db.mysql_database,
         fides_dataset="app_mysql_dataset",
         total=sum(len(r) for r in mysql.values()),
         collections=wrap(mysql),
+    )
+    db4 = DatabaseData(
+        label="db4 — Zoho CRM (SaaS)",
+        host=zoho.api_domain or "not configured",
+        database="Contacts module",
+        fides_dataset="zoho_crm_instance",
+        total=len(contacts),
+        collections=wrap({"contacts": contacts}),
     )
 
     found_in = [
@@ -680,12 +681,12 @@ async def locate_subject(
         for label, rows in (
             ("db1 app-postgres", pg),
             ("db2 app-mongo", mongo),
-            ("db3 Zoho CRM", {"contacts": contacts}),
             ("db3 app-mysql", mysql),
+            ("db4 Zoho CRM", {"contacts": contacts}),
         )
         if any(rows.values())
     ]
-    total = db1.total + db2.total + db3.total
+    total = db1.total + db2.total + db3.total + db4.total
 
     note = None
     if total == 0:
@@ -711,8 +712,8 @@ async def locate_subject(
         found_in=found_in,
         db1_app_postgres=db1,
         db2_app_mongo=db2,
-        db3_zoho_crm=db3,
         db3_app_mysql=db3,
+        db4_zoho_crm=db4,
         masked_rows_remaining=masked,
         note=note,
     )

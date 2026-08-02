@@ -15,6 +15,7 @@ import Toast from "./components/common/Toast";
 
 import Login from "./pages/auth/Login";
 import ForgotPassword from "./pages/auth/ForgotPassword";
+import Signup from "./pages/auth/Signup";
 
 import UserDashboard from "./pages/user/UserDashboard";
 import ConsentBanner from "./pages/user/ConsentBanner";
@@ -58,12 +59,24 @@ function RequireRole({ allow, children }) {
 }
 
 export default function App() {
-  const { user } = useApp();
+  const { user, authReady } = useApp();
+
+  // Restoring the session is a round trip. Rendering routes before it resolves
+  // would redirect a signed-in user to /login for a frame, and bounce them back
+  // — visible, and it loses whatever URL they arrived on.
+  if (!authReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-canvas">
+        <p className="text-sm text-muted">Restoring your session…</p>
+      </div>
+    );
+  }
 
   return (
     <Routes>
       {/* ---------------------------------------------------------- auth -- */}
       <Route path="/login" element={user ? <Navigate to={homeFor(user.role)} replace /> : <Login />} />
+      <Route path="/signup" element={user ? <Navigate to={homeFor(user.role)} replace /> : <Signup />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
 
       {/* Consent surfaces sit outside the app chrome: a first-time visitor sees

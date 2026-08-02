@@ -244,6 +244,34 @@ async def logout(
     )
 
 
+async def issue_session(
+    session: AsyncSession,
+    *,
+    user: User,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> TokenPair:
+    """Start a session for an already-authenticated user.
+
+    Used by registration, which has just created the account and does not need to
+    verify a password it wrote seconds ago. Every other caller must go through
+    authenticate().
+    """
+    pair = await _issue_tokens(
+        session, user=user, family_id=uuid.uuid4(), ip=ip, user_agent=user_agent
+    )
+    await audit_service.record(
+        session,
+        tenant_id=user.tenant_id,
+        actor=Actor(type="user", id=user.id, label=user.email, ip=ip, user_agent=user_agent),
+        action=AuditAction.LOGIN_SUCCEEDED,
+        entity_type="user",
+        entity_id=user.id,
+        payload={"role": user.role, "via": "registration"},
+    )
+    return pair
+
+
 async def _issue_tokens(
     session: AsyncSession,
     *,

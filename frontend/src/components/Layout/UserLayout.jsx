@@ -76,8 +76,10 @@ export default function UserLayout() {
             <button
               type="button"
               className="btn-ghost text-sm"
-              onClick={() => {
-                signOut();
+              onClick={async () => {
+                // Await it: signOut revokes the refresh-token family server-side,
+                // and navigating first would race that call.
+                await signOut();
                 navigate("/login");
               }}
             >

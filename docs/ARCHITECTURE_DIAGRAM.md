@@ -54,6 +54,14 @@ never drift apart.
 > - `app-postgres` — PostgreSQL 16, port **6432**. Tables `users(id, email,
 >   full_name, phone, created_at)` and `orders(id, user_email, amount, item,
 >   created_at)`.
+> - `app-mysql` — MySQL 8, port **6306**. Table `support_tickets(id, email,
+>   subject, body, status, created_at)`.
+> - Zoho CRM — SaaS, reached over the internet via a Fides SaaS connector, not a
+>   container. Contacts module. Optional: without OAuth credentials it reports
+>   `not configured` and the rest of the demo is unaffected.
+> - `presidio` — PII detection, port **8001**, `POST /detect`. Built and running
+>   but **no service calls it yet**; draw it unconnected rather than implying a
+>   dependency that does not exist.
 > - `app-mongo` — MongoDB 7, port **37017**. Collection `events {email,
 >   event_type, metadata{ip_address, user_agent, session_id}, timestamp}`.
 >
@@ -65,7 +73,7 @@ never drift apart.
 > 5. `fastapi-gateway` → `fides`, labelled **"REST: login → bearer token → POST /api/v1/privacy-request"**
 > 6. `fides` → `fides-redis`, labelled **"queue job, answer 202 immediately"**
 > 7. `fides-redis` → `fides-worker`, labelled **"worker picks up"**
-> 8. `fides-worker` → `app-postgres` AND `fides-worker` → `app-mongo`, both
+> 8. `fides-worker` → `app-postgres`, `app-mongo`, `app-mysql` and Zoho CRM, all
 >    labelled **"identity: email"** — these two arrows are the point of the whole
 >    system, so make them prominent.
 > 9. `fides` ↔ `fides-db` (its own records)
@@ -73,7 +81,7 @@ never drift apart.
 >     ("access package"), and `fastapi-gateway` → that same node (reads it back)
 > 11. `fides-provisioner` ⇢ `fides` (dashed), labelled **"loads /fides-config at
 >     startup, then exits"**
-> 12. `fastapi-gateway` → `app-postgres` and → `app-mongo` (thin), labelled
+> 12. `fastapi-gateway` → `app-postgres`, `app-mongo`, `app-mysql` and Zoho (thin), labelled
 >     **"direct read/write for seeding + the 'where is my data' view"**
 >
 > **ARROWS — draw these as DASHED + greyed (designed, not built yet):**
@@ -95,7 +103,8 @@ never drift apart.
 >   hash = HMAC(key, entry ‖ prev_hash). UPDATE/DELETE revoked + blocked by
 >   trigger."*
 > - Near the four databases: *"FOUR separate data stores, four different jobs:
->   cms-db = the product · app-postgres + app-mongo = the data being erased ·
+>   cms-db = the product · app-postgres + app-mongo + app-mysql + Zoho CRM = the
+>   data being erased ·
 >   fides-db = the engine's own notebook."*
 >
 > **STYLE**
@@ -123,7 +132,7 @@ Image models lose detail past ~120 words. Use this instead:
 > **Layer 4 "Customer data":** PostgreSQL (6432, users + orders) and MongoDB
 > (37017, events).
 > Two bold arrows from the Celery worker to BOTH databases, labelled
-> "identity: email — one request, two databases". Legend: solid = built,
+> "identity: email — one request, four datastores". Legend: solid = built,
 > dashed = planned.
 
 ---
@@ -157,14 +166,16 @@ flowchart TB
         PKG[/"./fides_uploads/&lt;id&gt;.json<br/><i>access package</i>"/]
     end
 
-    %% direction TB stacks the two databases vertically. Side by side, mermaid
-    %% routes the worker's second arrow THROUGH app-postgres, which reads as
+    %% direction TB stacks the datastores vertically. Side by side, mermaid
+    %% routes the worker's later arrows THROUGH app-postgres, which reads as
     %% "postgres talks to mongo" — false, and it undermines the one claim this
     %% diagram exists to make.
     subgraph L4["LAYER 4 — Customer data (the DSAR targets)"]
         direction TB
         APG[("app-postgres <b>:6432</b><br/>users(email, full_name, phone)<br/>orders(user_email, amount, item)")]
         AMG[("app-mongo <b>:37017</b><br/>events{email, event_type,<br/>metadata{ip, ua, session}}")]
+        AMY[("app-mysql <b>:6306</b><br/>support_tickets(email, subject,<br/>body, status)")]
+        ZOHO["Zoho CRM <i>(SaaS, remote)</i><br/>Contacts(Email, First_Name,<br/>Last_Name, Phone)<br/><i>optional — needs OAuth</i>"]
     end
 
     %% ---- working paths ----
@@ -177,11 +188,15 @@ flowchart TB
     REDIS --> WORKER
     WORKER ==>|"<b>identity: email</b>"| APG
     WORKER ==>|"<b>identity: email</b>"| AMG
+    WORKER ==>|"<b>identity: email</b>"| AMY
+    WORKER ==>|"<b>identity: email</b><br/>SaaS connector"| ZOHO
     FIDES <--> FDB
     WORKER --> PKG
     PKG --> GW
     GW -.->|"direct read/write:<br/>seed + 'where is my data'"| APG
     GW -.->|"direct read/write:<br/>seed + 'where is my data'"| AMG
+    GW -.->|"direct read/write:<br/>seed + 'where is my data'"| AMY
+    GW -.->|"read-only:<br/>'where is my data'"| ZOHO
     PROV -.->|"loads /fides-config,<br/>verifies, exits"| FIDES
 
     %% ---- designed, not built ----
@@ -198,19 +213,20 @@ flowchart TB
     class FE,BE,CDB product
     class GW,PKG bridge
     class FIDES,REDIS,WORKER,FDB,PROV engine
-    class APG,AMG data
+    class APG,AMG,AMY,ZOHO data
     class Browser,Ext ext
 ```
 
 ### The point of the diagram, in words
 
-- **The two bold arrows** from `fides-worker` to both databases are the whole
-  product. One request, one email, two unrelated engines — because both datasets
-  declare `identity: email`, and the DSR policy targets **data categories**
+- **The bold arrows** from `fides-worker` to every datastore are the whole
+  product. One request, one email, four unrelated engines — because every dataset
+  declares `identity: email`, and the DSR policy targets **data categories**
   (`user.contact`, `user.name`, `user.device`) rather than table names. A third
   datastore needs annotation, not a policy change.
-- **Four data stores, four jobs.** `cms-db` is the product. `app-postgres` and
-  `app-mongo` are the data being erased. `fides-db` is a dependency's notebook.
+- **Six data stores, four jobs.** `cms-db` is the product. `app-postgres`,
+  `app-mongo`, `app-mysql` and Zoho CRM are the data being erased. `fides-db` is a
+  dependency's notebook.
   Conflating them is the most common misreading of this system.
 - **The dashed arrows are the roadmap.** The frontend still runs on mock data; the
   backend does not yet call the engine; the public API does not exist. Everything

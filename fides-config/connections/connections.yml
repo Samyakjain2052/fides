@@ -60,6 +60,23 @@ connection:
       username: "$APP_MONGO_USER"
       password: "$APP_MONGO_PASSWORD"
 
+  # ---------------------------------------------------------------------------
+  # app-mysql (customer support tickets)
+  # ---------------------------------------------------------------------------
+  - key: app_mysql_connection
+    name: App MySQL Connection
+    description: Demo application's MySQL database (customer support tickets).
+    connection_type: mysql
+    access: write
+    dataset: app_mysql_dataset
+    system_key: app_mysql_system
+    secrets:
+      host: "$APP_MYSQL_HOST"
+      port: "$APP_MYSQL_PORT"
+      dbname: "$APP_MYSQL_DB"
+      username: "$APP_MYSQL_USER"
+      password: "$APP_MYSQL_PASSWORD"
+
 # =============================================================================
 # Fides SaaS ConnectionConfigs — third-party REST APIs (not databases).
 #
@@ -96,19 +113,3 @@ saas_connection:
       # to Fides — see provision.py's `refresh_zoho_access_token()`. There is
       # no ZOHO_CRM_ACCESS_TOKEN in .env; that's intentional.
       access_token: "$ZOHO_CRM_ACCESS_TOKEN"
-  # ---------------------------------------------------------------------------
-  # app-mysql (customer support tickets)
-  # ---------------------------------------------------------------------------
-  - key: app_mysql_connection
-    name: App MySQL Connection
-    description: Demo application's MySQL database (customer support tickets).
-    connection_type: mysql
-    access: write
-    dataset: app_mysql_dataset
-    system_key: app_mysql_system
-    secrets:
-      host: "$APP_MYSQL_HOST"
-      port: "$APP_MYSQL_PORT"
-      dbname: "$APP_MYSQL_DB"
-      username: "$APP_MYSQL_USER"
-      password: "$APP_MYSQL_PASSWORD"
