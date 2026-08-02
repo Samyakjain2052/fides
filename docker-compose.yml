@@ -13,6 +13,7 @@
 #   app-mongo       demo app data: events                  -> localhost:37017
 #   fides-provisioner  one-shot: loads /fides-config into Fides, then exits 0
 #   fastapi-gateway my DSAR API, Swagger at /docs          -> localhost:8000
+#   presidio        PII detection microservice (Presidio)  -> localhost:8001
 #   cms-db          the CMS backend's own Postgres           -> localhost:6543
 #   cms-backend     multi-tenant CMS API, Swagger at /docs   -> localhost:8100
 #   cms-frontend    DataShield CMS (DPDP consent management) -> localhost:5173
@@ -253,6 +254,15 @@ services:
       APP_MONGO_DB: ${APP_MONGO_DB}
       APP_MONGO_USER: ${APP_MONGO_USER}
       APP_MONGO_PASSWORD: ${APP_MONGO_PASSWORD}
+      # Zoho CRM (custom SaaS connector). ZOHO_CRM_DOMAIN is expanded into
+      # connections.yml like the vars above; the CLIENT_ID/SECRET/REFRESH_TOKEN
+      # trio is read directly by refresh_zoho_access_token() in provision.py,
+      # not expanded into any YAML file.
+      ZOHO_CRM_DOMAIN: ${ZOHO_CRM_DOMAIN}
+      ZOHO_CRM_ACCOUNTS_DOMAIN: ${ZOHO_CRM_ACCOUNTS_DOMAIN}
+      ZOHO_CRM_CLIENT_ID: ${ZOHO_CRM_CLIENT_ID}
+      ZOHO_CRM_CLIENT_SECRET: ${ZOHO_CRM_CLIENT_SECRET}
+      ZOHO_CRM_REFRESH_TOKEN: ${ZOHO_CRM_REFRESH_TOKEN}
       APP_MYSQL_HOST: ${APP_MYSQL_HOST}
       APP_MYSQL_PORT: ${APP_MYSQL_PORT}
       APP_MYSQL_DB: ${APP_MYSQL_DB}
@@ -376,6 +386,14 @@ services:
       APP_MONGO_DB: ${APP_MONGO_DB}
       APP_MONGO_USER: ${APP_MONGO_USER}
       APP_MONGO_PASSWORD: ${APP_MONGO_PASSWORD}
+      # Zoho CRM — read directly by app/zoho_client.py so GET /data/subject/{email}
+      # can check Zoho itself, the same way it already checks the two app
+      # databases directly, with no Fides in the path.
+      ZOHO_CRM_DOMAIN: ${ZOHO_CRM_DOMAIN}
+      ZOHO_CRM_ACCOUNTS_DOMAIN: ${ZOHO_CRM_ACCOUNTS_DOMAIN}
+      ZOHO_CRM_CLIENT_ID: ${ZOHO_CRM_CLIENT_ID}
+      ZOHO_CRM_CLIENT_SECRET: ${ZOHO_CRM_CLIENT_SECRET}
+      ZOHO_CRM_REFRESH_TOKEN: ${ZOHO_CRM_REFRESH_TOKEN}
       APP_MYSQL_HOST: ${APP_MYSQL_HOST}
       APP_MYSQL_PORT: ${APP_MYSQL_PORT}
       APP_MYSQL_DB: ${APP_MYSQL_DB}
@@ -410,6 +428,30 @@ services:
       timeout: 10s
       retries: 10
       start_period: 20s
+    restart: unless-stopped
+
+  # ===========================================================================
+  # 5. Presidio-based PII detection microservice
+  # ===========================================================================
+  # Standalone FastAPI wrapper around Presidio (+ custom IN_PAN/IN_AADHAAR
+  # recognizers). Not wired into the DSAR flow yet — exposed standalone so
+  # other services can POST /detect against it.
+  presidio:
+    build:
+      context: ./presidio
+    ports:
+      - "${PRESIDIO_PORT:-8001}:8001"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health',
+          timeout=5).status == 200 else 1)"
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     restart: unless-stopped
 
 volumes:

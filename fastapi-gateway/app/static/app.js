@@ -199,6 +199,7 @@ async function loadHealth() {
     const dbs = h.app_databases || {};
     setPill($("#health-db1"), dbs.app_postgres === "ok" ? "good" : "bad", "db1 postgres");
     setPill($("#health-db2"), dbs.app_mongo === "ok" ? "good" : "bad", "db2 mongo");
+    setPill($("#health-db3"), h.zoho_crm === "ok" ? "good" : "warn", "db3 zoho");
     setPill($("#health-db3"), dbs.app_mysql === "ok" ? "good" : "bad", "db3 mysql");
 
     state.adminUrl = h.fides_admin_url || null;
@@ -268,10 +269,11 @@ async function locate(quiet) {
 
     $("#kpi-total").textContent = data.total_records;
     $("#kpi-total-foot").textContent = data.found
-      ? "across " + data.found_in.length + " database" + (data.found_in.length === 1 ? "" : "s")
+      ? "across " + data.found_in.length + " system" + (data.found_in.length === 1 ? "" : "s")
       : "nothing matches this identity";
     $("#kpi-db1").textContent = data.db1_app_postgres.total;
     $("#kpi-db2").textContent = data.db2_app_mongo.total;
+    $("#kpi-db3").textContent = data.db3_zoho_crm.total;
     $("#kpi-db3").textContent = data.db3_app_mysql.total;
 
     const masked = data.masked_rows_remaining || {};
@@ -283,6 +285,7 @@ async function locate(quiet) {
 
     renderDatabase("#card-db1", data.db1_app_postgres, "db1");
     renderDatabase("#card-db2", data.db2_app_mongo, "db2");
+    renderDatabase("#card-db3", data.db3_zoho_crm, "db3");
     renderDatabase("#card-db3", data.db3_app_mysql, "db3");
 
     const note = $("#locate-note");
@@ -302,6 +305,23 @@ async function locate(quiet) {
 }
 
 /* -------------------------------------------------------------------- DSAR */
+/* Any dataset can show up in an execution log or returned-data block: the two
+   app databases, or a SaaS connector like Zoho CRM. Rather than hardcoding a
+   postgres/mongo binary (which silently mislabeled anything else as "db1
+   postgres"), derive a real label + colour slot from the dataset name so new
+   connectors show up correctly with no code change beyond this map. */
+const SYSTEM_LABELS = {
+  zoho_crm_instance: "Zoho CRM",
+};
+
+function systemMeta(datasetKey) {
+  const key = datasetKey || "";
+  if (key.includes("mongo")) return { cls: "db2", label: "db2 mongo" };
+  if (key.includes("postgres")) return { cls: "db1", label: "db1 postgres" };
+  const label = SYSTEM_LABELS[key] || key.replace(/_/g, " ");
+  return { cls: "db3", label };
+}
+
 /* Fides logs every state change, so a finished collection appears twice:
    `in_processing / starting` and then `complete / success - retrieved N records`.
    Both are real audit entries, but the superseded one is noise in a proof view —
@@ -335,6 +355,9 @@ function renderLog(entries) {
     const tr = el("tr");
 
     const dbCell = el("td");
+    const meta = systemMeta(e.dataset);
+    dbCell.appendChild(el("span", "swatch " + meta.cls));
+    dbCell.appendChild(document.createTextNode(" " + meta.label));
     const [databaseClass, databaseLabel] = databaseDisplay(e.dataset);
     dbCell.appendChild(el("span", "swatch " + databaseClass));
     dbCell.appendChild(document.createTextNode(" " + databaseLabel));
@@ -387,6 +410,9 @@ function renderReturnedData(data) {
     const rows = data[key] || [];
     const block = el("div", "collection");
     const ch = el("div", "collection-head");
+    const meta = systemMeta(key.split(":")[0]);
+    const label = el("span", "name");
+    label.appendChild(el("span", "swatch " + meta.cls));
     const [databaseClass] = databaseDisplay(key);
     const label = el("span", "name");
     label.appendChild(el("span", "swatch " + databaseClass));

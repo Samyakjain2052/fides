@@ -24,9 +24,11 @@
   --hairline: #e1e0d9;
   --border: rgba(11, 11, 11, 0.1);
 
-  /* Entities: the two databases. */
+  /* Entities: the two databases, plus a third slot for non-database
+     connectors (e.g. Zoho CRM) that show up in the same log/data views. */
   --db1: #2a78d6;
   --db2: #eb6834;
+  --db3: #7c5cbf;
 
   /* Reserved status palette. */
   --good: #0ca30c;
@@ -54,6 +56,7 @@
     --border: rgba(255, 255, 255, 0.1);
     --db1: #3987e5;
     --db2: #d95926;
+    --db3: #9575d6;
     --good-ink: #0ca30c;
     --erase-ink: #e66767;
   }
@@ -72,6 +75,7 @@
   --border: rgba(255, 255, 255, 0.1);
   --db1: #3987e5;
   --db2: #d95926;
+  --db3: #9575d6;
   --good-ink: #0ca30c;
   --erase-ink: #e66767;
 }
@@ -264,6 +268,7 @@ a { color: var(--db1); }
 }
 .swatch.db1 { background: var(--db1); }
 .swatch.db2 { background: var(--db2); }
+.swatch.db3 { background: var(--db3); }
 .swatch.db3 { background: #7c4dff; }
 
 /* Proportional figures for standalone values (tabular is for columns). */
@@ -291,6 +296,7 @@ a { color: var(--db1); }
 .db-card { border-top: 3px solid var(--muted); }
 .db-card.db1 { border-top-color: var(--db1); }
 .db-card.db2 { border-top-color: var(--db2); }
+.db-card.db3 { border-top-color: var(--db3); }
 .db-card.db3 { border-top-color: #7c4dff; }
 
 .db-head {

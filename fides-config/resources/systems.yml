@@ -86,6 +86,16 @@ system:
           - app_mongo_dataset
 
   # ---------------------------------------------------------------------------
+  # Zoho CRM — third-party SaaS, reached over its REST API (custom connector)
+  # ---------------------------------------------------------------------------
+  - fides_key: zoho_crm_system
+    name: Zoho CRM
+    description: >-
+      Third-party CRM holding contact records (name/email/phone) for the demo
+      application's customers, kept in sync out-of-band. Connected via a
+      custom Fides SaaS connector since Zoho CRM has no built-in Fides
+      connector (see fides-config/saas/zoho_crm/).
+    system_type: Third Party
   # app-mysql — support tickets
   # ---------------------------------------------------------------------------
   - fides_key: app_mysql_system
@@ -98,11 +108,20 @@ system:
       - fides_key: demo_app
         type: system
     privacy_declarations:
+      - name: Store customer contact records in Zoho CRM
       - name: Store customer support tickets
         data_categories:
           - user.contact.email
           - user.contact.phone_number
           - user.name
+        data_use: essential.service
+        data_subjects:
+          - customer
+        # Links this System to the Dataset that Fides auto-generates when
+        # provision.py instantiates the zoho_crm_connection (see
+        # connections.yml's `saas_connection` block and its `instance_key`).
+        dataset_references:
+          - zoho_crm_instance
           - user.content
         data_use: essential.service
         data_subjects:

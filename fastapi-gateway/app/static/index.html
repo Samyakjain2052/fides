@@ -13,7 +13,7 @@
     <div>
       <h1>DSAR Console</h1>
       <p class="sub">
-        One identity, two independent databases. See where a person's data lives,
+        One identity, three independent systems. See where a person's data lives,
         then have Fides return it or erase it — with a per-collection log as proof.
       </p>
     </div>
@@ -55,7 +55,7 @@
       <div class="tile hero">
         <div class="label">Records found for this identity</div>
         <div class="value" id="kpi-total">—</div>
-        <div class="foot" id="kpi-total-foot">across both databases</div>
+        <div class="foot" id="kpi-total-foot">across all three systems</div>
       </div>
       <div class="tile">
         <div class="label"><span class="swatch db1"></span>db1 · app-postgres</div>
@@ -68,6 +68,9 @@
         <div class="foot" id="kpi-db2-foot">events</div>
       </div>
       <div class="tile">
+        <div class="label"><span class="swatch db3"></span>db3 · Zoho CRM</div>
+        <div class="value" id="kpi-db3">—</div>
+        <div class="foot" id="kpi-db3-foot">contacts</div>
         <div class="label"><span class="swatch db3"></span>db3 · app-mysql</div>
         <div class="value" id="kpi-db3">—</div>
         <div class="foot" id="kpi-db3-foot">support tickets</div>
@@ -93,6 +96,7 @@
       <div class="legend">
         <span class="item"><span class="swatch db1"></span> db1 — app-postgres (PostgreSQL)</span>
         <span class="item"><span class="swatch db2"></span> db2 — app-mongo (MongoDB)</span>
+        <span class="item"><span class="swatch db3"></span> db3 — Zoho CRM (SaaS)</span>
         <span class="item"><span class="swatch db3"></span> db3 — app-mysql (MySQL)</span>
         <span class="item"><span class="col-cat erasable" style="margin:0">user.contact.email</span> = a category the erasure policy nulls</span>
         <span class="item"><span class="col-cat" style="margin:0">system.operations</span> = kept on erasure</span>
@@ -100,8 +104,8 @@
       <p class="hint">
         Column subtitles are the Fides data categories from
         <span class="mono">fides-config/resources/</span>. The erasure policy targets
-        categories, not columns — which is how one request reaches both databases
-        without either being named in it.
+        categories, not columns — which is how one request reaches all three systems
+        without any of them being named in it.
       </p>
     </div>
   </section>

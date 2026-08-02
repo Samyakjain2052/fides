@@ -1,0 +1,99 @@
+##
+# Custom SaaS connector template for Zoho CRM.
+#
+# Fides has NO built-in Zoho CRM connector (unlike Stripe/HubSpot/Salesforce/
+# etc. — verified against the ethyca/fides connector registry). Zoho CRM is a
+# REST API, not a database, so it can't use a `postgres`/`mongodb` connection
+# like app-postgres/app-mongo do. Instead this file + dataset.yml describe a
+# `saas`-type connector: connector_params (what secrets it needs), client_config
+# (how to reach + authenticate to the API), and endpoints (which HTTP calls
+# satisfy an access or erasure request).
+#
+# This file + dataset.yml get zipped and POSTed to
+# /api/v1/connector-templates/register by provision.py, which is what teaches
+# a stock Fides server how to talk to Zoho CRM at all. See provision.py's
+# `register_saas_connector_templates()`.
+#
+# Auth note: Zoho CRM requires the header `Authorization: Zoho-oauthtoken
+# <token>` — NOT the standard `Bearer <token>` that Fides' built-in
+# oauth2_authorization_code/oauth2_client_credentials strategies hardcode. So
+# this uses the `api_key` strategy (which lets us control the header's exact
+# format) with a plain `access_token` secret, and provision.py refreshes that
+# access token from the (non-expiring) Zoho refresh token before every run,
+# rather than relying on Fides' built-in OAuth2 token-refresh machinery.
+##
+saas_config:
+  fides_key: <instance_fides_key>
+  name: Zoho CRM
+  type: zoho_crm
+  description: A custom connector for Zoho CRM Contacts, used for DSAR access and erasure requests.
+  version: 0.1.0
+
+  connector_params:
+    - name: domain
+      label: API domain
+      description: >-
+        Your Zoho CRM API domain. Region-specific: www.zohoapis.com (US),
+        www.zohoapis.eu (EU), www.zohoapis.in (IN), www.zohoapis.com.cn (CN),
+        www.zohoapis.jp (JP), www.zohoapis.com.au (AU).
+      default_value: www.zohoapis.com
+    - name: access_token
+      label: Access token
+      description: >-
+        Short-lived Zoho OAuth2 access token. Refreshed automatically by the
+        provisioner from the long-lived refresh token before each run — do not
+        set this by hand.
+      sensitive: True
+
+  client_config:
+    protocol: https
+    host: <domain>
+    authentication:
+      strategy: api_key
+      configuration:
+        headers:
+          - name: Authorization
+            value: Zoho-oauthtoken <access_token>
+
+  test_request:
+    method: GET
+    path: /crm/v6/org
+
+  endpoints:
+    - name: contacts
+      requests:
+        read:
+          method: GET
+          path: /crm/v6/Contacts/search
+          query_params:
+            - name: email
+              value: <email>
+          param_values:
+            - name: email
+              identity: email
+          data_path: data
+          # Zoho returns 204 No Content (no JSON body) when the search finds
+          # no matching contact — that's a valid "no data" result, not a
+          # connector failure.
+          ignore_errors: [204]
+        update:
+          method: PUT
+          path: /crm/v6/Contacts/<contact_id>
+          headers:
+            - name: Content-Type
+              value: application/json
+          param_values:
+            - name: contact_id
+              references:
+                - dataset: <instance_fides_key>
+                  field: contacts.id
+                  direction: from
+          body: |
+            {
+              "data": [
+                {
+                  "id": "<contact_id>",
+                  <masked_object_fields>
+                }
+              ]
+            }
