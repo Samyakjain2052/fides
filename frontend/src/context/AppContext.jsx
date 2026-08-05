@@ -69,6 +69,14 @@ export function AppProvider({ children }) {
       .then((session) => {
         if (cancelled) return;
         if (session) {
+          // Set the API layer's identity BEFORE the routed screens mount.
+          //
+          // This was a useEffect on [user]. React runs child effects before
+          // parent effects, so the DSAR status screen queried its requests
+          // while the API layer still held the placeholder identity, found
+          // none, and reported "you haven't submitted any requests" — for a
+          // request that had genuinely executed against Fides.
+          setSubjectIdentity(session.user);
           setUser(session.user);
           setCapabilities(session.capabilities || []);
         }
@@ -84,13 +92,6 @@ export function AppProvider({ children }) {
   useEffect(() => {
     localStorage.removeItem(STORE_USER);
   }, []);
-
-  // Keep the API layer's Data Principal in step with the real session. The DSAR
-  // path executes for real now, so acting as the wrong identity is not a
-  // cosmetic bug — it would run one person's erasure against another's records.
-  useEffect(() => {
-    setSubjectIdentity(user);
-  }, [user]);
 
   useEffect(() => {
     localStorage.setItem(STORE_LANG, language);
@@ -115,12 +116,14 @@ export function AppProvider({ children }) {
       capabilities,
       /** Adopt a session returned by login or register. */
       signIn: (session) => {
+        setSubjectIdentity(session.user);
         setUser(session.user);
         setCapabilities(session.capabilities || []);
       },
       signOut: async () => {
         await apiLogout();   // revokes the whole refresh-token family server-side
         clearSession();
+        setSubjectIdentity(null);
         setUser(null);
         setCapabilities([]);
       },

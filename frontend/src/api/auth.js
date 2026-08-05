@@ -141,6 +141,29 @@ export async function restoreSession() {
   }
 }
 
+/**
+ * Authenticated call to any v1 endpoint, with one automatic retry after a
+ * token refresh.
+ *
+ * The access token lives 15 minutes and only in memory. Without this retry,
+ * every screen left open for a quarter of an hour would start failing with a
+ * 401 that a page reload silently fixes — the kind of bug that gets reported as
+ * "it logs me out randomly" and is miserable to reproduce.
+ *
+ * The retry happens exactly once. If the refresh itself fails the session is
+ * genuinely over, and looping would just turn that into a hang.
+ */
+export async function apiFetch(path, options = {}) {
+  try {
+    return await call(path, { ...options, auth: true });
+  } catch (err) {
+    if (err.status !== 401) throw err;
+    const session = await restoreSession();
+    if (!session) throw err;
+    return call(path, { ...options, auth: true });
+  }
+}
+
 export async function logout() {
   try {
     await call("/auth/logout", { method: "POST", auth: true });

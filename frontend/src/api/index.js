@@ -50,6 +50,9 @@ export function setSubjectIdentity(user) {
   subject = user
     ? { id: user.id, name: user.name, email: user.email, language: user.language || "en" }
     : { ...MOCK_USER };
+  // Re-read for whoever is now signed in; signing out must not leave the
+  // previous account's requests on screen.
+  loadStoredDsar();
 }
 
 export function subjectIdentity() {
@@ -122,6 +125,42 @@ export const MOCK_CONSENTS = clone(consents);
 // ones, and made the dashboard's "open requests" count — which is presented as
 // a real figure — a mix of the two. An empty queue is the honest starting state.
 let dsarRequests = [];
+
+// Requests survive a page load.
+//
+// Everything else in this file is in-memory sample data, and losing it on reload
+// is fine. Data requests are not: they execute for real against Fides, so after
+// submitting one and reloading, the app would say "you haven't submitted any
+// requests yet" while an erasure was genuinely running against the user's
+// records. Told they had made no request, while their data was being deleted.
+//
+// The gateway has no list-by-identity endpoint (only GET /dsar/{id}), so the
+// browser has to remember the ids it created. Scoped per subject so two accounts
+// on one machine cannot see each other's requests. Statuses are still read back
+// from the gateway on every load — this stores references, not truth.
+//
+// The real fix is server-side persistence in backend Phase 5.
+function dsarStoreKey() {
+  return `datashield.dsar.${subject.id || "anon"}`;
+}
+
+function loadStoredDsar() {
+  try {
+    const raw = localStorage.getItem(dsarStoreKey());
+    dsarRequests = raw ? JSON.parse(raw) : [];
+  } catch {
+    dsarRequests = [];
+  }
+}
+
+function persistDsar() {
+  try {
+    localStorage.setItem(dsarStoreKey(), JSON.stringify(dsarRequests));
+  } catch {
+    // Private browsing, quota, a disabled store — none of it should break a
+    // submission that already succeeded server-side.
+  }
+}
 export const MOCK_DSAR_REQUESTS = clone(dsarRequests);
 
 let grievances = [
@@ -476,6 +515,7 @@ export async function submitDSAR({ type, verification, details = {} }) {
       verification, details, real: true,
     };
     dsarRequests = [row, ...dsarRequests];
+    persistDsar();
     appendAuditLog({ action_type: "dsar_submitted", purpose_id: "-", consent_status: type });
     return clone(row);
   }
@@ -497,6 +537,7 @@ export async function submitDSAR({ type, verification, details = {} }) {
     ...details,
   };
   dsarRequests = [row, ...dsarRequests];
+  persistDsar();
   appendAuditLog({ action_type: "dsar_submitted", purpose_id: "-", consent_status: type });
   notifications = [
     { id: "nt" + (notifications.length + 1), audience: "user", to: subject.email, subject: `We received your ${type} request ${row.reference}`, scenario: "dsar_update", channel: "Email", status: "delivered", sent_at: submitted, language: "English" },
@@ -507,6 +548,10 @@ export async function submitDSAR({ type, verification, details = {} }) {
 
 export async function getDSARRequests({ userId } = {}) {
   await delay();
+  // Re-read from storage rather than trusting module state to be warm. Ordering
+  // between a screen's effect and the session's is not something this function
+  // should have to know about.
+  loadStoredDsar();
   let rows = clone(dsarRequests);
   if (userId) rows = rows.filter((r) => r.user_id === userId);
 
@@ -535,6 +580,7 @@ export async function updateDSAR(id, patch) {
   if (!row) throw new Error("Request not found.");
   Object.assign(row, patch);
   if (patch.status === "completed") row.resolved_at = nowIso();
+  persistDsar();
   const audit = appendAuditLog({
     action_type: "dsar_" + (patch.status || "updated"),
     user_id: row.user_id,
@@ -555,6 +601,7 @@ export async function prepareDataExport(id) {
   await delay(900);
   const row = dsarRequests.find((r) => r.id === id);
   if (row) row.export_url = "#mock-export-" + row.reference;
+  persistDsar();
   appendAuditLog({ action_type: "dsar_export_prepared", user_id: row?.user_id, initiator: "Data Fiduciary" });
   return { ready: true, url: row?.export_url };
 }

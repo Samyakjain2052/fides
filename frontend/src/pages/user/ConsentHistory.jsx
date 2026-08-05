@@ -4,7 +4,8 @@
 // The rows come from the audit trail — the same source the regulator sees.
 // ============================================================================
 import { useEffect, useMemo, useState } from "react";
-import { getConsentHistory, MOCK_NOTICES } from "../../api";
+import { consentHistoryRows } from "../../api/consent";
+import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/common/StatusBadge";
 import AuditHashBadge from "../../components/common/AuditHashBadge";
 
@@ -16,7 +17,9 @@ const ACTION_LABEL = {
 };
 
 export default function ConsentHistory() {
+  const { user } = useApp();
   const [rows, setRows] = useState([]);
+  const [purposes, setPurposes] = useState([]);
   const [purpose, setPurpose] = useState("");
   const [status, setStatus] = useState("");
   const [from, setFrom] = useState("");
@@ -24,8 +27,16 @@ export default function ConsentHistory() {
   const [q, setQ] = useState("");
 
   useEffect(() => {
-    getConsentHistory().then(setRows);
-  }, []);
+    // Read from the audit chain. Failure leaves the table empty rather than
+    // crashing the screen — an empty history is a legitimate state for a new
+    // account, and a stack trace would not tell the reader anything useful.
+    consentHistoryRows(user)
+      .then(({ rows: r, purposes: p }) => {
+        setRows(r);
+        setPurposes(p);
+      })
+      .catch(() => setRows([]));
+  }, [user]);
 
   const filtered = useMemo(
     () =>
@@ -98,8 +109,8 @@ export default function ConsentHistory() {
           <label className="label" htmlFor="f-purpose">Purpose</label>
           <select id="f-purpose" className="input" value={purpose} onChange={(e) => setPurpose(e.target.value)}>
             <option value="">All purposes</option>
-            {MOCK_NOTICES.map((n) => (
-              <option key={n.id} value={n.id}>{n.purpose}</option>
+            {purposes.map((n) => (
+              <option key={n.id} value={n.key}>{n.name}</option>
             ))}
           </select>
         </div>

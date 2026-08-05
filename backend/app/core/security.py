@@ -8,6 +8,7 @@ hand over a single working credential.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -140,21 +141,53 @@ def verify_refresh_token(raw: str, token_hash: str) -> bool:
 # --------------------------------------------------------------------------
 # API keys
 # --------------------------------------------------------------------------
-def generate_api_key(environment: str = "live") -> tuple[str, str, str]:
+def generate_api_key(
+    environment: str = "live", tenant_id: uuid.UUID | None = None
+) -> tuple[str, str, str]:
     """Returns (full_key, prefix, key_hash).
 
-        ds_live_<43 urlsafe chars>
+        ds_live_<tenant-hex>.<43 urlsafe chars>
+
+    **The tenant travels in the key**, for the same reason it travels in a refresh
+    token: `api_keys` is under row-level security, so a lookup made before any
+    tenant context exists matches nothing. Without the tenant in the key, API-key
+    authentication cannot work at all — the query silently returns zero rows and
+    every call 401s.
+
+    Carrying it in the clear is safe. The secret half is what authenticates, and
+    the table is still RLS-protected: claiming someone else's tenant just means
+    the lookup hash matches no row there.
 
     The prefix is stored so the console can show which key is which, and so a
-    leaked key is greppable in logs and public repos. The secret half is shown
-    exactly once, at creation, and only its hash is kept.
+    leaked key is greppable in logs and public repos. The secret is shown exactly
+    once, at creation, and only its hash is kept.
     """
     if environment not in ("live", "test"):
         raise ValueError("environment must be 'live' or 'test'")
     secret = secrets.token_urlsafe(32)
     prefix = f"{API_KEY_PREFIX}_{environment}"
-    full = f"{prefix}_{secret}"
+    body = f"{tenant_id.hex}.{secret}" if tenant_id else secret
+    full = f"{prefix}_{body}"
     return full, prefix, _hasher.hash(full)
+
+
+def parse_api_key(full_key: str) -> tuple[uuid.UUID | None, str]:
+    """Pull the tenant out of a key without trusting it.
+
+    Returns (tenant_id or None, full_key). A malformed or legacy key yields None
+    rather than raising: the caller then fails on the lookup, which is the same
+    outcome by a less surprising route.
+    """
+    try:
+        _, _, body = full_key.partition(f"{API_KEY_PREFIX}_")
+        env_and_rest = body.split("_", 1)
+        candidate = env_and_rest[1] if len(env_and_rest) == 2 else ""
+        tenant_hex, sep, _secret = candidate.partition(".")
+        if not sep:
+            return None, full_key
+        return uuid.UUID(hex=tenant_hex), full_key
+    except (ValueError, IndexError):
+        return None, full_key
 
 
 def verify_api_key(full_key: str, key_hash: str) -> bool:
@@ -209,3 +242,166 @@ def audit_hash(*, tenant_id: str, seq: int, action: str, payload: Any, prev_hash
 
 
 GENESIS_HASH = "0" * 64
+
+
+# --------------------------------------------------------------------------
+# Publishable keys
+#
+# Separate helpers from the secret-key ones above, so the two can never be
+# confused at a call site. Different prefix, different verification story.
+# --------------------------------------------------------------------------
+PUBLISHABLE_KEY_PREFIX = "pk"
+
+
+def generate_publishable_key(
+    environment: str = "live", *, tenant_id: uuid.UUID
+) -> tuple[str, str, str]:
+    """Returns (full_key, prefix, lookup_hash).
+
+        pk_live_<tenant-hex>.<32 urlsafe chars>
+
+    The tenant travels in the key for the same reason it does in a refresh token
+    and a secret API key: the lookup happens before any tenant context exists,
+    and `publishable_keys` is under RLS, so a query with no context matches
+    nothing. This project has now hit that same bug twice; the pattern is
+    deliberate rather than incidental.
+
+    No Argon2 hash is returned, unlike `generate_api_key`. This key is published
+    in a browser bundle — hashing it would protect nothing and would stop the
+    console from showing it again, which customers need in order to install it.
+    """
+    if environment not in ("live", "test"):
+        raise ValueError("environment must be 'live' or 'test'")
+    secret = secrets.token_urlsafe(24)
+    prefix = f"{PUBLISHABLE_KEY_PREFIX}_{environment}"
+    full = f"{prefix}_{tenant_id.hex}.{secret}"
+    return full, prefix, publishable_lookup_hash(full)
+
+
+def publishable_lookup_hash(full_key: str) -> str:
+    """Keyed digest for an indexed lookup, mirroring `api_key_lookup_hash`.
+
+    Not a security control here — the key is public — but keeping the lookup the
+    same shape as the secret-key path means one mental model for both.
+    """
+    return hmac.new(
+        _settings.jwt_secret.encode(), full_key.encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def parse_publishable_key(full_key: str) -> uuid.UUID | None:
+    """Tenant out of the key, or None. Reading it is not trusting it — the row
+    still has to exist in that tenant."""
+    try:
+        if not full_key.startswith(f"{PUBLISHABLE_KEY_PREFIX}_"):
+            return None
+        _, _, rest = full_key.partition(f"{PUBLISHABLE_KEY_PREFIX}_")
+        _env, _, candidate = rest.partition("_")
+        tenant_hex, sep, _secret = candidate.partition(".")
+        if not sep:
+            return None
+        return uuid.UUID(hex=tenant_hex)
+    except (ValueError, IndexError):
+        return None
+
+
+def hash_ip(ip: str | None) -> str | None:
+    """Keyed HMAC over a client IP.
+
+    Raw IPs are not stored: an IP is personal data, and a consent-collection log
+    is the wrong place to build a second identifier for everyone who ever saw a
+    banner. Keyed rather than a bare SHA-256 because the IPv4 space is small
+    enough to enumerate — an unkeyed digest is reversible in practice.
+
+    Correlation still works (the same IP hashes the same way), which is what
+    abuse investigation actually needs.
+    """
+    if not ip:
+        return None
+    return hmac.new(_settings.jwt_secret.encode(), ip.encode(), hashlib.sha256).hexdigest()
+
+
+# --------------------------------------------------------------------------
+# Signed consent tokens (the step-up path)
+#
+# For sensitive-category consent, an asserted principal_ref is not good enough:
+# the page could claim to be anyone. The integrator's own server — which has
+# actually authenticated the person — mints a short-lived token binding the
+# principal_ref, and the banner submits it alongside the consent.
+#
+# Format: <base64url(payload_json)>.<base64url(hmac_sha256)>
+#
+# Deliberately not a JWT. A JWT drags in algorithm negotiation, and `alg: none`
+# plus a permissive library is a well-worn way to forge one. One algorithm, one
+# secret, no negotiation.
+# --------------------------------------------------------------------------
+CONSENT_TOKEN_TTL_SECONDS = 300
+
+
+class ConsentTokenError(Exception):
+    """Invalid, expired, or not for this principal."""
+
+
+def _b64u(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _b64u_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def mint_consent_token(
+    *, secret: str, principal_ref: str, ttl_seconds: int = CONSENT_TOKEN_TTL_SECONDS
+) -> str:
+    """What an integrator's server calls. Also used by the tests.
+
+    TODO(rotation): one secret per tenant, with no versioning. Rotating it
+    invalidates every token in flight — acceptable at a 5-minute TTL, but a
+    `kid` in the payload and two live secrets would make rotation seamless.
+    Deferred rather than half-built.
+    """
+    payload = {
+        "principal_ref": principal_ref,
+        "exp": int(datetime.now(UTC).timestamp()) + ttl_seconds,
+        # Not for replay prevention — the TTL and idempotency key handle that —
+        # but so two tokens for the same person in the same second differ.
+        "nonce": secrets.token_urlsafe(8),
+    }
+    body = _b64u(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+    sig = hmac.new(secret.encode(), body.encode(), hashlib.sha256).digest()
+    return f"{body}.{_b64u(sig)}"
+
+
+def verify_consent_token(*, secret: str, token: str) -> str:
+    """Returns the bound principal_ref, or raises ConsentTokenError.
+
+    Signature is checked BEFORE the payload is trusted for anything, and with a
+    constant-time compare: a timing-leaky comparison on a signature is how
+    forgery becomes practical.
+    """
+    try:
+        body, _, provided = token.partition(".")
+        if not body or not provided:
+            raise ConsentTokenError("Malformed consent token.")
+
+        expected = hmac.new(secret.encode(), body.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(_b64u_decode(provided), expected):
+            raise ConsentTokenError("Consent token signature does not verify.")
+
+        payload = json.loads(_b64u_decode(body))
+    except ConsentTokenError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - any decode failure is a bad token
+        raise ConsentTokenError("Malformed consent token.") from exc
+
+    if int(payload.get("exp", 0)) <= int(datetime.now(UTC).timestamp()):
+        raise ConsentTokenError("Consent token has expired.")
+
+    principal_ref = payload.get("principal_ref")
+    if not principal_ref:
+        raise ConsentTokenError("Consent token does not bind a principal.")
+    return str(principal_ref)
+
+
+def generate_signing_secret() -> str:
+    return secrets.token_urlsafe(32)

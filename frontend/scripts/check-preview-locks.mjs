@@ -15,10 +15,12 @@ const ROOT = new URL("..", import.meta.url).pathname;
 
 // Mutating API functions -> the module whose status governs them.
 const MUTATIONS = {
-  updateConsent: "consent",
-  saveConsentChoices: "consent",
-  saveCookiePreferences: "consent",
-  submitGuardianConsent: "consent",
+  // updateConsent is gone from the pages: /user/preferences now calls the real
+  // API in src/api/consent.js. The three below still write to the mock, and
+  // belong to the still-preview public surfaces.
+  saveConsentChoices: "consent_surfaces",
+  saveCookiePreferences: "consent_surfaces",
+  submitGuardianConsent: "consent_surfaces",
   submitGrievance: "grievance",
   submitGrievanceFeedback: "grievance",
   updateGrievance: "grievance",

@@ -227,6 +227,13 @@ async def register_tenant(
         payload={"role": admin.role, "first_admin": True},
     )
 
+    # Starter purposes and published notices, so the consent module can actually
+    # be used the moment someone signs in. Configuration only — no consents are
+    # created, because a consent has to be an act by a person.
+    from app.services import notice_service
+
+    await notice_service.seed_default_purposes(session, tenant_id=tenant.id, actor=actor)
+
     logger.info("tenant registered", extra={"context": {"slug": chosen}})
     return Registration(tenant=tenant, admin=admin)
 

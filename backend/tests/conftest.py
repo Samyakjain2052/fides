@@ -64,7 +64,12 @@ async def clean_db(owner_engine):
     """
     async with owner_engine.begin() as conn:
         await conn.execute(text("ALTER TABLE audit_events DISABLE TRIGGER audit_events_no_update_delete"))
-        await conn.execute(text("TRUNCATE audit_events, refresh_tokens, api_keys, users, tenants CASCADE"))
+        await conn.execute(text(
+                "TRUNCATE audit_events, refresh_tokens, api_keys, "
+                "idempotency_keys, api_request_log, consent_provenance, "
+                "publishable_keys, consents, notices, data_principals, purposes, "
+                "users, tenants CASCADE"
+            ))
         await conn.execute(text("ALTER TABLE audit_events ENABLE TRIGGER audit_events_no_update_delete"))
     yield
 

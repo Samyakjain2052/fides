@@ -101,12 +101,29 @@ def role_can(role: Role | str, capability: Capability) -> bool:
 # --------------------------------------------------------------------------
 class Scope(StrEnum):
     CONSENT_READ = "consent:read"
-    CONSENT_WRITE = "consent:write"
+
+    # Collect and withdraw are SEPARATE scopes, and the split is the point.
+    #
+    # A single `consent:write` let one credential both record and destroy consent.
+    # That is tolerable for a secret server-side key and unacceptable for a
+    # publishable key sitting in a browser bundle: forging a consent is bad, but
+    # withdrawing a real one is worse — it deletes genuine evidence and triggers
+    # the customer's downstream processing stops for a person who never asked.
+    #
+    # Publishable keys therefore get CONSENT_COLLECT and nothing else.
+    CONSENT_COLLECT = "consent:collect"
+    CONSENT_WITHDRAW = "consent:withdraw"
+
     DSAR_WRITE = "dsar:write"
     PRINCIPAL_READ = "principal:read"
 
 
 ALL_SCOPES = frozenset(Scope)
+
+# What a publishable key may ever hold. Not a default that can be widened at the
+# call site — a ceiling, enforced when the key is created, so no amount of
+# console misconfiguration can put a withdraw capability in a browser bundle.
+PUBLISHABLE_SCOPES = frozenset({Scope.CONSENT_COLLECT})
 
 
 def validate_scopes(requested: list[str]) -> list[Scope]:

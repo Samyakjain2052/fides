@@ -13,8 +13,18 @@ from app.core.errors import Conflict
 from app.core.permissions import Capability
 from app.models.user import User
 from app.schemas.auth import UserOut
-from app.schemas.tenant import ApiKeyCreate, ApiKeyCreated, ApiKeyOut, RoleChange, UserCreate
-from app.services import api_key_service, tenant_service
+from app.models.publishable_key import PublishableKey
+from app.schemas.tenant import (
+    ApiKeyCreate,
+    ApiKeyCreated,
+    ApiKeyOut,
+    ConsentTokenSecretOut,
+    PublishableKeyCreate,
+    PublishableKeyOut,
+    RoleChange,
+    UserCreate,
+)
+from app.services import api_key_service, publishable_key_service, tenant_service
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -117,3 +127,87 @@ async def revoke_api_key(
         current.session, tenant_id=current.tenant_id, key_id=key_id, actor=current.actor
     )
     return ApiKeyOut.model_validate(row)
+
+
+# --------------------------------------------------------------------------- #
+# Publishable keys — browser-safe, collect-only
+# --------------------------------------------------------------------------- #
+
+@router.get(
+    "/publishable-keys", response_model=list[PublishableKeyOut],
+    summary="List publishable keys",
+)
+async def list_publishable_keys(
+    current: Annotated[CurrentUser, Depends(require(Capability.USER_MANAGE))],
+) -> list[PublishableKey]:
+    return await publishable_key_service.list_keys(current.session, current.tenant_id)
+
+
+@router.post(
+    "/publishable-keys", response_model=PublishableKeyOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Issue a publishable key for a consent banner",
+)
+async def create_publishable_key(
+    body: PublishableKeyCreate,
+    current: Annotated[CurrentUser, Depends(require(Capability.USER_MANAGE))],
+) -> PublishableKey:
+    """Returns the key in full, and will again on every list.
+
+    That is the difference from a secret key: this one is designed to be published
+    in a page, so hiding it after creation would protect nothing and would just
+    make reinstalling a banner require issuing a new key.
+    """
+    row, _full = await publishable_key_service.create_key(
+        current.session,
+        tenant_id=current.tenant_id,
+        actor=current.actor,
+        name=body.name,
+        allowed_origins=body.allowed_origins,
+        environment=body.environment,
+        rate_limit_per_minute=body.rate_limit_per_minute,
+        rate_limit_per_ip_per_minute=body.rate_limit_per_ip_per_minute,
+        require_signed_token=body.require_signed_token,
+    )
+    return row
+
+
+@router.post(
+    "/publishable-keys/{key_id}/revoke", response_model=PublishableKeyOut,
+    summary="Revoke a publishable key",
+)
+async def revoke_publishable_key(
+    key_id: uuid.UUID,
+    current: Annotated[CurrentUser, Depends(require(Capability.USER_MANAGE))],
+) -> PublishableKey:
+    return await publishable_key_service.revoke_key(
+        current.session, tenant_id=current.tenant_id, key_id=key_id, actor=current.actor
+    )
+
+
+@router.get(
+    "/consent-token-secret", response_model=ConsentTokenSecretOut,
+    summary="The signing secret for the signed-token step-up",
+)
+async def consent_token_secret(
+    current: Annotated[CurrentUser, Depends(require(Capability.USER_MANAGE))],
+) -> ConsentTokenSecretOut:
+    """A real secret — it belongs on the integrator's server, never in a page.
+
+    Minted on the first publishable key so the step-up needs no separate setup.
+    """
+    from sqlalchemy import select as _select
+
+    from app.core.security import CONSENT_TOKEN_TTL_SECONDS, generate_signing_secret
+    from app.models.tenant import Tenant
+
+    tenant = await current.session.scalar(
+        _select(Tenant).where(Tenant.id == current.tenant_id)
+    )
+    if tenant.consent_token_secret is None:
+        tenant.consent_token_secret = generate_signing_secret()
+        await current.session.flush()
+    return ConsentTokenSecretOut(
+        secret=tenant.consent_token_secret,
+        token_ttl_seconds=CONSENT_TOKEN_TTL_SECONDS,
+    )

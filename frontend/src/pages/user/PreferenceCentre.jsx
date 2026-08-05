@@ -1,15 +1,20 @@
 // ============================================================================
 // Preference Centre (/user/preferences)
-// Where a user manages consents they already gave. Filter tabs, one card per
-// consent, withdraw behind a ConfirmModal that spells out the consequences.
+//
+// Real, as of Phase 3: purposes, published notice versions and consents all come
+// from PostgreSQL, and every change writes an entry to the tamper-evident audit
+// chain.
+//
+// One row per **purpose**, not per consent — including purposes never answered.
+// A preference centre that only lists existing consents cannot be used to give
+// one, which would quietly make "withdraw" the only available action.
 // ============================================================================
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getConsents, getNotices, updateConsent } from "../../api";
+import { grantConsent, preferenceCentre, withdrawConsent } from "../../api/consent";
 import { useApp } from "../../context/AppContext";
 import ConsentCard from "../../components/common/ConsentCard";
 import ConfirmModal from "../../components/common/ConfirmModal";
-import { previewLock } from "../../config/modules";
 
 const TABS = [
   { id: "all", label: "All" },
@@ -18,65 +23,82 @@ const TABS = [
   { id: "expiring", label: "Expiring Soon" },
 ];
 
-const DAY = 864e5;
-
 export default function PreferenceCentre() {
-  const { t, notify } = useApp();
+  const { t, notify, user } = useApp();
   const navigate = useNavigate();
-  const [notices, setNotices] = useState([]);
-  const [consents, setConsents] = useState([]);
+  const [principal, setPrincipal] = useState(null);
+  const [rows, setRows] = useState([]);
   const [tab, setTab] = useState("all");
-  const [pending, setPending] = useState(null); // the consent awaiting confirmation
+  const [pending, setPending] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [lastAudit, setLastAudit] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  const load = () => Promise.all([getNotices(), getConsents()]).then(([n, c]) => {
-    setNotices(n);
-    setConsents(c);
-  });
+  const load = useCallback(async () => {
+    try {
+      const { principal: p, rows: r } = await preferenceCentre(user);
+      setPrincipal(p);
+      setRows(r);
+      setError(null);
+    } catch (e) {
+      // Say what failed. A blank screen with no explanation is the version of
+      // this that gets reported as "the page is broken".
+      setError(e.message || "Could not load your consents.");
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
-  const rows = useMemo(
+  const filtered = useMemo(
     () =>
-      consents.map((c) => {
-        const notice = notices.find((n) => n.id === c.notice_id);
-        const days = c.expires_at ? Math.ceil((new Date(c.expires_at) - Date.now()) / DAY) : null;
-        return { consent: c, notice, days };
-      }).filter((r) => r.notice),
-    [consents, notices]
+      rows.filter(({ consent, daysToExpiry }) => {
+        if (tab === "active") return consent?.status === "active";
+        if (tab === "withdrawn") return consent?.status === "withdrawn";
+        if (tab === "expiring")
+          return consent?.status === "active" && daysToExpiry !== null && daysToExpiry < 30;
+        return true;
+      }),
+    [rows, tab]
   );
 
-  const filtered = rows.filter(({ consent, days }) => {
-    if (tab === "active") return consent.status === "active";
-    if (tab === "withdrawn") return consent.status === "withdrawn";
-    if (tab === "expiring") return consent.status === "active" && days !== null && days < 30;
-    return true;
-  });
-
   const requestChange = (row, nextValue) => {
-    // Turning a consent ON is not destructive — do it immediately.
+    // Giving consent is not destructive — do it immediately.
     if (nextValue) {
-      apply(row.consent.id, "active");
+      apply(row, "active");
       return;
     }
-    // Turning it OFF is destructive — confirm, with consequences.
+    // Withdrawing is — confirm, with the consequences spelled out.
     setPending(row);
   };
 
-  const apply = async (consentId, status) => {
+  const apply = async (row, status) => {
     setBusy(true);
     try {
-      const res = await updateConsent(consentId, status);
-      setLastAudit(res.audit);
+      if (status === "withdrawn") {
+        await withdrawConsent({ principalId: principal.id, purposeId: row.purpose.id });
+        notify("Consent withdrawn. An audit entry has been recorded.");
+      } else {
+        await grantConsent({
+          principalId: principal.id,
+          purposeId: row.purpose.id,
+          // The version on screen, not "whatever is current when the request
+          // lands" — those differ if someone publishes while this page is open.
+          noticeId: row.currentNotice?.id,
+          method: "checkbox",
+          source: "preference-centre",
+        });
+        notify("Consent recorded. An audit entry has been written.");
+      }
       await load();
-      notify(
-        status === "withdrawn"
-          ? "Consent withdrawn. An audit entry has been recorded."
-          : "Consent re-given. An audit entry has been recorded."
-      );
+    } catch (e) {
+      // The server refuses some changes for lawful reasons — a mandatory
+      // purpose, a purpose with no published notice. Show the reason it gave
+      // rather than a generic failure.
+      notify(e.message || "That change could not be recorded.", "error");
     } finally {
       setBusy(false);
       setPending(null);
@@ -84,11 +106,23 @@ export default function PreferenceCentre() {
   };
 
   const downloadAll = () => {
-    // Client-side CSV so the button does something real without a backend.
-    const header = "reference,purpose,status,given_at,expires_at,withdrawn_at,language,version,method";
-    const lines = consents.map((c) =>
-      [c.id, c.purpose, c.status, c.given_at, c.expires_at || "", c.withdrawn_at || "", c.language, c.version, c.method].join(",")
-    );
+    const header =
+      "purpose_key,purpose,status,given_at,expires_at,withdrawn_at,language,notice_version,method";
+    const lines = rows
+      .filter((r) => r.consent)
+      .map((r) =>
+        [
+          r.purpose.key,
+          r.purpose.name,
+          r.consent.status,
+          r.consent.given_at || "",
+          r.consent.expires_at || "",
+          r.consent.withdrawn_at || "",
+          r.consent.language,
+          r.consent.notice_version,
+          r.consent.method,
+        ].join(",")
+      );
     const blob = new Blob([[header, ...lines].join("\n")], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -98,6 +132,20 @@ export default function PreferenceCentre() {
     URL.revokeObjectURL(url);
     notify("Your consent record has been downloaded.", "info");
   };
+
+  if (loading) return <p className="text-sm text-muted">Loading your consents…</p>;
+
+  if (error) {
+    return (
+      <div className="card border-danger/40 bg-danger/5 p-5">
+        <p className="font-medium text-ink">Could not load your consents</p>
+        <p className="mt-1 text-sm text-muted">{error}</p>
+        <button type="button" className="btn-secondary mt-4" onClick={load}>
+          Try again
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
@@ -118,10 +166,12 @@ export default function PreferenceCentre() {
           const count =
             tb.id === "all"
               ? rows.length
-              : rows.filter(({ consent, days }) =>
+              : rows.filter(({ consent, daysToExpiry }) =>
                   tb.id === "expiring"
-                    ? consent.status === "active" && days !== null && days < 30
-                    : consent.status === tb.id
+                    ? consent?.status === "active" &&
+                      daysToExpiry !== null &&
+                      daysToExpiry < 30
+                    : consent?.status === tb.id
                 ).length;
           return (
             <button
@@ -129,7 +179,9 @@ export default function PreferenceCentre() {
               type="button"
               onClick={() => setTab(tb.id)}
               className={`rounded-full px-3.5 py-1.5 text-sm transition ${
-                tab === tb.id ? "bg-navy text-white" : "bg-surface text-ink border border-line hover:bg-line/40"
+                tab === tb.id
+                  ? "bg-navy text-white"
+                  : "bg-surface text-ink border border-line hover:bg-line/40"
               }`}
             >
               {t(tb.label)} <span className="opacity-70">({count})</span>
@@ -138,50 +190,66 @@ export default function PreferenceCentre() {
         })}
       </div>
 
-      {lastAudit && (
-        <div className="card border-navy/20 bg-navy/5 p-3 text-xs text-ink">
-          Audit entry <strong>{lastAudit.log_id}</strong> created at{" "}
-          {new Date(lastAudit.timestamp).toLocaleString()} — action{" "}
-          <strong>{lastAudit.action_type}</strong>, hash{" "}
-          <span className="font-mono">{lastAudit.audit_hash.slice(0, 22)}…</span>
-        </div>
-      )}
-
       <div className="space-y-4">
         {filtered.length === 0 && (
-          <p className="card p-6 text-center text-sm text-muted">
-            Nothing in this view.
-          </p>
+          <p className="card p-6 text-center text-sm text-muted">Nothing in this view.</p>
         )}
-        {filtered.map(({ consent, notice, days }) => (
-          <ConsentCard
-            key={consent.id}
-            notice={notice}
-            consent={consent}
-            variant="preference"
-            daysToExpiry={days}
-            checked={consent.status === "active"}
-            lock={previewLock("consent", "Changing a consent")}
-            onChange={(value) => requestChange({ consent, notice }, value)}
-            onHistory={() => navigate("/user/consent-history")}
-          />
+        {filtered.map((row) => (
+          <div key={row.purpose.id} className="space-y-1">
+            <ConsentCard
+              notice={{
+                purpose: row.purpose.name,
+                category: row.purpose.category,
+                mandatory: row.purpose.is_mandatory,
+                retention_days: row.purpose.retention_days,
+                content: row.currentNotice?.content || "",
+                data_collected: row.currentNotice?.data_collected || "",
+                user_rights: row.currentNotice?.user_rights || "",
+                withdrawal_policy: row.currentNotice?.withdrawal_policy || "",
+              }}
+              consent={
+                row.consent || {
+                  status: "never_given",
+                  given_at: null,
+                  version: row.currentNotice?.version,
+                  method: "—",
+                  language: "English",
+                }
+              }
+              variant="preference"
+              daysToExpiry={row.daysToExpiry}
+              checked={row.consent?.status === "active"}
+              onChange={(value) => requestChange(row, value)}
+              onHistory={() => navigate("/user/consent-history")}
+            />
+            {row.supersededByNewVersion && (
+              // Their agreement is still valid; it is just not agreement to the
+              // wording now published. Saying so is honest, and it is also what
+              // tells a DPO they need to re-collect.
+              <p className="px-1 text-xs text-muted">
+                You agreed to version {row.agreedNotice.version}. Version{" "}
+                {row.currentNotice.version} has since been published — your existing
+                consent still stands against the version you read.
+              </p>
+            )}
+          </div>
         ))}
       </div>
 
       <ConfirmModal
         open={Boolean(pending)}
-        title={`Withdraw consent for ${pending?.notice?.purpose || ""}?`}
+        title={`Withdraw consent for ${pending?.purpose?.name || ""}?`}
         body="You can give this consent again later, but the change takes effect immediately."
         consequences={[
-          pending?.notice?.withdrawal_policy,
-          `Processing for “${pending?.notice?.purpose}” stops.`,
+          pending?.currentNotice?.withdrawal_policy,
+          `Processing for “${pending?.purpose?.name}” stops.`,
           "The withdrawal is timestamped and written to the audit trail.",
           "Data already collected is kept only as long as the retention policy allows.",
         ].filter(Boolean)}
         confirmLabel="Yes, withdraw consent"
         busy={busy}
         onCancel={() => setPending(null)}
-        onConfirm={() => apply(pending.consent.id, "withdrawn")}
+        onConfirm={() => apply(pending, "withdrawn")}
       />
     </div>
   );

@@ -230,7 +230,80 @@ Copy `.env.example` to `.env`. Two things to notice:
 
 ---
 
-## Next: Phase 3
+## The public API (Phase 4)
+
+What customers' own systems call. Mounted at its own root — **not** under
+`DS_API_PREFIX` — because these paths are a contract other companies deploy
+against and must not move when the console's API version does.
+
+```
+GET  /public/v1/purposes        what you can ask about, and whether a notice is published
+GET  /public/v1/consent/check   "do I have consent right now?"  ← belongs in your request path
+POST /public/v1/consent         collect or withdraw. Send Idempotency-Key.
+```
+
+Auth is `X-API-Key: ds_live_…` (or `Authorization: Bearer ds_live_…`) with per-key
+scopes: a key holding only `consent:read` gets a 403 naming the scope it lacks if
+it tries to write.
+
+**Collect and withdraw are separate scopes.** `consent:write` was one scope until
+the publishable-key work forced the split: recording a consent that never happened
+is bad, but destroying a real one is worse — it deletes genuine evidence and stops
+the customer's downstream processing for someone who never asked. A credential has
+to be trusted separately for the destructive half, so `granted: false` requires
+`consent:withdraw` even on a secret key.
+
+### Publishable keys — browser banners
+
+```
+GET  /public/v1/banner/purposes   what a banner may offer, with the notice wording
+POST /public/v1/banner/consent    collect only. No withdraw path exists here.
+```
+
+Auth is `X-Publishable-Key: pk_live_…` — its own header, never `Authorization`,
+so a publishable key cannot be confused with a secret one at any layer.
+
+These keys ship inside a web page, so they are treated as public and extractable.
+Safety comes from the key being **incapable of harm** (`consent:collect` only,
+enforced by a constant, by the service, and by a CHECK constraint) plus
+**server-observed provenance** on every record — not from secrecy. Origin pinning
+is defence-in-depth, and an optional signed token from the integrator's own server
+provides real principal binding for sensitive purposes.
+
+Full reasoning, including what the model does *not* claim:
+[docs/PUBLISHABLE_KEY_SECURITY.md](../docs/PUBLISHABLE_KEY_SECURITY.md).
+
+- **Rate limit** — fixed window, counted in `api_request_log`, so it survives a
+  restart and holds across replicas instead of living in one process's memory. The
+  window's edges are honest: a caller can get 2N across a boundary, which for a
+  consent check is not worth a second datastore to prevent.
+  `X-RateLimit-Limit` / `X-RateLimit-Remaining` on every response.
+- **Idempotency** — a repeat of the same key replays the first response and sets
+  `Idempotent-Replay: true`. The same key with a *different* body is a 409, not a
+  replay: that is a client bug, and hiding it would leave the customer missing a
+  consent record with nothing to explain it.
+- **Request log** — append-only, no UPDATE or DELETE grant. It holds no request
+  bodies; a log of bodies would be a second copy of everyone's personal data with
+  none of the consent machinery around it.
+
+### Two bugs this phase surfaced
+
+Recorded because both had been sitting unexercised and both were invisible:
+
+1. **API-key auth could not work at all.** `api_keys` is under RLS, so the lookup —
+   which happens before any tenant context exists — matched nothing and every
+   valid key 401'd. Keys now carry their tenant (`ds_live_<tenant-hex>.<secret>`)
+   so the context is bound first. Same fix as the refresh token, for the same
+   reason. The tenant in the clear is not trusted: the secret authenticates and
+   RLS means a forged tenant finds no row.
+2. **`TimestampMixin` was not timezone-aware** while every migration creates
+   `timestamptz`, so any comparison against an aware datetime raised. The
+   rate-limit window was the first such query; retention and expiry would have
+   been next.
+
+---
+
+## Next: Phase 5
 
 Purposes, **versioned notices** (consent is bound to a notice version — see
 ARCHITECTURE.md N4), data principals, and the consent lifecycle. Then Phase 4, the

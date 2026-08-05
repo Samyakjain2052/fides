@@ -130,7 +130,7 @@ ds_live_7f3a2b...        ← shown ONCE at creation
 ```
 
 - Only the **hash** and the **prefix** are stored. We cannot show a key twice.
-- **Scopes** per key (`consent:read`, `consent:write`, `dsar:write`) — least
+- **Scopes** per key (`consent:read`, `consent:collect`, `consent:withdraw`, `dsar:write`) — least
   privilege, so a key embedded in a marketing service can't erase anybody.
 - Rotation and revocation are first-class; `last_used_at` surfaces dead keys.
 - Rate limits per key.

@@ -38,5 +38,10 @@ class Tenant(UUIDMixin, TimestampMixin, Base):
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # Secret for the signed-token step-up on public consent collection. Lives on
+    # the tenant rather than on a publishable key so that rotating a key does not
+    # invalidate tokens the integrator's server is already minting.
+    consent_token_secret: Mapped[str | None] = mapped_column(String(128))
+
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<Tenant {self.slug}>"

@@ -31,11 +31,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AuthenticationError, PermissionDenied
 from app.core.permissions import Capability, Scope, role_can
-from app.core.security import decode_access_token
+from app.core.security import (
+    decode_access_token,
+    hash_ip,
+    parse_api_key,
+    parse_publishable_key,
+)
 from app.db.session import get_session_factory, set_tenant_context, unscoped_session
 from app.models.api_key import ApiKey
+from app.models.publishable_key import PublishableKey
 from app.models.user import User
-from app.services import api_key_service
+from app.services import api_key_service, publishable_key_service
 from app.services.audit_service import Actor
 
 
@@ -175,8 +181,14 @@ async def get_current_api_key(
 ) -> AsyncIterator[CurrentApiKey]:
     """Accepts `X-API-Key: ds_live_…` or `Authorization: Bearer ds_live_…`.
 
-    The lookup runs unscoped — we do not know the tenant until the key resolves —
-    then the transaction is rebound to that key's tenant before the handler runs.
+    The tenant is read out of the key and bound BEFORE the lookup, because
+    `api_keys` is under row-level security: a query made with no tenant context
+    matches nothing, so authentication would fail for every valid key. Same
+    reasoning as the refresh token, and the same fix.
+
+    Reading the tenant from the key is not trusting it. The Argon2 verify below is
+    what authenticates, and RLS means a key claiming another tenant simply finds
+    no row there.
     """
     raw = x_api_key
     if not raw and authorization and authorization.lower().startswith("bearer "):
@@ -186,9 +198,18 @@ async def get_current_api_key(
     if not raw:
         raise AuthenticationError("Missing API key.")
 
+    claimed_tenant, raw = parse_api_key(raw)
+    if claimed_tenant is None:
+        # No tenant in the key: nothing to bind, so the lookup could only ever
+        # return zero rows. Refuse with the same message as a bad secret rather
+        # than leaking that the format was the problem.
+        raise AuthenticationError("Invalid API key.")
+
     async with get_session_factory()() as session:
         async with session.begin():
+            await set_tenant_context(session, claimed_tenant)
             key = await api_key_service.authenticate_key(session, full_key=raw)
+            # Re-bind with the authenticated key as the actor, now that we know it.
             await set_tenant_context(session, key.tenant_id, actor_id=key.id)
             yield CurrentApiKey(key=key, session=session, request=request)
 
@@ -214,3 +235,113 @@ def require_scope(*scopes: Scope):
 
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
 UnscopedSession = Annotated[AsyncSession, Depends(get_unscoped_session)]
+
+
+# --------------------------------------------------------------------------
+# Publishable-key callers (browser banners)
+#
+# A separate dependency chain from CurrentApiKey, not a flag on it. The two have
+# different threat models, and a shared code path is how a publishable key ends
+# up somewhere only a secret key belongs.
+# --------------------------------------------------------------------------
+@dataclass
+class CurrentPublishableKey:
+    key: "PublishableKey"
+    session: AsyncSession
+    request: Request
+
+    @property
+    def tenant_id(self) -> uuid.UUID:
+        return self.key.tenant_id
+
+    @property
+    def actor(self) -> Actor:
+        return Actor(
+            # A distinct actor type in the audit trail. "This came from a browser
+            # banner using a published key" is materially different provenance
+            # from "a server-side integration did this", and the trail should not
+            # blur them.
+            type="publishable_key",
+            id=self.key.id,
+            label=f"{self.key.prefix}/{self.key.name}",
+            ip=client_ip(self.request),
+            user_agent=self.request.headers.get("user-agent"),
+        )
+
+    @property
+    def ip_hash(self) -> str | None:
+        return hash_ip(client_ip(self.request))
+
+
+async def get_current_publishable_key(
+    request: Request,
+    x_publishable_key: Annotated[str | None, Header(alias="X-Publishable-Key")] = None,
+) -> AsyncIterator[CurrentPublishableKey]:
+    """Resolve a `pk_live_…` key.
+
+    Only accepted in its own header. Deliberately NOT via `Authorization: Bearer`,
+    which is where secret keys go — a publishable key arriving in the same slot as
+    a secret one invites confusing the two at every layer above.
+
+    The tenant is read from the key and bound BEFORE the lookup, because
+    `publishable_keys` is under RLS. This project has now hit that ordering bug
+    twice (refresh tokens, then secret API keys); it is not going to be hit a
+    third time.
+    """
+    raw = (x_publishable_key or "").strip()
+    if not raw:
+        raise AuthenticationError("Missing publishable key.")
+
+    claimed_tenant = parse_publishable_key(raw)
+    if claimed_tenant is None:
+        raise AuthenticationError("Invalid publishable key.")
+
+    async with get_session_factory()() as session:
+        async with session.begin():
+            await set_tenant_context(session, claimed_tenant)
+            key = await publishable_key_service.resolve_key(session, full_key=raw)
+            await set_tenant_context(session, key.tenant_id, actor_id=key.id)
+            yield CurrentPublishableKey(key=key, session=session, request=request)
+
+
+def require_publishable_scope(scope: Scope):
+    """Capability guard, reporting in the same shape as the secret-key guard.
+
+    The inner dependency is a plain default rather than part of an `Annotated`
+    string. This module uses `from __future__ import annotations`, so annotations
+    are strings FastAPI resolves at module scope — and a string containing a call
+    on a closed-over variable cannot be resolved there. It fails at OpenAPI
+    generation with a Pydantic "not fully defined" error that points nowhere near
+    the cause.
+    """
+
+    async def _guard(
+        caller: CurrentPublishableKey = Depends(get_current_publishable_key),
+    ) -> CurrentPublishableKey:
+        publishable_key_service.assert_capability(caller.key, scope)
+        return caller
+
+    return _guard
+
+
+def require_allowed_origin(scope: Scope):
+    """Capability AND origin, as one dependency.
+
+    Origin pinning lives here rather than inline in the handler so it cannot be
+    forgotten on the next endpoint someone adds to this router.
+
+    It is **defence-in-depth, not the security boundary** — see
+    `publishable_key_service.assert_origin_allowed` for why. The actual controls
+    are the collect-only capability and provenance stamping.
+    """
+    inner = require_publishable_scope(scope)
+
+    async def _guard(
+        request: Request,
+        caller: CurrentPublishableKey = Depends(inner),
+    ) -> CurrentPublishableKey:
+        origin = request.headers.get("origin")
+        publishable_key_service.assert_origin_allowed(caller.key, origin)
+        return caller
+
+    return _guard

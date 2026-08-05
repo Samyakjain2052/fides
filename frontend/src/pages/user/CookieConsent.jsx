@@ -164,14 +164,14 @@ export default function CookieConsent() {
           )}
 
           <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-line pt-4">
-            <button type="button" className="btn-primary" onClick={acceptAll} disabled={busy} {...previewLock("consent", "Accepting all cookies")}>
+            <button type="button" className="btn-primary" onClick={acceptAll} disabled={busy} {...previewLock("consent_surfaces", "Accepting all cookies")}>
               Accept All
             </button>
-            <button type="button" className="btn-secondary" onClick={declineAll} disabled={busy} {...previewLock("consent", "Declining optional cookies")}>
+            <button type="button" className="btn-secondary" onClick={declineAll} disabled={busy} {...previewLock("consent_surfaces", "Declining optional cookies")}>
               Decline All
             </button>
             {customizing ? (
-              <button type="button" className="btn-secondary" onClick={() => save()} disabled={busy} {...previewLock("consent", "Saving cookie preferences")}>
+              <button type="button" className="btn-secondary" onClick={() => save()} disabled={busy} {...previewLock("consent_surfaces", "Saving cookie preferences")}>
                 {busy ? "Saving…" : "Save Preferences"}
               </button>
             ) : (

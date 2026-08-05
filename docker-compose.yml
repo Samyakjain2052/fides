@@ -338,6 +338,14 @@ services:
       DS_DATABASE_OWNER_URL: postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield
       DS_JWT_SECRET: ${DS_JWT_SECRET}
       DS_AUDIT_HMAC_KEY: ${DS_AUDIT_HMAC_KEY}
+    volumes:
+      # Source mounted so a test edit does not need an image rebuild. The venv
+      # lives at /opt/venv, outside this mount, so it is not shadowed.
+      - ./backend:/srv
+      # The edge config, read-only. One test asserts nginx proxies /public/ —
+      # a deploy-time failure no ASGI-level test can catch, so the file has to
+      # be visible to the suite rather than checked by hand.
+      - ./frontend/nginx.conf.template:/frontend/nginx.conf.template:ro
     command: ["pytest", "-q"]
     restart: "no"
 

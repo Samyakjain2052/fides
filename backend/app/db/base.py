@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import MetaData, func
+from sqlalchemy import DateTime, MetaData, func
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -44,11 +44,27 @@ class UUIDMixin:
 
 
 class TimestampMixin:
+    """`DateTime(timezone=True)` is explicit for a reason.
+
+    Every migration in this project creates these columns as `timestamptz`, and
+    the module docstring above promises timezone-aware timestamps — but the
+    mapped type was left to be inferred from the `datetime` annotation, which
+    SQLAlchemy renders as a NAIVE `TIMESTAMP WITHOUT TIME ZONE`.
+
+    The mismatch is invisible until something compares one of these columns to an
+    aware datetime, at which point asyncpg refuses the parameter and the endpoint
+    500s. The first such comparison was the public API's rate-limit window; the
+    same trap was waiting for every retention and expiry query still to be built.
+    """
+
     created_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), nullable=False, index=True
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
     updated_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
 

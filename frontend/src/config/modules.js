@@ -36,11 +36,25 @@ export const MODULE_STATUS = {
   // the half a buyer's DPO spends the most time in.
   dsar_workflow: "preview",
 
-  consent: "preview",
+  // Real as of Phase 3: purposes, versioned notices, data principals and the
+  // consent lifecycle are in PostgreSQL, every change writes to the audit chain,
+  // and a published notice is immutable at the database level.
+  consent: "live",
+
+  // The public consent banner and cookie banner are a separate key, and still
+  // preview. They are unauthenticated screens shown to a first-time visitor, so
+  // they cannot use the authenticated consent API that /user/preferences now
+  // uses — collecting consent from an anonymous visitor needs the public API
+  // (Phase 4). Flipping `consent` to live without this split would have silently
+  // re-enabled two screens that still write to in-memory mock state.
+  consent_surfaces: "preview",
   grievance: "preview",
   retention: "preview",
   reports: "preview",
-  audit: "preview",
+  // Real: the screen reads the HMAC hash-chained trail in PostgreSQL, and
+  // "Verify chain integrity" walks it and reports the first break. The backend
+  // chain was already real from Phase 2 — this only connected the screen to it.
+  audit: "live",
   breach: "preview",
   notifications: "preview",
   users: "preview",
@@ -51,6 +65,7 @@ export const MODULE_LABELS = {
   dsar: "Data requests (DSAR)",
   dsar_workflow: "DSAR triage queue",
   consent: "Consent management",
+  consent_surfaces: "Public consent & cookie banners",
   grievance: "Grievance redressal",
   retention: "Retention & purge",
   reports: "Reports",
@@ -66,6 +81,10 @@ export const MODULE_LABELS = {
  * mis-sell the preview banner exists to prevent.
  */
 export const MODULE_CAVEATS = {
+  audit:
+    "The chain detects any entry being edited, removed or reordered. It cannot " +
+    "yet detect removal of the most recent entries — that needs external " +
+    "anchoring, and the screen says so next to the result.",
   dsar:
     "Access and erasure run for real against four datastores. Two parts are not: " +
     "correction is sample data (the engine has no correction action yet), and " +
@@ -74,11 +93,10 @@ export const MODULE_CAVEATS = {
 
 /** What each preview module needs before it can be called live. */
 export const MODULE_ROADMAP = {
-  consent: "Purposes, versioned notices, and the consent lifecycle bound to a notice version.",
+  consent_surfaces: "Anonymous collection through the public API (Phase 4), so a visitor can consent before they have an account.",
   grievance: "Grievance intake, officer assignment, and the statutory escalation clock.",
   retention: "Retention policies with real purge execution and exemption handling.",
   reports: "Reports generated from real consent and request data, exportable.",
-  audit: "The backend already keeps a tamper-evident hash-chained audit trail; this screen is not yet reading it.",
   breach: "Breach register with Board and Data Principal notification workflows.",
   notifications: "Email and SMS delivery with per-tenant templates.",
   users: "Server-side user invitation and role assignment.",
@@ -151,8 +169,8 @@ const PATH_MODULES = [
   ["/user/preferences", "consent"],
   ["/user/grievance", "grievance"],
   ["/user/dsar", "dsar"],
-  ["/consent-banner", "consent"],
-  ["/cookie-consent", "consent"],
+  ["/consent-banner", "consent_surfaces"],
+  ["/cookie-consent", "consent_surfaces"],
 ];
 
 export function moduleForPath(pathname) {

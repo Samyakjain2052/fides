@@ -66,6 +66,25 @@ server {
         proxy_read_timeout    60s;
     }
 
+    # --- the public API ------------------------------------------------------
+    # Customers' own systems call these paths, so unlike /api they are mounted at
+    # the SAME path the backend serves (no prefix rewrite): a published contract
+    # must not depend on this proxy's shape. Without this block the SPA fallback
+    # answered /public/* with index.html — a 200 carrying HTML, which is the
+    # worst possible failure for a machine caller.
+    location /public/ {
+        proxy_pass         ${BACKEND_URL}/public/;
+        proxy_http_version 1.1;
+
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 5s;
+        proxy_read_timeout    30s;
+    }
+
     # --- the DSAR gateway ----------------------------------------------------
     # A privacy request is queued to a Celery worker and polled, so the timeout
     # is generous: a slow fan-out across four datastores is normal, not a fault.

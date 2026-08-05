@@ -66,10 +66,21 @@ source of truth and the UI derives everything from it:
 preview module gains a mutating control that is not locked. Unknown module keys
 resolve to `preview`, so a typo fails toward telling the truth.
 
-Two modules are live: `auth`, and `dsar` (submit and track — the admin triage
-queue is a separate key, `dsar_workflow`, and is preview). Live modules can still
-carry a caveat: DSAR correction and the OTP/DigiLocker identity check are
-simulated, and the app says so on the screen.
+Three modules are live: `auth`, `dsar` (submit and track — the admin triage
+queue is a separate key, `dsar_workflow`, still preview), and `consent`.
+
+**Consent is real as of Phase 3.** `/user/preferences` and `/user/consent-history`
+read and write PostgreSQL through [src/api/consent.js](src/api/consent.js):
+purposes, published notice versions, data principals and the consent lifecycle.
+Every change writes to the tamper-evident audit chain, and the history screen
+shows each entry's chain hash — the same evidence the integrity check verifies.
+
+The public consent and cookie banners are a separate key, `consent_surfaces`, and
+remain preview: they are unauthenticated screens and need the public API (Phase 4)
+before an anonymous visitor's consent can be recorded for real.
+
+Live modules can still carry a caveat: DSAR correction and the OTP/DigiLocker
+identity check are simulated, and the app says so on the screen.
 
 ## Screens
 

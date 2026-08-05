@@ -35,7 +35,7 @@ async def create_key(
     by trusting that nobody copied it.
     """
     validated = validate_scopes(scopes)
-    full_key, prefix, key_hash = generate_api_key(environment)
+    full_key, prefix, key_hash = generate_api_key(environment, tenant_id=tenant_id)
 
     row = ApiKey(
         tenant_id=tenant_id,

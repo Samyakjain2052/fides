@@ -6,13 +6,24 @@ autogenerates, so a new table can never be silently left out of a migration.
 
 from app.models.api_key import ApiKey
 from app.models.audit import AuditAction, AuditEvent
+from app.models.consent import Consent, DataPrincipal, Notice, Purpose
+from app.models.public_api import ApiRequestLog, IdempotencyKey
+from app.models.publishable_key import ConsentProvenance, PublishableKey
 from app.models.tenant import Tenant
 from app.models.user import RefreshToken, User
 
 __all__ = [
     "ApiKey",
+    "ApiRequestLog",
     "AuditAction",
     "AuditEvent",
+    "Consent",
+    "ConsentProvenance",
+    "DataPrincipal",
+    "IdempotencyKey",
+    "Notice",
+    "PublishableKey",
+    "Purpose",
     "RefreshToken",
     "Tenant",
     "User",
@@ -27,4 +38,15 @@ TENANT_SCOPED_TABLES = [
     "refresh_tokens",
     "api_keys",
     "audit_events",
+    # Phase 3 — the consent domain.
+    "purposes",
+    "notices",
+    "data_principals",
+    "consents",
+    # Phase 4 — the public API.
+    "idempotency_keys",
+    "api_request_log",
+    # Publishable keys + provenance.
+    "publishable_keys",
+    "consent_provenance",
 ]
