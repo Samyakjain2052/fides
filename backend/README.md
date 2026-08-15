@@ -33,6 +33,12 @@ app image needs no schema-altering rights.
 docker compose run --rm cms-test
 ```
 
+It runs against **`datashield_test`, a different database** from the one
+`cms-backend` serves. The suite truncates every table between tests; pointed at
+the application's database it silently destroyed whatever workspace you had been
+demoing with — which is exactly how the problem was found. `cms-test` migrates
+its own database to head before running, so it is never stale.
+
 `cms-test` builds the image's `dev` target — the runtime layers plus pytest. The
 deployed image (`runtime`) has neither pytest nor a compiler, so the tests run
 against the same layers that ship without those layers carrying test tooling.

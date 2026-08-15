@@ -159,7 +159,9 @@ def assert_capability(key: PublishableKey, scope: Scope) -> None:
         )
 
 
-def assert_origin_allowed(key: PublishableKey, origin: str | None) -> str | None:
+def assert_origin_allowed(
+    key: PublishableKey, origin: str | None, *, required: bool = True
+) -> str | None:
     """Origin pinning.
 
     **This is defence-in-depth, not the security boundary.** The `Origin` header
@@ -180,9 +182,14 @@ def assert_origin_allowed(key: PublishableKey, origin: str | None) -> str | None
         )
 
     if origin is None:
-        # A browser always sends Origin on a cross-origin POST. Its absence means
-        # a non-browser caller, which is refused here and would in any case be
-        # limited to collect-only.
+        if not required:
+            # A browser omits Origin on a SAME-ORIGIN GET — it only guarantees the
+            # header on POST and on cross-origin requests. Requiring it on a
+            # read-only endpoint therefore breaks the ordinary case (a banner
+            # fetching its own options) while protecting nothing: that endpoint
+            # returns published notice text, which is meant to be shown to the
+            # public anyway.
+            return None
         raise PermissionDenied(
             "A publishable key requires an Origin header.",
             allowed_origins=allowed,

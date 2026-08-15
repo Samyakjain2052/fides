@@ -334,8 +334,11 @@ services:
       cms-db:
         condition: service_healthy
     environment:
-      DS_DATABASE_URL: postgresql+asyncpg://datashield_app:apppassword@cms-db:5432/datashield
-      DS_DATABASE_OWNER_URL: postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield
+      # A DIFFERENT database from the one cms-backend serves. The suite
+      # truncates every table between tests; pointed at the app's database it
+      # destroys local demo data on every run — which is how this was found.
+      DS_DATABASE_URL: postgresql+asyncpg://datashield_app:apppassword@cms-db:5432/datashield_test
+      DS_DATABASE_OWNER_URL: postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield_test
       DS_JWT_SECRET: ${DS_JWT_SECRET}
       DS_AUDIT_HMAC_KEY: ${DS_AUDIT_HMAC_KEY}
     volumes:
@@ -346,7 +349,10 @@ services:
       # a deploy-time failure no ASGI-level test can catch, so the file has to
       # be visible to the suite rather than checked by hand.
       - ./frontend/nginx.conf.template:/frontend/nginx.conf.template:ro
-    command: ["pytest", "-q"]
+    # Migrate the test database first: it is a separate database, so nothing
+    # else will have done it, and a suite on a stale schema fails in ways that
+    # look like product bugs.
+    command: ["sh", "-c", "alembic upgrade head && pytest -q"]
     restart: "no"
 
   cms-backend:
@@ -394,6 +400,10 @@ services:
       args:
         # Stamped into the bundle so a running container names its own commit.
         VITE_BUILD_SHA: ${BUILD_SHA:-dev}
+        # The consent banners' publishable key. Public by design — it can only
+        # collect consent, is origin-pinned, and stamps provenance on every
+        # record. Issue one per environment from Admin -> publishable keys.
+        VITE_PUBLISHABLE_KEY: ${VITE_PUBLISHABLE_KEY:-}
     environment:
       BACKEND_URL: http://cms-backend:8100
       GATEWAY_URL: http://fastapi-gateway:8000

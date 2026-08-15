@@ -75,9 +75,27 @@ purposes, published notice versions, data principals and the consent lifecycle.
 Every change writes to the tamper-evident audit chain, and the history screen
 shows each entry's chain hash — the same evidence the integrity check verifies.
 
-The public consent and cookie banners are a separate key, `consent_surfaces`, and
-remain preview: they are unauthenticated screens and need the public API (Phase 4)
-before an anonymous visitor's consent can be recorded for real.
+**The public banners are live too.** `/consent-banner` and `/cookie-consent`
+collect through the publishable-key API in
+[src/api/banner.js](src/api/banner.js) — real purposes, the server's published
+notice wording, and a server-stamped provenance record (origin, hashed IP, user
+agent, notice version, receipt id) in the audit chain for every answer.
+
+Two things about those screens worth knowing:
+
+- **They carry a publishable key, and that is safe by design.** It ships in the
+  bundle, can only *collect* consent — never withdraw, never read — is pinned to
+  an origin allowlist, and stamps provenance on everything it creates. Set it
+  with `VITE_PUBLISHABLE_KEY` at build time; see
+  [docs/PUBLISHABLE_KEY_SECURITY.md](../docs/PUBLISHABLE_KEY_SECURITY.md).
+- **Declining writes nothing.** There is no "withdraw" on a banner, because a
+  published credential must not be able to destroy a real consent. Withdrawal
+  lives in the Preference Centre, behind a session.
+
+The **guardian (under-18) flow is a separate key, `consent_guardian`, and is
+still preview**: DPDP §9 requires *verifiable* parental consent, and a
+publishable key cannot verify a guardian — the OTP and DigiLocker steps there are
+simulated.
 
 Live modules can still carry a caveat: DSAR correction and the OTP/DigiLocker
 identity check are simulated, and the app says so on the screen.

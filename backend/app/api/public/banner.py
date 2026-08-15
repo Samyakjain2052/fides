@@ -247,7 +247,10 @@ async def collect_from_banner(
 )
 async def banner_purposes(
     caller: Annotated[
-        CurrentPublishableKey, Depends(require_allowed_origin(Scope.CONSENT_COLLECT))
+        CurrentPublishableKey,
+        # Read-only, so Origin is validated when present but not demanded: a
+        # browser does not send it on a same-origin GET.
+        Depends(require_allowed_origin(Scope.CONSENT_COLLECT, origin_required=False)),
     ],
 ) -> list[dict[str, Any]]:
     """What a banner needs in order to render itself honestly.

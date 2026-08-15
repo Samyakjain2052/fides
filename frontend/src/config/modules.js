@@ -47,7 +47,16 @@ export const MODULE_STATUS = {
   // uses — collecting consent from an anonymous visitor needs the public API
   // (Phase 4). Flipping `consent` to live without this split would have silently
   // re-enabled two screens that still write to in-memory mock state.
-  consent_surfaces: "preview",
+  // Real: the banner and cookie surfaces collect through the publishable-key
+  // API, with server-stamped provenance on every record.
+  consent_surfaces: "live",
+
+  // Still preview, and split out on purpose. DPDP §9 requires *verifiable*
+  // parental consent, and a publishable key cannot verify a guardian — the OTP
+  // and DigiLocker steps in that flow are simulated. Flipping consent_surfaces
+  // live without this split would have silently unlocked a flow that still
+  // writes to the in-memory mock.
+  consent_guardian: "preview",
   grievance: "preview",
   retention: "preview",
   reports: "preview",
@@ -66,6 +75,7 @@ export const MODULE_LABELS = {
   dsar_workflow: "DSAR triage queue",
   consent: "Consent management",
   consent_surfaces: "Public consent & cookie banners",
+  consent_guardian: "Guardian consent (under-18)",
   grievance: "Grievance redressal",
   retention: "Retention & purge",
   reports: "Reports",
@@ -93,7 +103,7 @@ export const MODULE_CAVEATS = {
 
 /** What each preview module needs before it can be called live. */
 export const MODULE_ROADMAP = {
-  consent_surfaces: "Anonymous collection through the public API (Phase 4), so a visitor can consent before they have an account.",
+  consent_guardian: "Verifiable parental consent — a real guardian identity check (DigiLocker or equivalent), which a publishable key cannot perform.",
   grievance: "Grievance intake, officer assignment, and the statutory escalation clock.",
   retention: "Retention policies with real purge execution and exemption handling.",
   reports: "Reports generated from real consent and request data, exportable.",

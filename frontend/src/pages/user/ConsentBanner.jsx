@@ -2,75 +2,141 @@
 // Consent Banner (/consent-banner)
 // What a Data Principal sees on first visit. The DPDP-critical screen.
 //
+// Real as of the publishable-key work: purposes, notice wording and collection
+// all come from /public/v1/banner/*, backed by PostgreSQL. See
+// docs/PUBLISHABLE_KEY_SECURITY.md for why this page can safely carry a key.
+//
 // Rules enforced here:
-//   • NO pre-checked optional toggles — `choices` starts false for every
-//     optional purpose, and there is no code path that defaults one to true.
-//   • Mandatory purposes render as locked toggles WITH the reason shown
-//     (ConsentCard handles this), never hidden.
-//   • Language switcher is present on the screen itself, not just the chrome.
-//   • Under-18 answers route into the guardian consent flow instead of saving.
+//   • NO pre-checked toggles. `choices` starts false for every purpose and
+//     there is no code path that defaults one to true.
+//   • Declining means NOT COLLECTING consent — never a withdrawal. A
+//     publishable key cannot withdraw, and this screen must not appear to
+//     offer something it cannot do.
+//   • The wording shown is the server's published notice text, because that is
+//     the text the recorded consent is versioned against.
+//   • Language switcher on the screen itself, not just the chrome.
+//   • Under-18 routes to the guardian flow, which is still preview — see below.
 // ============================================================================
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  getNotices,
-  MOCK_ORG,
-  saveConsentChoices,
-  submitGuardianConsent,
-  verifyOtp,
-} from "../../api";
+  bannerPurposes,
+  collectConsent,
+  newIdempotencyKey,
+  principalRef,
+} from "../../api/banner";
+import { MOCK_ORG, submitGuardianConsent, verifyOtp } from "../../api";
 import { useApp } from "../../context/AppContext";
 import ConsentCard from "../../components/common/ConsentCard";
 import LanguageSwitcher from "../../components/common/LanguageSwitcher";
 import { previewLock } from "../../config/modules";
 
 export default function ConsentBanner() {
-  const { t, language, notify } = useApp();
-  const [notices, setNotices] = useState([]);
+  const { t, language, notify, user } = useApp();
+  const [purposes, setPurposes] = useState([]);
   const [choices, setChoices] = useState({});
+  const [receipts, setReceipts] = useState([]);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   // Age gate
   const [isMinor, setIsMinor] = useState(false);
 
-  useEffect(() => {
-    getNotices().then((rows) => {
-      setNotices(rows);
-      // Every optional purpose starts OFF. This is the requirement.
-      const initial = {};
-      rows.forEach((n) => {
-        initial[n.id] = n.mandatory ? true : false;
-      });
-      setChoices(initial);
-    });
+  // One key per mount. A double-click, or a retry after a flaky network,
+  // replays the first response instead of recording a second consent.
+  const idempotencyKeys = useMemo(() => new Map(), []);
+
+  const load = useCallback(async () => {
+    try {
+      const rows = await bannerPurposes();
+      setPurposes(rows);
+      // Every purpose starts OFF. This is the requirement, and the reason the
+      // initial state is built from the response rather than defaulted anywhere.
+      setChoices(Object.fromEntries(rows.map((r) => [r.key, false])));
+      setError(null);
+    } catch (e) {
+      setError(e.message || "Could not load the consent options.");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const optional = notices.filter((n) => !n.mandatory);
+  useEffect(() => {
+    load();
+  }, [load]);
 
-  const setAllOptional = (value) => {
-    setChoices((prev) => {
-      const next = { ...prev };
-      optional.forEach((n) => {
-        next[n.id] = value;
-      });
-      return next;
-    });
-  };
+  const setAllOptional = (value) =>
+    setChoices((prev) => Object.fromEntries(Object.keys(prev).map((k) => [k, value])));
+
+  const chosen = Object.entries(choices).filter(([, on]) => on).map(([k]) => k);
 
   const save = async () => {
     setBusy(true);
-    try {
-      await saveConsentChoices(choices, { language });
-      setSaved(true);
-      notify("Your choices have been saved and recorded in the audit trail.");
-    } finally {
-      setBusy(false);
+    const ref = principalRef(user);
+    const collected = [];
+    const failures = [];
+
+    // One call per granted purpose. A declined purpose produces NO call at all:
+    // "no" means no consent was collected, not that an existing one was
+    // withdrawn — and this credential cannot withdraw anything.
+    for (const key of chosen) {
+      if (!idempotencyKeys.has(key)) idempotencyKeys.set(key, newIdempotencyKey());
+      try {
+        const out = await collectConsent({
+          principalRef: ref,
+          purpose: key,
+          language,
+          source: "consent-banner",
+          idempotencyKey: idempotencyKeys.get(key),
+        });
+        collected.push(out);
+      } catch (e) {
+        failures.push(`${key}: ${e.message}`);
+      }
     }
+
+    setBusy(false);
+
+    if (failures.length) {
+      // Say which ones and why. A banner that silently records some choices and
+      // drops others is worse than one that fails outright, because nobody
+      // finds out until it matters.
+      notify(`Some choices could not be recorded — ${failures.join("; ")}`, "error");
+      if (!collected.length) return;
+    }
+
+    setReceipts(collected);
+    setSaved(true);
+    notify(
+      collected.length
+        ? "Your choices have been recorded, with a receipt."
+        : "No optional purposes were switched on, so nothing was recorded."
+    );
   };
 
   if (isMinor) {
     return <GuardianConsentFlow onBack={() => setIsMinor(false)} />;
+  }
+
+  if (loading) {
+    return <p className="mx-auto max-w-3xl text-sm text-muted">Loading your options…</p>;
+  }
+
+  if (error) {
+    // An honest dead end beats a form that looks alive and records nothing.
+    return (
+      <div className="mx-auto max-w-3xl">
+        <div className="card border-danger/40 bg-danger/5 p-5">
+          <p className="font-medium text-ink">This consent banner is not available</p>
+          <p className="mt-1 text-sm text-muted">{error}</p>
+          <button type="button" className="btn-secondary mt-4" onClick={load}>
+            Try again
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -79,11 +145,11 @@ export default function ConsentBanner() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-lg font-semibold text-ink">
-              {MOCK_ORG.name} wants to use your data for the following purposes
+              {MOCK_ORG.name} would like to use your data for the following purposes
             </h1>
             <p className="mt-1 text-sm text-muted">
-              Nothing optional is switched on until you switch it on. You can change any of this
-              later in your Preference Centre.
+              Nothing here is switched on until you switch it on. You can change any
+              of it later in your Preference Centre.
             </p>
           </div>
           <LanguageSwitcher />
@@ -97,9 +163,22 @@ export default function ConsentBanner() {
             {t("Decline All Optional")}
           </button>
           <span className="text-xs text-muted">
-            {optional.filter((n) => choices[n.id]).length} of {optional.length} optional purposes on
+            {chosen.length} of {purposes.length} switched on
           </span>
         </div>
+      </div>
+
+      {/* Mandatory purposes are NOT offered here — they do not rest on consent,
+          and a toggle for one would be a dark pattern. Saying nothing at all
+          would be misleading by omission, so say it plainly instead. */}
+      <div className="card border-info/40 bg-info/5 p-4">
+        <p className="text-sm text-ink">
+          Some processing happens on other legal bases — a statutory obligation, for
+          example — and is not offered as a choice here because it is not consent.
+        </p>
+        <Link to="/user/preferences" className="mt-1 inline-block text-sm text-teal underline">
+          See everything held about you, and why
+        </Link>
       </div>
 
       {/* Age gate — leads to the guardian flow rather than blocking. */}
@@ -123,12 +202,27 @@ export default function ConsentBanner() {
       </div>
 
       <div className="space-y-4">
-        {notices.map((notice) => (
+        {purposes.length === 0 && (
+          <p className="card p-6 text-center text-sm text-muted">
+            This organisation has no purposes that ask for consent.
+          </p>
+        )}
+        {purposes.map((p) => (
           <ConsentCard
-            key={notice.id}
-            notice={notice}
-            checked={Boolean(choices[notice.id])}
-            onChange={(value) => setChoices((prev) => ({ ...prev, [notice.id]: value }))}
+            key={p.key}
+            notice={{
+              purpose: p.name,
+              category: p.category,
+              mandatory: false,
+              retention_days: p.retention_days,
+              content: p.content,
+              data_collected: p.data_collected,
+              user_rights: p.user_rights,
+              withdrawal_policy: p.withdrawal_policy,
+            }}
+            consent={{ status: "never_given", version: p.notice_version, language: p.language }}
+            checked={Boolean(choices[p.key])}
+            onChange={(value) => setChoices((prev) => ({ ...prev, [p.key]: value }))}
             variant="banner"
           />
         ))}
@@ -138,11 +232,28 @@ export default function ConsentBanner() {
         <div className="card border-success/40 bg-success/5 p-5">
           <p className="flex items-center gap-2 font-medium text-ink">
             <span className="h-2.5 w-2.5 rounded-full bg-success" aria-hidden="true" />
-            Your choices have been saved.
+            {receipts.length
+              ? "Your choices have been recorded."
+              : "Nothing was switched on, so nothing was recorded."}
           </p>
-          <p className="mt-1 text-sm text-muted">
-            Recorded in {language} with a timestamp and an audit entry.
-          </p>
+          {receipts.length > 0 && (
+            <>
+              <p className="mt-1 text-sm text-muted">
+                Recorded in {receipts[0].language}, against notice version{" "}
+                {receipts[0].notice_version}, with an entry in the audit trail.
+              </p>
+              {/* The receipt id is the person's handle if they ever dispute the
+                  record. Showing it is the difference between a claim and a
+                  receipt. */}
+              <ul className="mt-3 space-y-1">
+                {receipts.map((r) => (
+                  <li key={r.server_receipt_id} className="font-mono text-xs text-muted">
+                    {r.purpose} — {r.server_receipt_id}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           <Link to="/user/preferences" className="btn-secondary mt-4">
             View in Preference Centre
           </Link>
@@ -150,10 +261,10 @@ export default function ConsentBanner() {
       ) : (
         <div className="card sticky bottom-4 flex flex-wrap items-center justify-between gap-3 p-4 shadow-panel">
           <p className="text-xs text-muted">
-            Mandatory purposes are required to hold an account and cannot be switched off.
+            Switching something off simply means no consent is recorded for it.
           </p>
-          <button type="button" className="btn-primary" onClick={save} disabled={busy} {...previewLock("consent_surfaces", "Saving your choices")}>
-            {busy ? "Saving…" : t("Save My Choices")}
+          <button type="button" className="btn-primary" onClick={save} disabled={busy}>
+            {busy ? "Recording…" : t("Save My Choices")}
           </button>
         </div>
       )}
@@ -236,7 +347,7 @@ function GuardianConsentFlow({ onBack }) {
           </div>
           {error && <p className="text-sm text-danger">{error}</p>}
           <div className="flex flex-wrap gap-3">
-            <button type="submit" className="btn-primary" disabled={busy} {...previewLock("consent_surfaces", "Sending a guardian consent request")}>
+            <button type="submit" className="btn-primary" disabled={busy} {...previewLock("consent_guardian", "Sending a guardian consent request")}>
               {busy ? "Sending…" : "Send consent request"}
             </button>
             <button type="button" className="btn-secondary" onClick={() => setStep(2)}>
@@ -287,7 +398,7 @@ function GuardianConsentFlow({ onBack }) {
                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
                  aria-label="Six digit code" />
           {error && <p className="text-sm text-danger">{error}</p>}
-          <button type="button" className="btn-primary" onClick={verify} disabled={busy} {...previewLock("consent_surfaces", "Recording consent")}>
+          <button type="button" className="btn-primary" onClick={verify} disabled={busy} {...previewLock("consent_guardian", "Recording consent")}>
             {busy ? "Verifying…" : "Verify and record consent"}
           </button>
         </div>

@@ -9,7 +9,7 @@ see "Why this order" below.
 
 | # | File | Module key | Rough size |
 | --- | --- | --- | --- |
-| 01 | [consent-surfaces.md](01-consent-surfaces.md) | `consent_surfaces` | hours — backend already built |
+| 01 | [consent-surfaces.md](01-consent-surfaces.md) | `consent_surfaces` | **DONE** — live |
 | 02 | [dsar-workflow.md](02-dsar-workflow.md) | `dsar_workflow` | ~1 week |
 | 03 | [notifications.md](03-notifications.md) | `notifications` | ~1 week |
 | 04 | [grievance.md](04-grievance.md) | `grievance` | ~1 week |
@@ -20,8 +20,8 @@ see "Why this order" below.
 
 ## Why this order
 
-**01 first** because it is nearly free: the publishable-key backend it needs is
-already built and tested. Finishing it closes a module in hours.
+**01 is done** — the banners collect through the publishable-key API and the
+module is live. Its brief is kept as the record of what was built and why.
 
 **03 before 04 and 05.** Grievances have a statutory escalation clock and
 retention has a "notify N days before purge" setting. Both are *specified* in
@@ -86,9 +86,11 @@ parallel, one rebases.
 
 ### Tests
 Run against a **real PostgreSQL** in the container — `docker compose run --rm
-cms-test`. RLS, triggers and advisory locks do not exist outside Postgres, and a
-suite that stubs the database passes while the product leaks. Currently **100
-tests**; every prompt below adds to that number and none may reduce it.
+cms-test`, against **datashield_test** — a different database from the one the
+app serves, so a test run cannot destroy your demo data. RLS, triggers and
+advisory locks do not exist outside Postgres, and a suite that stubs the database
+passes while the product leaks. Currently **110 tests**; every prompt below adds
+to that number and none may reduce it.
 
 ### Definition of done, for all eight
 1. Backend built, migrated, tested.

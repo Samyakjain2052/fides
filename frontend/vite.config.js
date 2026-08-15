@@ -23,6 +23,13 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
+      // The public consent API. Mounted at the SAME path the backend serves
+      // (no rewrite), exactly as nginx does it — these paths are a published
+      // contract and must not depend on a proxy's shape.
+      "/public": {
+        target: process.env.BACKEND_URL || "http://localhost:8100",
+        changeOrigin: true,
+      },
       "/gateway": {
         target: process.env.GATEWAY_URL || "http://localhost:8000",
         changeOrigin: true,

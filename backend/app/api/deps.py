@@ -324,7 +324,7 @@ def require_publishable_scope(scope: Scope):
     return _guard
 
 
-def require_allowed_origin(scope: Scope):
+def require_allowed_origin(scope: Scope, *, origin_required: bool = True):
     """Capability AND origin, as one dependency.
 
     Origin pinning lives here rather than inline in the handler so it cannot be
@@ -341,7 +341,9 @@ def require_allowed_origin(scope: Scope):
         caller: CurrentPublishableKey = Depends(inner),
     ) -> CurrentPublishableKey:
         origin = request.headers.get("origin")
-        publishable_key_service.assert_origin_allowed(caller.key, origin)
+        publishable_key_service.assert_origin_allowed(
+            caller.key, origin, required=origin_required
+        )
         return caller
 
     return _guard

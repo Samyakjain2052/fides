@@ -15,12 +15,12 @@ const ROOT = new URL("..", import.meta.url).pathname;
 
 // Mutating API functions -> the module whose status governs them.
 const MUTATIONS = {
-  // updateConsent is gone from the pages: /user/preferences now calls the real
-  // API in src/api/consent.js. The three below still write to the mock, and
-  // belong to the still-preview public surfaces.
-  saveConsentChoices: "consent_surfaces",
-  saveCookiePreferences: "consent_surfaces",
-  submitGuardianConsent: "consent_surfaces",
+  // updateConsent, saveConsentChoices and saveCookiePreferences are gone from
+  // the pages: /user/preferences uses src/api/consent.js and the two banners use
+  // src/api/banner.js, both real. Only the guardian flow still writes to the
+  // mock, and it has its own preview key because DPDP §9 needs a verifiable
+  // guardian identity that a publishable key cannot provide.
+  submitGuardianConsent: "consent_guardian",
   submitGrievance: "grievance",
   submitGrievanceFeedback: "grievance",
   updateGrievance: "grievance",

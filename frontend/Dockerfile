@@ -27,6 +27,11 @@ COPY . .
 ARG VITE_BUILD_SHA=dev
 ENV VITE_BUILD_SHA=$VITE_BUILD_SHA
 
+# The banners' publishable key. Safe to bake in — that is the entire point of a
+# publishable key, and the security model does not rest on it being hidden.
+ARG VITE_PUBLISHABLE_KEY=
+ENV VITE_PUBLISHABLE_KEY=$VITE_PUBLISHABLE_KEY
+
 # `npm run build` also runs scripts/check-preview-locks.mjs, which fails the
 # build if a preview module has a mutating control that is not disabled. That
 # check runs here rather than only in CI on purpose: the image is what reaches a

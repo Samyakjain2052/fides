@@ -4,15 +4,34 @@
 // "Customize". Essential cookies are locked ON with an explanation.
 // Nothing optional starts on.
 // ============================================================================
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { COOKIE_CATEGORIES, saveCookiePreferences } from "../../api";
+import { COOKIE_CATEGORIES } from "../../api";
+import {
+  bannerPurposes,
+  collectConsent,
+  newIdempotencyKey,
+  principalRef,
+} from "../../api/banner";
+
+// Cookie categories are a PRESENTATION vocabulary — the words a visitor
+// understands. Consent is recorded against a purpose, which is the thing with a
+// published notice and a version. This maps one to the other.
+//
+// A category with no matching purpose in this workspace is NOT rendered. A
+// toggle that writes nowhere is worse than an absent one: the visitor believes
+// they have made a choice, and no record of it exists.
+const CATEGORY_PURPOSE = {
+  performance: null,          // no seeded purpose covers this yet
+  analytics: "analytics",
+  marketing: "marketing_email",
+};
 import { useApp } from "../../context/AppContext";
 import LanguageSwitcher from "../../components/common/LanguageSwitcher";
 import { previewLock } from "../../config/modules";
 
 export default function CookieConsent() {
-  const { notify } = useApp();
+  const { notify, language, user } = useApp();
   const [dismissed, setDismissed] = useState(false);
   const [customizing, setCustomizing] = useState(false);
   const [prefs, setPrefs] = useState(() => {
@@ -24,11 +43,38 @@ export default function CookieConsent() {
   });
   const [renewsAt, setRenewsAt] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [available, setAvailable] = useState(null);   // purpose keys this tenant has
+  const [receipts, setReceipts] = useState([]);
+  const [error, setError] = useState(null);
+  const [idemKeys] = useState(() => new Map());
+
+  const load = useCallback(async () => {
+    try {
+      const rows = await bannerPurposes();
+      setAvailable(new Set(rows.map((r) => r.key)));
+      setError(null);
+    } catch (e) {
+      setError(e.message || "Could not load cookie options.");
+      setAvailable(new Set());
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Essential always shows (it is informational and locked on). Everything else
+  // shows only if this workspace actually has the purpose behind it.
+  const categories = COOKIE_CATEGORIES.filter((c) => {
+    if (c.locked) return true;
+    const key = CATEGORY_PURPOSE[c.id];
+    return key && available?.has(key);
+  });
 
   const setAll = (value) => {
     setPrefs((prev) => {
       const next = { ...prev };
-      COOKIE_CATEGORIES.forEach((c) => {
+      categories.forEach((c) => {
         if (!c.locked) next[c.id] = value;
       });
       return next;
@@ -37,31 +83,61 @@ export default function CookieConsent() {
 
   const save = async (override) => {
     setBusy(true);
-    try {
-      const toSave = override || prefs;
-      const res = await saveCookiePreferences(toSave);
-      setRenewsAt(res.renews_at);
-      setDismissed(true);
-      notify("Cookie preferences saved with a timestamp.");
-    } finally {
-      setBusy(false);
+    const toSave = override || prefs;
+    const ref = principalRef(user);
+    const collected = [];
+    const failures = [];
+
+    // One call per accepted category. A declined category produces NO call:
+    // "no" means no consent was collected, not that one was withdrawn — and a
+    // publishable key cannot withdraw anything.
+    for (const c of categories) {
+      if (c.locked || !toSave[c.id]) continue;
+      const purpose = CATEGORY_PURPOSE[c.id];
+      if (!purpose) continue;
+      if (!idemKeys.has(c.id)) idemKeys.set(c.id, newIdempotencyKey());
+      try {
+        collected.push(
+          await collectConsent({
+            principalRef: ref,
+            purpose,
+            language,
+            source: "cookie-banner",
+            idempotencyKey: idemKeys.get(c.id),
+          })
+        );
+      } catch (e) {
+        failures.push(`${c.name}: ${e.message}`);
+      }
     }
+
+    setBusy(false);
+
+    if (failures.length) {
+      notify(`Some choices could not be recorded — ${failures.join("; ")}`, "error");
+      if (!collected.length) return;
+    }
+
+    setReceipts(collected);
+    // Renewal reflects the shortest retention among what was actually recorded,
+    // rather than a number invented by this screen.
+    setRenewsAt(collected[0]?.expires_at || null);
+    setDismissed(true);
+    notify(
+      collected.length
+        ? "Cookie preferences recorded, with a receipt."
+        : "Nothing optional was accepted, so no consent was recorded."
+    );
   };
 
   const acceptAll = () => {
-    const all = {};
-    COOKIE_CATEGORIES.forEach((c) => {
-      all[c.id] = true;
-    });
+    const all = Object.fromEntries(categories.map((c) => [c.id, true]));
     setPrefs(all);
     save(all);
   };
 
   const declineAll = () => {
-    const none = {};
-    COOKIE_CATEGORIES.forEach((c) => {
-      none[c.id] = c.locked;
-    });
+    const none = Object.fromEntries(categories.map((c) => [c.id, c.locked]));
     setPrefs(none);
     save(none);
   };
@@ -125,7 +201,7 @@ export default function CookieConsent() {
                 </button>
               </div>
 
-              {COOKIE_CATEGORIES.map((c) => (
+              {categories.map((c) => (
                 <div key={c.id} className="rounded-lg border border-line p-4">
                   <div className="flex items-start justify-between gap-4">
                     <div>
