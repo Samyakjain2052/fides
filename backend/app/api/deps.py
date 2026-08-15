@@ -30,7 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AuthenticationError, PermissionDenied
-from app.core.permissions import Capability, Scope, role_can
+from app.core.permissions import Capability, Scope, capabilities_for, role_can
 from app.core.security import (
     decode_access_token,
     hash_ip,
@@ -76,6 +76,16 @@ class CurrentUser:
             ip=client_ip(self.request),
             user_agent=self.request.headers.get("user-agent"),
         )
+
+    @property
+    def capabilities(self) -> list[str]:
+        """What this user may do, derived from the role in the DATABASE.
+
+        Read fresh on every request rather than taken from the token, so a role
+        revoked two minutes ago stops working now instead of when the token
+        happens to expire.
+        """
+        return sorted(c.value for c in capabilities_for(self.user.role))
 
 
 def client_ip(request: Request) -> str | None:

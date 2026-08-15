@@ -91,6 +91,13 @@ class Settings(BaseSettings):
     # Empty when the API is served at the root (running it directly).
     external_path_prefix: str = ""
 
+    # The DSAR engine's gateway. The backend calls it rather than the browser,
+    # so the request row and the engine call are written in one transaction, the
+    # gateway can sit behind internal-only ingress, and the frontend talks to one
+    # API instead of two.
+    gateway_url: str = "http://fastapi-gateway:8000"
+    gateway_timeout_seconds: float = 15.0
+
     cookie_domain: str | None = None
     cookie_secure: bool = True
     refresh_cookie_name: str = "ds_refresh"

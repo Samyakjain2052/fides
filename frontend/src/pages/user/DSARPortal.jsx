@@ -11,10 +11,10 @@ import {
   CORRECTABLE_FIELDS,
   ERASURE_REASONS,
   sendOtp,
-  submitDSAR,
   verifyDigiLocker,
   verifyOtp,
 } from "../../api";
+import { submitRequest } from "../../api/dsar";
 import { useApp } from "../../context/AppContext";
 import LanguageSwitcher from "../../components/common/LanguageSwitcher";
 import TimelineTracker, { DSAR_STEPS } from "../../components/common/TimelineTracker";
@@ -110,7 +110,14 @@ export default function DSARPortal() {
     try {
       const details =
         type === "correct" ? { correction } : type === "erase" ? { erasure } : {};
-      const row = await submitDSAR({ type, verification, details });
+      // Real now: this creates a row in PostgreSQL and dispatches access and
+      // erasure to the Fides engine. `details` carries the correction payload,
+      // which the engine cannot do — that stays a tracked manual workflow.
+      const row = await submitRequest({
+        type: type === "erase" ? "erasure" : type,
+        verificationMethod: verification,
+        correctionPayload: type === "correct" ? details : undefined,
+      });
       setCreated(row);
       setStep(4);
     } catch (err) {

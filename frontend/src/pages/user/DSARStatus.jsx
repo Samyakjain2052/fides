@@ -5,7 +5,8 @@
 // ============================================================================
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getDSARRequests, getNotifications, subjectIdentity } from "../../api";
+import { getNotifications } from "../../api";
+import { myRows } from "../../api/dsar";
 import StatusBadge from "../../components/common/StatusBadge";
 import SLACountdown from "../../components/common/SLACountdown";
 import TimelineTracker, { DSAR_STEPS } from "../../components/common/TimelineTracker";
@@ -18,7 +19,7 @@ export default function DSARStatus() {
   const [notifications, setNotifications] = useState([]);
 
   useEffect(() => {
-    getDSARRequests({ userId: subjectIdentity().id }).then((r) => {
+    myRows().then((r) => {
       setRows(r);
       setSelected((prev) => prev || r[0] || null);
     });

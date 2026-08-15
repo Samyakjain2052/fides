@@ -53,14 +53,26 @@ class Capability(StrEnum):
     TENANT_MANAGE = "tenant:manage"
 
 
+# Every human is also a data subject.
+#
+# Staff have accounts, the company holds their data, and the DPDP Act does not
+# stop applying to someone because they work there. Until this existed, a DPO
+# could process everybody's rights requests and had no way to raise their own —
+# which is both a compliance gap and an absurdity.
+#
+# Granting these to an auditor does not weaken "read-only by construction": the
+# capabilities are scoped to *self*, so an auditor can exercise their own rights
+# and still cannot touch anything they audit.
+_SELF: frozenset[Capability] = frozenset({
+    Capability.SELF_READ,
+    Capability.SELF_CONSENT_WRITE,
+    Capability.SELF_DSAR_WRITE,
+    Capability.SELF_GRIEVANCE_WRITE,
+})
+
 _MATRIX: dict[Role, frozenset[Capability]] = {
-    Role.DATA_PRINCIPAL: frozenset({
-        Capability.SELF_READ,
-        Capability.SELF_CONSENT_WRITE,
-        Capability.SELF_DSAR_WRITE,
-        Capability.SELF_GRIEVANCE_WRITE,
-    }),
-    Role.ADMIN: frozenset({
+    Role.DATA_PRINCIPAL: _SELF,
+    Role.ADMIN: _SELF | frozenset({
         Capability.CONSENT_READ, Capability.CONSENT_VALIDATE, Capability.PURPOSE_MANAGE,
         Capability.DSAR_READ, Capability.DSAR_PROCESS,
         Capability.GRIEVANCE_READ, Capability.GRIEVANCE_PROCESS, Capability.GRIEVANCE_ESCALATE,
@@ -70,11 +82,11 @@ _MATRIX: dict[Role, frozenset[Capability]] = {
     }),
     # Read-only by construction: an auditor who could change what they audit is
     # not an auditor.
-    Role.AUDITOR: frozenset({
+    Role.AUDITOR: _SELF | frozenset({
         Capability.AUDIT_READ, Capability.AUDIT_VERIFY,
         Capability.REPORT_GENERATE, Capability.CONSENT_READ,
     }),
-    Role.GRIEVANCE_OFFICER: frozenset({
+    Role.GRIEVANCE_OFFICER: _SELF | frozenset({
         Capability.GRIEVANCE_READ, Capability.GRIEVANCE_PROCESS,
         Capability.GRIEVANCE_ESCALATE,
     }),

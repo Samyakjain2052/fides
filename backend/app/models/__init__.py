@@ -7,6 +7,7 @@ autogenerates, so a new table can never be silently left out of a migration.
 from app.models.api_key import ApiKey
 from app.models.audit import AuditAction, AuditEvent
 from app.models.consent import Consent, DataPrincipal, Notice, Purpose
+from app.models.dsar import DsarEvent, DsarRequest
 from app.models.public_api import ApiRequestLog, IdempotencyKey
 from app.models.publishable_key import ConsentProvenance, PublishableKey
 from app.models.tenant import Tenant
@@ -19,6 +20,8 @@ __all__ = [
     "AuditEvent",
     "Consent",
     "ConsentProvenance",
+    "DsarEvent",
+    "DsarRequest",
     "DataPrincipal",
     "IdempotencyKey",
     "Notice",
@@ -49,4 +52,7 @@ TENANT_SCOPED_TABLES = [
     # Publishable keys + provenance.
     "publishable_keys",
     "consent_provenance",
+    # Phase 5 — rights requests.
+    "dsar_requests",
+    "dsar_events",
 ]

@@ -34,7 +34,10 @@ export const MODULE_STATUS = {
   // fiduciary-side triage queue (approve, reject, reassign, prepare an export)
   // has no backend behind it. One "dsar: live" covering both would be false on
   // the half a buyer's DPO spends the most time in.
-  dsar_workflow: "preview",
+  // Real: requests are rows in PostgreSQL with a server-computed statutory
+  // deadline, an append-only timeline, and triage that the engine cannot
+  // overrule. The localStorage stopgap this replaced is gone.
+  dsar_workflow: "live",
 
   // Real as of Phase 3: purposes, versioned notices, data principals and the
   // consent lifecycle are in PostgreSQL, every change writes to the audit chain,
@@ -95,6 +98,10 @@ export const MODULE_CAVEATS = {
     "The chain detects any entry being edited, removed or reordered. It cannot " +
     "yet detect removal of the most recent entries — that needs external " +
     "anchoring, and the screen says so next to the result.",
+  dsar_workflow:
+    "Triage is real. Notifying the person of a status change is not wired yet — "
+    + "that needs the notifications module, so a status change today is recorded "
+    + "and audited but nobody is emailed about it.",
   dsar:
     "Access and erasure run for real against four datastores. Two parts are not: " +
     "correction is sample data (the engine has no correction action yet), and " +
@@ -110,7 +117,6 @@ export const MODULE_ROADMAP = {
   breach: "Breach register with Board and Data Principal notification workflows.",
   notifications: "Email and SMS delivery with per-tenant templates.",
   users: "Server-side user invitation and role assignment.",
-  dsar_workflow: "Fiduciary-side triage: approve, reject, reassign, and prepare an export. The request execution behind it is already live.",
 };
 
 /**

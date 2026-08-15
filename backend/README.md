@@ -309,7 +309,46 @@ Recorded because both had been sitting unexercised and both were invisible:
 
 ---
 
-## Next: Phase 5
+## Rights requests (Phase 5)
+
+```
+POST   /v1/dsar                    raise one (own request, or someone else's with dsar:process)
+GET    /v1/dsar                    the triage queue
+GET    /v1/dsar/mine               the caller's own
+PATCH  /v1/dsar/{id}/status        advance, reject with a reason, cancel
+POST   /v1/dsar/{id}/retry         re-dispatch after a failed engine call
+GET    /v1/dsar/{id}/package       the access package — audited, and it expires
+```
+
+The engine was never the missing piece; the **record** was. A submitted request
+used to live in the browser's `localStorage`, so it was invisible to the DPO,
+invisible on another device, and gone if the person cleared their browser —
+while the erasure it triggered had genuinely happened. That stopgap is deleted.
+
+Four things carry the compliance weight:
+
+- **The deadline is computed server-side** from `tenants.dsar_sla_days`. There is
+  no parameter through which a caller could influence it, because a deadline a
+  caller can set is not a statutory deadline.
+- **A rejection must say why and a completion must say when** — CHECK
+  constraints, not service-level politeness.
+- **The engine cannot overrule a human.** A DPO's rejection is a decision; a late
+  callback saying "complete" must not resurrect it, and `refresh_from_engine`
+  will not even consult the engine for a closed request.
+- **A failed dispatch does not lose the request.** It stays at `received` with
+  the reason on its timeline and can be retried — losing somebody's rights
+  request because a downstream was briefly down would be the worst way to fail.
+
+`dsar_events` is the queryable timeline; the audit chain is the tamper-evident
+evidence. Both are written, neither is redundant, and a divergence is a bug.
+
+Correction is a tracked **manual** workflow: the engine has no correction action,
+and a CHECK constraint stops a correction from carrying an engine reference. A
+right handled by hand beats a right quietly dropped.
+
+---
+
+## Next: Phase 6
 
 Purposes, **versioned notices** (consent is bound to a notice version — see
 ARCHITECTURE.md N4), data principals, and the consent lifecycle. Then Phase 4, the
