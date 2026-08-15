@@ -16,6 +16,10 @@ export default function ConfirmModal({
   cancelLabel = "Cancel",
   destructive = true,
   busy = false,
+  // Extra content between the consequences and the buttons — used by the
+  // retention purge to demand the policy name be typed, because an irreversible
+  // action needs a step a mis-click cannot produce.
+  extra = null,
   onConfirm,
   onCancel,
 }) {
@@ -47,6 +51,8 @@ export default function ConfirmModal({
           {title}
         </h2>
         {body && <p className="mt-2 text-sm text-muted">{body}</p>}
+
+        {extra && <div className="mt-4">{extra}</div>}
 
         {consequences.length > 0 && (
           <div className="mt-4 rounded-lg border border-line bg-canvas p-3">

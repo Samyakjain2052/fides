@@ -61,7 +61,15 @@ export const MODULE_STATUS = {
   // writes to the in-memory mock.
   consent_guardian: "preview",
   grievance: "preview",
-  retention: "preview",
+  // Real: policies, a dry run that provably changes nothing, a live run that
+  // demands the policy name back, and append-only receipts that record every
+  // skip with its reason.
+  retention: "live",
+
+  // Editing an existing policy is not built — the API creates and runs, it does
+  // not update. Split out so the control stays disabled rather than becoming a
+  // button that errors when retention went live.
+  retention_edit: "preview",
   reports: "preview",
   // Real: the screen reads the HMAC hash-chained trail in PostgreSQL, and
   // "Verify chain integrity" walks it and reports the first break. The backend
@@ -81,6 +89,7 @@ export const MODULE_LABELS = {
   consent_guardian: "Guardian consent (under-18)",
   grievance: "Grievance redressal",
   retention: "Retention & purge",
+  retention_edit: "Editing a retention policy",
   reports: "Reports",
   audit: "Audit trail",
   breach: "Breach management",
@@ -94,6 +103,12 @@ export const MODULE_LABELS = {
  * mis-sell the preview banner exists to prevent.
  */
 export const MODULE_CAVEATS = {
+  retention:
+    "Purging masks a person's identifiers and keeps their consent records, " +
+    "matching the DSAR erasure path. It reaches this product's own tables, not " +
+    "a customer's connected systems. The pre-purge warning cannot be sent yet — " +
+    "that needs the notifications module — so a policy's notice period is stored " +
+    "and honoured by the UI but nobody is emailed.",
   audit:
     "The chain detects any entry being edited, removed or reordered. It cannot " +
     "yet detect removal of the most recent entries — that needs external " +
@@ -112,7 +127,7 @@ export const MODULE_CAVEATS = {
 export const MODULE_ROADMAP = {
   consent_guardian: "Verifiable parental consent — a real guardian identity check (DigiLocker or equivalent), which a publishable key cannot perform.",
   grievance: "Grievance intake, officer assignment, and the statutory escalation clock.",
-  retention: "Retention policies with real purge execution and exemption handling.",
+  retention_edit: "Updating an existing policy. Create a replacement in the meantime.",
   reports: "Reports generated from real consent and request data, exportable.",
   breach: "Breach register with Board and Data Principal notification workflows.",
   notifications: "Email and SMS delivery with per-tenant templates.",

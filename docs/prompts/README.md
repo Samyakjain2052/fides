@@ -13,7 +13,7 @@ see "Why this order" below.
 | 02 | [dsar-workflow.md](02-dsar-workflow.md) | `dsar_workflow` | **DONE** — live |
 | 03 | [notifications.md](03-notifications.md) | `notifications` | ~1 week |
 | 04 | [grievance.md](04-grievance.md) | `grievance` | ~1 week |
-| 05 | [retention.md](05-retention.md) | `retention` | 1–2 weeks |
+| 05 | [retention.md](05-retention.md) | `retention` | **DONE** — live |
 | 06 | [reports.md](06-reports.md) | `reports` | ~1 week |
 | 07 | [breach.md](07-breach.md) | `breach` | ~1 week |
 | 08 | [users.md](08-users.md) | `users` | 2–3 days |

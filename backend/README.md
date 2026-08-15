@@ -348,6 +348,46 @@ right handled by hand beats a right quietly dropped.
 
 ---
 
+## Retention and the purge executor (Phase 7)
+
+```
+GET  /v1/retention/policies
+POST /v1/retention/policies
+POST /v1/retention/policies/{id}/preview   dry run — reports, changes nothing
+POST /v1/retention/policies/{id}/run       LIVE — needs the policy name back
+GET  /v1/retention/runs                    history
+GET  /v1/retention/runs/{id}/items         the receipt
+```
+
+**This is the only code in the product that destroys data**, and it is built
+accordingly.
+
+- **`select_candidates` is called by both the dry run and the live run.** Not two
+  implementations that agree — one implementation. Two that can diverge is
+  exactly how a preview reports four rows and the live run destroys four hundred.
+  A CHECK constraint backs it up: a `dry_run` with `rows_affected > 0` cannot
+  exist.
+- **`auto_delete` defaults to false, `action` defaults to `mask`.** The safer
+  option is what you get by not thinking about it.
+- **A policy that destroys automatically must warn first** — a CHECK, so no route
+  to saving one exists.
+- **A live run needs the policy's name typed back**, and the UI never pre-fills
+  it. Same reason `rm -rf` prompts.
+- **Receipts are append-and-read**, and every skip records its reason: "not
+  purged because they have an open rights request" is the answer to a question
+  somebody will eventually ask.
+
+What a purge does: **masks the identifiers, keeps the row** — mirroring the DSAR
+erasure path, because two meanings of "erased" in one product is an audit
+contradiction. Consent records are never destroyed; they are the evidence that
+holding the data was lawful.
+
+Three things always stop a purge, checked inside the transaction so a hold
+created a moment ago is seen: a **legal hold** on the person, an **open rights
+request**, and an **active consent**.
+
+---
+
 ## Next: Phase 6
 
 Purposes, **versioned notices** (consent is bound to a notice version — see

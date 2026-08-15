@@ -174,6 +174,16 @@ class DataPrincipal(UUIDMixin, TenantMixin, TimestampMixin, Base):
 
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # A legal hold outranks every retention policy. A policy-level exemption
+    # covers a category; this covers an individual under litigation or
+    # investigation, and nothing may sweep them up while it is set.
+    legal_hold: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    legal_hold_reason: Mapped[str | None] = mapped_column(String(255))
+
+    # Set when retention has masked this person's identifiers. Queryable state
+    # rather than something inferred from the absence of an email.
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
 
 class Consent(UUIDMixin, TenantMixin, TimestampMixin, Base):
     """One person's answer, for one purpose, against one notice version.

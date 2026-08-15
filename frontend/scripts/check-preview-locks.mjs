@@ -24,8 +24,8 @@ const MUTATIONS = {
   submitGrievance: "grievance",
   submitGrievanceFeedback: "grievance",
   updateGrievance: "grievance",
-  updateRetentionPolicy: "retention",
-  runPurge: "retention",
+  // runPurge and the policy API are real now; only editing is unbuilt.
+  updateRetentionPolicy: "retention_edit",
   generateReport: "reports",
   saveBreach: "breach",
   sendTestAlert: "notifications",

@@ -5,7 +5,13 @@
 // us keep.
 // ============================================================================
 import { useEffect, useMemo, useState } from "react";
-import { getAuditLogs, getRetentionPolicies, runPurge, updateRetentionPolicy } from "../../api";
+import {
+  listPolicies,
+  listRuns,
+  preview as previewPurge,
+  runItems,
+  runPurge,
+} from "../../api/retention";
 import { useApp } from "../../context/AppContext";
 import ConfirmModal from "../../components/common/ConfirmModal";
 import StatusBadge from "../../components/common/StatusBadge";
@@ -22,11 +28,13 @@ export default function DataRetentionPolicy() {
   const [purgeResult, setPurgeResult] = useState(null);
   const [purgeLog, setPurgeLog] = useState([]);
   const [busy, setBusy] = useState(false);
+  // Typed by a human, never pre-filled. That is the whole point of it.
+  const [confirmText, setConfirmText] = useState("");
 
   const load = async () => {
-    setPolicies(await getRetentionPolicies());
-    const logs = await getAuditLogs();
-    setPurgeLog(logs.filter((l) => l.action_type === "purge_run"));
+    setPolicies(await listPolicies());
+    // Real run history, not audit entries filtered by a guessed action name.
+    setPurgeLog(await listRuns());
   };
 
   useEffect(() => {
@@ -38,33 +46,53 @@ export default function DataRetentionPolicy() {
     setForm({ ...p });
   };
 
+  // Editing an existing policy is not wired yet — the API creates and runs, it
+  // does not update. Left visibly unavailable rather than silently no-op.
   const save = async () => {
+    notify("Editing a policy is not available yet — create a new one instead.", "error");
+    setEditing(null);
+  };
+
+  /** The PRIMARY action. Reports what would happen, changes nothing. */
+  const preview = async (policy) => {
     setBusy(true);
     try {
-      await updateRetentionPolicy(editing, {
-        retention_days: Number(form.retention_days),
-        auto_delete: form.auto_delete,
-        exemption: form.exemption || null,
-        notify_days: Number(form.notify_days),
-      });
+      const run = await previewPurge(policy.id);
+      const items = await runItems(run.id);
+      setPurgeResult({ ...run, items, policy });
       await load();
-      setEditing(null);
-      notify("Retention policy updated and logged.");
+      notify(
+        `${run.candidates_found} record(s) would be ${policy.action}ed. Nothing was changed.`
+      );
+    } catch (e) {
+      notify(e.message || "The preview could not be run.", "error");
     } finally {
       setBusy(false);
     }
   };
 
+  /**
+   * The live run. Irreversible.
+   *
+   * The confirmation is the policy's own name, typed by a human — the server
+   * refuses anything else, and filling it in here would defeat the point.
+   */
   const purge = async () => {
     setBusy(true);
     try {
-      const res = await runPurge(purging.id);
-      setPurgeResult(res);
+      const run = await runPurge(purging.id, confirmText);
+      const items = await runItems(run.id);
+      setPurgeResult({ ...run, items, policy: purging });
       await load();
-      notify(`${res.records_deleted} records purged from ${res.category}.`);
+      notify(`${run.rows_affected} record(s) purged. The receipt is on this page.`);
+    } catch (e) {
+      // The server refuses for real reasons — a wrong confirmation, an exempt
+      // policy, an inactive one. Each is fixable, and each says how.
+      notify(e.message || "The purge could not be run.", "error");
     } finally {
       setBusy(false);
       setPurging(null);
+      setConfirmText("");
     }
   };
 
@@ -90,15 +118,52 @@ export default function DataRetentionPolicy() {
       </div>
 
       {purgeResult && (
-        <div className="card border-success/40 bg-success/5 p-4 text-sm">
+        <div
+          className={`card p-4 text-sm ${
+            purgeResult.mode === "dry_run"
+              ? "border-info/40 bg-info/5"
+              : "border-success/40 bg-success/5"
+          }`}
+        >
           <p className="flex items-center gap-2 font-medium text-ink">
-            <span className="h-2 w-2 rounded-full bg-success" aria-hidden="true" />
-            Purge completed — {purgeResult.category}
+            <span
+              className={`h-2 w-2 rounded-full ${
+                purgeResult.mode === "dry_run" ? "bg-info" : "bg-success"
+              }`}
+              aria-hidden="true"
+            />
+            {purgeResult.mode === "dry_run"
+              ? `Preview — nothing was changed (${purgeResult.policy?.name})`
+              : `Purge completed — ${purgeResult.policy?.name}`}
           </p>
           <p className="mt-1 text-muted">
-            {purgeResult.records_deleted} records deleted on {purgeResult.at}. Logged as{" "}
-            <span className="font-mono">{purgeResult.audit.log_id}</span>.
+            {purgeResult.mode === "dry_run"
+              ? `${purgeResult.candidates_found} record(s) would be affected. ` +
+                `${purgeResult.scope_summary?.examined ?? 0} examined.`
+              : `${purgeResult.rows_affected} record(s) ${
+                  purgeResult.policy?.action === "delete" ? "deleted" : "masked"
+                }.`}{" "}
+            Receipt <span className="font-mono">{purgeResult.id?.slice(0, 8)}</span>.
           </p>
+
+          {/* Every skip, with its reason. "Not purged because they have an open
+              rights request" is the answer to a question somebody will ask. */}
+          {purgeResult.items?.length > 0 && (
+            <ul className="mt-3 space-y-1">
+              {purgeResult.items.slice(0, 12).map((i) => (
+                <li key={i.entity_id} className="font-mono text-xs text-muted">
+                  {i.action_taken}
+                  {i.skip_reason ? ` — ${i.skip_reason}` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+          {purgeResult.scope_summary?.batch_capped && (
+            <p className="mt-2 text-xs text-warning">
+              This run was capped at {purgeResult.scope_summary.batch_cap} records.
+              More remain eligible — run it again.
+            </p>
+          )}
         </div>
       )}
 
@@ -189,11 +254,19 @@ export default function DataRetentionPolicy() {
                   </dl>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" className="btn-secondary" onClick={() => startEdit(p)}>
+                  {/* Preview FIRST, and styled as the primary action. The
+                      destructive one must never be the easiest thing to reach on
+                      a screen that deletes people's data. */}
+                  <button type="button" className="btn-primary" onClick={() => preview(p)}
+                          disabled={busy}>
+                    {busy ? "Checking…" : "Preview — what would be purged"}
+                  </button>
+                  <button type="button" className="btn-secondary" onClick={() => startEdit(p)}
+                          {...previewLock("retention_edit", "Editing a policy")}>
                     Edit policy
                   </button>
-                  <button type="button" className="btn-danger" onClick={() => setPurging(p)} {...previewLock("retention", "Running a purge")}>
-                    Run Manual Purge
+                  <button type="button" className="btn-danger" onClick={() => setPurging(p)}>
+                    Run purge…
                   </button>
                 </div>
               </div>
@@ -236,7 +309,9 @@ export default function DataRetentionPolicy() {
       <section className="card overflow-hidden">
         <div className="border-b border-line px-5 py-4">
           <h2 className="font-semibold text-ink">Purge activity</h2>
-          <p className="text-xs text-muted">All purges are written to the audit trail.</p>
+          <p className="text-xs text-muted">
+              Every run writes a receipt that cannot afterwards be edited or deleted.
+            </p>
         </div>
         {purgeLog.length === 0 ? (
           <p className="px-5 py-4 text-sm text-muted">No purges recorded in this session.</p>
@@ -244,10 +319,21 @@ export default function DataRetentionPolicy() {
           <ul className="divide-y divide-line">
             {purgeLog.map((l) => (
               <li key={l.id} className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
-                <span className="font-mono text-xs">{l.log_id}</span>
-                <span className="text-ink">{l.consent_status}</span>
-                <span className="text-xs text-muted">{new Date(l.timestamp).toLocaleString()}</span>
-                <span className="text-xs text-muted">by {l.initiator}</span>
+                <span className="font-mono text-xs">{l.id.slice(0, 8)}</span>
+                <span
+                  className={`tag ${l.mode === "dry_run" ? "" : "text-danger"}`}
+                >
+                  {l.mode === "dry_run" ? "preview" : "LIVE"}
+                </span>
+                <span className="text-ink">
+                  {l.mode === "dry_run"
+                    ? `${l.candidates_found} would be affected`
+                    : `${l.rows_affected} affected`}
+                </span>
+                <span className="text-xs text-muted">
+                  {new Date(l.started_at).toLocaleString()}
+                </span>
+                <span className="text-xs text-muted">{l.status}</span>
               </li>
             ))}
           </ul>
@@ -256,20 +342,44 @@ export default function DataRetentionPolicy() {
 
       <ConfirmModal
         open={Boolean(purging)}
-        title={`Run a manual purge on ${purging?.category}?`}
-        body="This deletes personal data whose retention period has expired."
+        title={`Run a live purge with “${purging?.name}”?`}
+        body={
+          `Identifiers for people past the ${purging?.retention_days}-day retention ` +
+          `period in “${purging?.data_category}” will be ` +
+          `${purging?.action === "delete" ? "deleted" : "masked"}. ` +
+          `Run a preview first if you have not already.`
+        }
         consequences={[
-          "Records past the retention period are permanently deleted.",
-          purging?.exemption
-            ? `Records covered by the exemption (“${purging.exemption}”) are kept.`
-            : "There is no exemption on this category — everything expired is deleted.",
-          "The result is written to the audit trail.",
+          "Identifiers are cleared. The consent records stay — they are the evidence the data could lawfully be held.",
+          "Anyone under a legal hold, with an open rights request, or with an active consent is skipped, and the receipt says why.",
+          purging?.exemption_code && purging.exemption_code !== "none"
+            ? `This policy carries a ${purging.exemption_code} exemption, so the server will refuse the run.`
+            : "This policy has no exemption.",
+          "A receipt is written that cannot afterwards be edited or deleted.",
           "This cannot be undone.",
         ]}
         confirmLabel="Run purge"
-        busy={busy}
-        onCancel={() => setPurging(null)}
+        busy={busy || confirmText !== purging?.name}
+        onCancel={() => { setPurging(null); setConfirmText(""); }}
         onConfirm={purge}
+        extra={
+          <label className="block text-sm">
+            <span className="text-ink">
+              Type the policy name to confirm: <strong>{purging?.name}</strong>
+            </span>
+            <input
+              className="input mt-1"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder={purging?.name}
+              aria-label="Policy name confirmation"
+            />
+            <span className="mt-1 block text-xs text-muted">
+              The server refuses anything else. This field is never pre-filled —
+              it is the step that stops a mis-click destroying data.
+            </span>
+          </label>
+        }
       />
     </div>
   );
