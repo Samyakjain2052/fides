@@ -164,6 +164,47 @@ export async function apiFetch(path, options = {}) {
   }
 }
 
+/**
+ * Authenticated download of a streamed export.
+ *
+ * Separate from `apiFetch` because `call()` parses every response as JSON, and a
+ * CSV is not JSON. Returns the Blob and the server's filename so the caller can
+ * hand it to the browser.
+ *
+ * Same one-shot refresh-and-retry as `apiFetch`: a report generated on a screen
+ * left open past the access token's 15 minutes must not fail with a 401 that a
+ * reload would have fixed.
+ */
+export async function apiDownload(path, { method = "POST", body } = {}) {
+  const attempt = async () => {
+    const headers = {};
+    if (body) headers["Content-Type"] = "application/json";
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const resp = await fetch(`${API}${path}`, {
+      method,
+      headers,
+      credentials: "include",
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!resp.ok) throw await toError(resp);
+
+    // The server names the file. Deriving it in the browser would drift from the
+    // period the server actually used once a default is involved.
+    const disposition = resp.headers.get("content-disposition") || "";
+    const match = /filename="?([^"';]+)"?/.exec(disposition);
+    return { blob: await resp.blob(), filename: match?.[1] || "report" };
+  };
+
+  try {
+    return await attempt();
+  } catch (err) {
+    if (err.status !== 401) throw err;
+    const session = await restoreSession();
+    if (!session) throw err;
+    return attempt();
+  }
+}
+
 export async function logout() {
   try {
     await call("/auth/logout", { method: "POST", auth: true });

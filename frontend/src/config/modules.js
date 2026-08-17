@@ -70,7 +70,7 @@ export const MODULE_STATUS = {
   // not update. Split out so the control stays disabled rather than becoming a
   // button that errors when retention went live.
   retention_edit: "preview",
-  reports: "preview",
+  reports: "live",
   // Real: the screen reads the HMAC hash-chained trail in PostgreSQL, and
   // "Verify chain integrity" walks it and reports the first break. The backend
   // chain was already real from Phase 2 — this only connected the screen to it.
@@ -116,6 +116,13 @@ export const MODULE_CAVEATS = {
     "overnight; an anonymous complaint will not escalate until the filer confirms " +
     "their email, and if they never do it needs picking up by hand; and there is " +
     "no attachment support, so a person cannot submit supporting documents.",
+  reports:
+    "Six registers, every figure from a query, streamed as CSV or JSON and never " +
+    "stored. Three limits: no PDF yet, so a DPO forwarding one to a board sends a " +
+    "spreadsheet; nothing is digitally signed — each report carries the audit " +
+    "chain head hash, which is tamper evidence you can recompute, and the report " +
+    "says so; and periods are capped at 366 days with exports capped at 50,000 " +
+    "rows, stated in the provenance block whenever a cap is hit.",
   notifications:
     "Templates, rendering, the queue and the delivery log are real, and messages " +
     "go out on request received / completed / refused, consent withdrawal and " +
@@ -143,7 +150,6 @@ export const MODULE_CAVEATS = {
 export const MODULE_ROADMAP = {
   consent_guardian: "Verifiable parental consent — a real guardian identity check (DigiLocker or equivalent), which a publishable key cannot perform.",
   retention_edit: "Updating an existing policy. Create a replacement in the meantime.",
-  reports: "Reports generated from real consent and request data, exportable.",
   breach: "Breach register with Board and Data Principal notification workflows.",
   users: "Server-side user invitation and role assignment.",
 };

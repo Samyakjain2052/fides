@@ -134,6 +134,13 @@ class AuditAction:
     RETENTION_PREVIEWED = "retention.previewed"
     RETENTION_PURGED = "retention.purged"
 
+    # reporting
+    #
+    # Worth auditing: "who extracted the consent register last quarter" is a
+    # reasonable question to ask about a file full of personal data, and the
+    # extract itself leaves no other trace because reports are never stored.
+    REPORT_GENERATED = "report.generated"
+
     # integrity
     AUDIT_VERIFIED = "audit.verified"
     AUDIT_INTEGRITY_FAILED = "audit.integrity_failed"

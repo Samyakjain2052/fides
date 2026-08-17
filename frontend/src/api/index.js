@@ -197,10 +197,11 @@ let validationLog = [
   { id: "v3", user_id: "u003", purpose_id: "n3", result: "expired", checked_at: "2026-07-29T10:01:00Z", caller: "analytics-service" },
 ];
 
-let reports = [
-  { id: "r1", type: "Consent Report", generated_at: "2026-07-01T05:00:00Z", generated_by: "adm01", range: "Jun 2026", format: "PDF", signed: false },
-  { id: "r2", type: "Audit Report", generated_at: "2026-07-01T05:02:00Z", generated_by: "adm01", range: "Jun 2026", format: "PDF", signed: true },
-];
+// The mock list of previously-generated reports lived here. Removed with the
+// module: reports are streamed and never stored, so there is nothing to list.
+// One of these rows carried `signed: true`, which the screen rendered as "carries
+// a digital signature for the regulator" — a claim nothing in the product
+// supported. See src/api/reports.js.
 
 // Chart series for the admin dashboard.
 // Removed: a hardcoded [24, 9, 14] rendered under the heading "Last 30 days".
@@ -655,19 +656,6 @@ export async function saveBreach(patch) {
   const row = { id: "b" + n, reference: "BRE-2026-" + String(n).padStart(3, "0"), detected_at: nowIso(), reported_at: null, status: "investigating", ...patch };
   breaches = [row, ...breaches];
   appendAuditLog({ action_type: "breach_recorded", initiator: "Data Fiduciary", consent_status: row.severity });
-  return clone(row);
-}
-
-export async function getReports() {
-  await delay();
-  return clone(reports);
-}
-
-export async function generateReport({ type, range, format, signed, by }) {
-  await delay(900);
-  const row = { id: "r" + (reports.length + 1), type, range, format, signed: Boolean(signed), generated_at: nowIso(), generated_by: by || "adm01" };
-  reports = [row, ...reports];
-  appendAuditLog({ action_type: "report_generated", initiator: "Data Fiduciary", consent_status: type });
   return clone(row);
 }
 

@@ -27,7 +27,7 @@ If the two ever disagree, the file is right and this document is stale.
 | Audit trail | **live** | cannot detect truncation of the newest entries (needs external anchoring) |
 | Notifications | **live** | no scheduler; SMS modelled but unimplemented; console provider ships by default |
 | Grievance redressal | **live** | no attachments; no scheduler (escalation evaluated on read) |
-| Reports | preview | generated from real data, exportable, signed |
+| Reports | **live** | no PDF; nothing signed (chain-hash anchor only) |
 | Breach management | preview | register + Board/principal notification |
 | Users & roles | preview | server-side invitation and role assignment |
 
@@ -53,7 +53,7 @@ environment does not make it more complete — it makes it expensive.
   7  Retention + purge   ← DONE. Built before notifications; see the note below
   8  Notifications       ← DONE. Moved up from 8; the pre-purge seam closed here
   6  Grievances          ← DONE. Public filing, escalation clock, officer contact
-  9  Reports + breach    ← NEXT. Reporting on data that now exists
+  9  Reports + breach    ← Reports DONE. Breach register is next.
  10  Hardening           ← SSO, field encryption, WORM anchoring, load tests
 ```
 

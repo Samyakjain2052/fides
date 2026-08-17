@@ -1,5 +1,45 @@
 # Build brief — `reports` (compliance reporting from real data)
 
+> **STATUS: DONE.** Built and live. All three `[DECIDE]` items went with the
+> recommendation:
+>
+> * **CSV + JSON, no PDF.** The catalogue endpoint advertises exactly the two
+>   formats the server can produce, and the screen offers no PDF control — a dead
+>   button makes a customer plan around a capability that does not exist.
+> * **Chain hash, explicitly not a signature.** Every report carries the audit
+>   chain head, and every report says in words that this is tamper evidence rather
+>   than a signature. `GET /v1/reports` states the same thing in the API response,
+>   so an integrator cannot mistake one for the other. A test asserts that every
+>   line mentioning signing is a denial of it.
+> * **Streamed, never stored.** No `report_runs` table and no migration. The
+>   generation is audited (`report.generated`) because that is the only trace a
+>   streamed export leaves, and "who extracted the consent register last quarter"
+>   is a fair question about a file full of personal data.
+>
+> Beyond the brief:
+>
+> * **The provenance block appears twice** in a CSV export — a header before the
+>   rows and a footer after. Neither alone is sufficient: a header cannot state how
+>   many rows were emitted, and a footer is lost if the transfer dies. Together, a
+>   file whose header promises a total and whose footer is missing is visibly
+>   incomplete.
+> * **The audit extract omits payloads.** Audit payloads contain personal data, and
+>   exporting the chain body would be a second copy of it outside every control
+>   that governs the first. The extract carries `prev_hash`/`hash` so a reader can
+>   still verify the links, which a test asserts end to end.
+> * **`met_deadline` is null for an open request**, not true. Reporting an
+>   unanswered request as a pass is the most likely place for this module to
+>   flatter its owner.
+>
+> One bug worth recording, because the obvious implementation was wrong:
+> `count_rows` originally used `with_only_columns(func.count())` to reuse the
+> export's statement. Replacing the projection also drops the inferred FROM when
+> the statement selects from a subquery — as the consent-activity union does — so
+> the query silently degraded to `SELECT count(*)`, which returns 1 for every
+> input including an empty period. It now wraps the statement in a subquery
+> instead, which keeps the single-source-of-truth property without that failure
+> mode.
+
 > Paste this whole file as the opening prompt. Fill the `[DECIDE]` block first.
 
 **Size: ~1 week.** Build **after** consent, DSAR, grievance and retention are

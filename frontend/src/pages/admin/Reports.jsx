@@ -1,183 +1,317 @@
 // ============================================================================
 // Reports (/admin/reports)
-// The five compliance exports. Each generated report records when it was made
-// and by whom; the audit report carries a digital signature for the regulator.
+//
+// Real reports, generated from real data.
+//
+// What the previous version claimed and this one does not: the audit report
+// "carries a digital signature for the regulator". It did not. Nothing here is
+// labelled signed, and the provenance block says in as many words that the chain
+// head hash is tamper evidence rather than a signature.
+//
+// Other removals: the PDF format (the server produces CSV and JSON — a dead PDF
+// button makes a customer plan around a capability that does not exist), and the
+// list of previously-generated reports, which was a mock table of files that were
+// never created. Reports are streamed and never stored, so there is nothing to
+// list; the audit trail records who generated what.
+//
+// Empty states are first-class. "No consent activity in this period" is a real
+// answer and renders as one — not as an empty axis that reads as a broken chart.
 // ============================================================================
-import { useEffect, useState } from "react";
-import { generateReport, getAdminDashboard, getReports } from "../../api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  catalogue,
+  download,
+  FORMATS,
+  preview,
+  RANGES,
+} from "../../api/reports";
 import { useApp } from "../../context/AppContext";
-import StatusBadge from "../../components/common/StatusBadge";
-import { previewLock } from "../../config/modules";
 
-const REPORT_TYPES = [
-  {
-    id: "Consent Report",
-    blurb: "All consents by date range, status and purpose.",
-    formats: ["PDF", "CSV"],
-    signed: false,
-  },
-  {
-    id: "DSAR Completion Report",
-    blurb: "SLA compliance rate and average resolution time.",
-    formats: ["PDF"],
-    signed: false,
-  },
-  {
-    id: "Grievance Report",
-    blurb: "Open, resolved and escalated complaints by period.",
-    formats: ["PDF"],
-    signed: false,
-  },
-  {
-    id: "Audit Report",
-    blurb: "Full audit trail export with a digital signature, for submission to the Data Protection Board.",
-    formats: ["PDF"],
-    signed: true,
-  },
-  {
-    id: "Retention Policy Report",
-    blurb: "Purges run, records deleted, and exemptions applied.",
-    formats: ["PDF"],
-    signed: false,
-  },
-];
-
-const RANGES = ["Last 7 days", "Last 30 days", "This month", "Last month", "This quarter", "This year"];
+/** A truncated cell keeps the table readable; the export has the full value. */
+function Cell({ value }) {
+  if (value === null || value === undefined || value === "") {
+    return <span className="text-muted">—</span>;
+  }
+  if (typeof value === "boolean") {
+    return <span className={value ? "text-success" : "text-muted"}>{String(value)}</span>;
+  }
+  const text = String(value);
+  const looksIso = /^\d{4}-\d{2}-\d{2}T/.test(text);
+  const shown = looksIso ? new Date(text).toLocaleString() : text;
+  return (
+    <span title={shown.length > 28 ? shown : undefined}>
+      {shown.length > 28 ? `${shown.slice(0, 27)}…` : shown}
+    </span>
+  );
+}
 
 export default function Reports() {
-  const { notify, user } = useApp();
-  const [rows, setRows] = useState([]);
-  const [range, setRange] = useState("Last 30 days");
-  const [busy, setBusy] = useState(null);
-  const [summary, setSummary] = useState(null);
+  const { notify } = useApp();
 
-  const load = () => getReports().then(setRows);
+  const [cat, setCat] = useState(null);
+  const [active, setActive] = useState(null);
+  const [rangeId, setRangeId] = useState("30d");
+  const [format, setFormat] = useState("csv");
+  const [verifyChain, setVerifyChain] = useState(false);
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    catalogue()
+      .then((c) => {
+        setCat(c);
+        setActive(c.reports[0]?.key ?? null);
+      })
+      .catch((e) => setError(e.message));
+  }, []);
+
+  const load = useCallback(async () => {
+    if (!active) return;
+    setLoading(true);
+    setError("");
+    try {
+      setData(await preview(active, { rangeId, verifyChain }));
+    } catch (e) {
+      setError(e.message);
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [active, rangeId, verifyChain]);
 
   useEffect(() => {
     load();
-    getAdminDashboard().then((d) => setSummary(d.stats));
-  }, []);
+  }, [load]);
 
-  const make = async (type, format, signed) => {
-    setBusy(type + format);
+  const definition = useMemo(
+    () => cat?.reports.find((r) => r.key === active) ?? null,
+    [cat, active],
+  );
+
+  const onDownload = async () => {
+    setBusy(true);
+    setError("");
     try {
-      const row = await generateReport({ type, range, format, signed, by: user?.id });
-      await load();
-      // Produce a real file so the button isn't decorative.
-      const body =
-        `${type}\nRange: ${range}\nGenerated: ${row.generated_at}\nGenerated by: ${row.generated_by}\n` +
-        (signed ? `Digital signature: sha256:${Math.abs(Date.parse(row.generated_at)).toString(16)}...\n` : "") +
-        `\n--- summary ---\n${JSON.stringify(summary, null, 2)}\n`;
-      const blob = new Blob([body], { type: "text/plain" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${type.replace(/\s+/g, "-").toLowerCase()}.${format.toLowerCase()}`;
-      a.click();
-      URL.revokeObjectURL(url);
-      notify(`${type} generated as ${format}.`);
+      const filename = await download(active, { rangeId, format, verifyChain });
+      notify(`${filename} downloaded.`);
+    } catch (e) {
+      setError(e.message);
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
 
+  if (!cat) {
+    return (
+      <p className="text-sm text-muted">
+        {error || "Loading the report catalogue…"}
+      </p>
+    );
+  }
+
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-ink">Reports</h1>
-          <p className="text-sm text-muted">
-            Compliance-ready exports. Everything generated here is itself logged.
-          </p>
-        </div>
-        <div>
-          <label className="label" htmlFor="r-range">Date range</label>
-          <select id="r-range" className="input" value={range} onChange={(e) => setRange(e.target.value)}>
-            {RANGES.map((r) => <option key={r} value={r}>{r}</option>)}
-          </select>
-        </div>
+      <div>
+        <h1 className="text-xl font-semibold text-ink">Compliance reports</h1>
+        <p className="text-sm text-muted">
+          Generated from live data at the moment you ask. Nothing is stored, so
+          nothing can drift from the records it describes.
+        </p>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {REPORT_TYPES.map((r) => (
-          <div key={r.id} className="card flex flex-col p-5">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <h2 className="font-semibold text-ink">{r.id}</h2>
-              {r.signed && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-navy/10 px-2 py-0.5 text-xs font-semibold text-navy">
-                  <span aria-hidden="true">🔒</span> digitally signed
-                </span>
-              )}
-            </div>
-            <p className="mt-1 flex-1 text-sm text-muted">{r.blurb}</p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {r.formats.map((f) => (
-                <button
-                  key={f}
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => make(r.id, f, r.signed)}
-                  disabled={busy === r.id + f}
-                  {...previewLock("reports", "Generating a report")}
-                >
-                  {busy === r.id + f ? "Generating…" : `Generate ${f}`}
-                </button>
-              ))}
-            </div>
-          </div>
+      {/* ------------------------------------------------- what this is not -- */}
+      <div className="rounded-lg border border-line bg-canvas p-4 text-xs text-muted">
+        <p className="font-semibold text-ink">These reports are not signed.</p>
+        <p className="mt-1">{cat.signing}</p>
+        <p className="mt-2">
+          Formats: {cat.formats.join(", ").toUpperCase()}. Periods are capped at{" "}
+          {cat.max_period_days} days and exports at{" "}
+          {cat.max_rows.toLocaleString()} rows — a report that hits either cap
+          says so in its provenance block.
+        </p>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-danger/50 bg-danger/10 p-3 text-sm text-ink">
+          {error}
+        </div>
+      )}
+
+      {/* ---------------------------------------------------- report picker -- */}
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {cat.reports.map((r) => (
+          <button
+            key={r.key}
+            type="button"
+            onClick={() => setActive(r.key)}
+            className={`card p-4 text-left transition ${
+              active === r.key ? "border-teal ring-1 ring-teal/40" : "hover:bg-line/20"
+            }`}
+          >
+            <p className="font-semibold text-ink">{r.title}</p>
+            <p className="mt-1 text-xs text-muted">{r.question}</p>
+          </button>
         ))}
       </div>
 
+      {/* --------------------------------------------------------- controls -- */}
+      <div className="card flex flex-wrap items-end gap-3 p-4">
+        <div>
+          <label className="label" htmlFor="r-range">Period</label>
+          <select
+            id="r-range"
+            className="input"
+            value={rangeId}
+            onChange={(e) => setRangeId(e.target.value)}
+          >
+            {RANGES.map((r) => (
+              <option key={r.id} value={r.id}>{r.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label" htmlFor="r-format">Format</label>
+          <select
+            id="r-format"
+            className="input"
+            value={format}
+            onChange={(e) => setFormat(e.target.value)}
+          >
+            {FORMATS.map((f) => (
+              <option key={f.id} value={f.id}>{f.label}</option>
+            ))}
+          </select>
+        </div>
+        <label className="flex items-center gap-2 pb-2 text-sm text-ink">
+          <input
+            type="checkbox"
+            checked={verifyChain}
+            onChange={(e) => setVerifyChain(e.target.checked)}
+          />
+          <span title="Recomputes every entry in the audit chain. Slower, and off by default so the report does not claim a check nobody ran.">
+            Verify the audit chain
+          </span>
+        </label>
+        <button
+          type="button"
+          className="btn-primary ml-auto"
+          onClick={onDownload}
+          disabled={busy || !active}
+        >
+          {busy ? "Generating…" : `Download ${format.toUpperCase()}`}
+        </button>
+      </div>
+
+      {definition?.caveats?.length > 0 && (
+        <ul className="space-y-1.5 text-xs text-muted">
+          {definition.caveats.map((c, i) => (
+            <li key={i} className="rounded-lg border border-warning/40 bg-warning/5 px-3 py-2">
+              {c}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* ---------------------------------------------------------- preview -- */}
       <section className="card overflow-hidden">
-        <div className="border-b border-line px-5 py-4">
-          <h2 className="font-semibold text-ink">Generated reports</h2>
-          <p className="text-xs text-muted">
-            Timestamp, who generated it, and the download.
+        <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-line px-5 py-3">
+          <div>
+            <h2 className="font-semibold text-ink">{definition?.title}</h2>
+            {definition?.notes && (
+              <p className="text-xs text-muted">{definition.notes}</p>
+            )}
+          </div>
+          {data && (
+            <p className="text-xs text-muted">
+              Showing {data.rows.length} of {data.total.toLocaleString()} matching
+              row{data.total === 1 ? "" : "s"}
+            </p>
+          )}
+        </div>
+
+        {loading ? (
+          <p className="px-5 py-8 text-center text-sm text-muted">Running the query…</p>
+        ) : !data ? (
+          <p className="px-5 py-8 text-center text-sm text-muted">
+            Nothing to show.
           </p>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-line">
-            <thead className="bg-canvas">
-              <tr>
-                <th className="th">Report</th>
-                <th className="th">Range</th>
-                <th className="th">Format</th>
-                <th className="th">Signature</th>
-                <th className="th">Generated</th>
-                <th className="th">By</th>
-                <th className="th sr-only">Download</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {rows.length === 0 && (
-                <tr><td className="td text-center text-muted" colSpan={7}>Nothing generated yet.</td></tr>
-              )}
-              {rows.map((r) => (
-                <tr key={r.id}>
-                  <td className="td">{r.type}</td>
-                  <td className="td text-xs text-muted">{r.range}</td>
-                  <td className="td"><span className="tag">{r.format}</span></td>
-                  <td className="td">
-                    {r.signed
-                      ? <StatusBadge status="valid" label="Signed" />
-                      : <span className="text-xs text-muted">—</span>}
-                  </td>
-                  <td className="td text-xs text-muted">
-                    {new Date(r.generated_at).toLocaleString()}
-                  </td>
-                  <td className="td font-mono text-xs">{r.generated_by}</td>
-                  <td className="td">
-                    <button type="button" className="text-sm text-teal underline"
-                            onClick={() => make(r.type, r.format, r.signed)}>
-                      Download
-                    </button>
-                  </td>
+        ) : data.rows.length === 0 ? (
+          // An empty report is a legitimate report. It says so in words rather
+          // than rendering an empty table that reads as a failure.
+          <div className="px-5 py-10 text-center">
+            <p className="text-sm font-medium text-ink">
+              No {definition.title.toLowerCase()} activity in this period.
+            </p>
+            <p className="mx-auto mt-1 max-w-md text-xs text-muted">
+              That is a real answer, not a loading state. The export below will
+              contain the same finding, with its provenance block, so it can be
+              filed as evidence that there was nothing to report.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-line">
+              <thead className="bg-canvas">
+                <tr>
+                  {data.columns.map((c) => (
+                    <th key={c} className="th whitespace-nowrap">
+                      {c.replace(/_/g, " ")}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {data.rows.map((row, i) => (
+                  <tr key={i}>
+                    {data.columns.map((c) => (
+                      <td key={c} className="td whitespace-nowrap text-xs">
+                        <Cell value={row[c]} />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
+
+      {/* ------------------------------------------------------ provenance -- */}
+      {data && (
+        <section className="card p-5">
+          <h2 className="font-semibold text-ink">Provenance</h2>
+          <p className="text-xs text-muted">
+            The same block the export carries, verbatim. Whoever reads the file is
+            making the same decisions as whoever reads this screen.
+          </p>
+          {data.provenance.truncated && (
+            <p className="mt-3 rounded-lg border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-ink">
+              This report would be truncated: {data.provenance.total_matching.toLocaleString()}{" "}
+              rows match and the export is capped at{" "}
+              {data.provenance.row_limit.toLocaleString()}. Narrow the period to
+              get the rest.
+            </p>
+          )}
+          <pre className="mt-3 overflow-x-auto rounded-lg border border-line bg-canvas p-3 text-[11px] leading-relaxed text-ink">
+            {data.provenance_lines.join("\n")}
+          </pre>
+          <p className="mt-2 text-xs text-muted">
+            Chain verification is{" "}
+            <strong className="text-ink">
+              {data.provenance.chain_verified === "ok"
+                ? "OK"
+                : data.provenance.chain_verified === "failed"
+                  ? "FAILED"
+                  : "not checked"}
+            </strong>
+            {data.provenance.chain_verified === "not_checked" &&
+              " — tick “Verify the audit chain” above to check it. Left unchecked, the report states that rather than implying a pass."}
+            {data.provenance.chain_problem && ` — ${data.provenance.chain_problem}`}
+          </p>
+        </section>
+      )}
     </div>
   );
 }

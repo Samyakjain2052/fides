@@ -10,6 +10,7 @@ from app.api.v1 import (
     dsar,
     grievances,
     notifications,
+    reports,
     retention,
 )
 
@@ -21,6 +22,7 @@ api_router.include_router(consent.router)
 api_router.include_router(dsar.router)
 api_router.include_router(grievances.router)
 api_router.include_router(notifications.router)
+api_router.include_router(reports.router)
 api_router.include_router(retention.router)
 
 __all__ = ["api_router"]

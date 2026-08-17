@@ -14,7 +14,7 @@ see "Why this order" below.
 | 03 | [notifications.md](03-notifications.md) | `notifications` | **DONE** — live |
 | 04 | [grievance.md](04-grievance.md) | `grievance` | **DONE** — live |
 | 05 | [retention.md](05-retention.md) | `retention` | **DONE** — live |
-| 06 | [reports.md](06-reports.md) | `reports` | ~1 week |
+| 06 | [reports.md](06-reports.md) | `reports` | **DONE** — live |
 | 07 | [breach.md](07-breach.md) | `breach` | ~1 week |
 | 08 | [users.md](08-users.md) | `users` | 2–3 days |
 
