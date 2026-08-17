@@ -186,11 +186,11 @@ export const CORRECTABLE_FIELDS = ["Full name", "Email address", "Phone", "Posta
 // routes. The removed `fiduciary` rows carried invented webhook HTTP codes,
 // acknowledgements and escalations for a processor-alerting system that does not
 // exist in this product.
-let breaches = [
-  { id: "b1", reference: "BRE-2026-001", detected_at: "2026-07-22T02:15:00Z", reported_at: "2026-07-22T09:40:00Z", severity: "high", status: "reported_to_dpb", affected_users: 1420, categories: "Contact Data", description: "Misconfigured storage bucket exposed marketing contact exports for ~6 hours.", remediation: "Bucket policy corrected, access logs reviewed, affected users notified." },
-  { id: "b2", reference: "BRE-2026-002", detected_at: "2026-07-28T18:05:00Z", reported_at: null, severity: "medium", status: "investigating", affected_users: 12, categories: "Usage Data", description: "Support agent accessed session records outside assigned ticket scope.", remediation: "Access revoked pending review." },
-];
-
+// The mock breach rows and their read/write helpers lived here. Removed with the
+// module: the register is real, at /v1/breaches. `saveBreach` accepted an
+// arbitrary patch, so any field could be set to anything — including a status of
+// "reported_to_dpb" with neither notification actually performed, which is the
+// exact half-compliance the real schema refuses with a CHECK constraint.
 let validationLog = [
   { id: "v1", user_id: "u001", purpose_id: "n1", result: "valid", checked_at: "2026-07-29T09:12:00Z", caller: "core-banking-api" },
   { id: "v2", user_id: "u001", purpose_id: "n2", result: "withdrawn", checked_at: "2026-07-29T09:12:04Z", caller: "marketing-service" },
@@ -637,26 +637,6 @@ export async function runPurge(id) {
   const deleted = Math.floor(Math.random() * 40) + 5;
   const audit = appendAuditLog({ action_type: "purge_run", initiator: "system", consent_status: row.category });
   return { category: row.category, records_deleted: deleted, at: row.last_purge, audit };
-}
-
-export async function getBreaches() {
-  await delay();
-  return clone(breaches);
-}
-
-export async function saveBreach(patch) {
-  await delay(400);
-  if (patch.id) {
-    const row = breaches.find((b) => b.id === patch.id);
-    Object.assign(row, patch);
-    appendAuditLog({ action_type: "breach_updated", initiator: "Data Fiduciary", consent_status: row.status });
-    return clone(row);
-  }
-  const n = breaches.length + 1;
-  const row = { id: "b" + n, reference: "BRE-2026-" + String(n).padStart(3, "0"), detected_at: nowIso(), reported_at: null, status: "investigating", ...patch };
-  breaches = [row, ...breaches];
-  appendAuditLog({ action_type: "breach_recorded", initiator: "Data Fiduciary", consent_status: row.severity });
-  return clone(row);
 }
 
 // ============================================================================

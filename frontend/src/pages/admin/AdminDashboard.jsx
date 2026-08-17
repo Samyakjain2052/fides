@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getAdminDashboard } from "../../api";
 import { CATEGORY_LABEL, listGrievances, officer as fetchOfficer } from "../../api/grievances";
+import { listBreaches } from "../../api/breaches";
 import StatCard from "../../components/common/StatCard";
 import StatusBadge from "../../components/common/StatusBadge";
 import SLACountdown from "../../components/common/SLACountdown";
@@ -34,6 +35,11 @@ export default function AdminDashboard() {
   // exists to prevent.
   const [grievances, setGrievances] = useState(null);
   const [officer, setOfficer] = useState(null);
+  // Breaches are the loudest thing on this page when they are late. An
+  // un-notified breach past its threshold outranks an overdue DSAR: the DSAR is
+  // one person's request, the breach is a statutory duty to a regulator and to
+  // everybody affected.
+  const [breaches, setBreaches] = useState(null);
 
   useEffect(() => {
     getAdminDashboard().then(setData);
@@ -41,6 +47,9 @@ export default function AdminDashboard() {
       .then(setGrievances)
       .catch(() => setGrievances(null));
     fetchOfficer().then(setOfficer).catch(() => setOfficer(null));
+    listBreaches({ openOnly: true })
+      .then(setBreaches)
+      .catch(() => setBreaches(null));
   }, []);
 
   if (!data) return <p className="text-sm text-muted">Loading compliance summary…</p>;
@@ -80,6 +89,40 @@ export default function AdminDashboard() {
         </div>
       </div>
 
+      {/* ------------------------------------------------ breach red alert -- */}
+      {/* Above the stats, above everything. A late breach notification is the
+          only thing on this screen with a regulator on the other end of it. */}
+      {breaches?.items?.some((b) => b.board_overdue) && (
+        <div
+          role="alert"
+          className="rounded-lg border-2 border-danger bg-danger/10 p-4"
+        >
+          <p className="font-semibold text-danger">
+            {breaches.items.filter((b) => b.board_overdue).length} breach
+            notification{breaches.items.filter((b) => b.board_overdue).length === 1 ? "" : "s"}{" "}
+            overdue to the Data Protection Board
+          </p>
+          <ul className="mt-2 space-y-1.5 text-sm">
+            {breaches.items
+              .filter((b) => b.board_overdue)
+              .map((b) => (
+                <li key={b.id} className="flex flex-wrap items-center gap-3">
+                  <span className="font-mono text-xs">{b.reference}</span>
+                  <span className="text-ink">{b.title}</span>
+                  <span className="text-danger">
+                    {Math.round(b.hours_since_discovery)}h since you became aware
+                  </span>
+                  <Link to="/admin/breaches" className="ml-auto text-teal underline">
+                    Open the register
+                  </Link>
+                </li>
+              ))}
+          </ul>
+          <p className="mt-2 text-xs text-muted">
+            {breaches.board_threshold_note}
+          </p>
+        </div>
+      )}
       {/* ---------------------------------------------------------- stats -- */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <StatCard label="Total active consents" value={stats.active_consents} tone="success" sample />

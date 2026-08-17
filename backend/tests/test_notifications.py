@@ -791,3 +791,64 @@ async def test_warning_twice_does_not_notify_twice(app_session_factory, tenant_a
         assert await retention_service.warn_upcoming(
             s, tenant_id=tenant_a["id"], policy=policy
         ) == 0, "the second run must be a no-op, not a second email"
+
+
+async def test_a_template_key_added_later_is_seeded_on_first_use(
+    app_session_factory, tenant_a, provider
+):
+    """A workspace created before a template key existed must still be able to send.
+
+    `seed_default_templates` runs once, at workspace creation. When the breach
+    module added `breach.principal_notice`, every existing workspace became unable
+    to send it — silently and forever, suppressing with "no active template". That
+    is honest and useless: nobody was told about a breach and nothing looked
+    broken. So a missing default is seeded the first time it is needed.
+    """
+    provider(_Failing(fail_times=0))
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        # Simulate the older workspace: delete the template entirely, as though it
+        # had never been seeded.
+        await s.execute(
+            text("DELETE FROM notification_templates WHERE key = 'consent.withdrawn'")
+        )
+        row = await notification_service.enqueue(
+            s, tenant_id=tenant_a["id"], key="consent.withdrawn",
+            to_address="person@example.com",
+            context={"purpose": "Marketing", "effective_from": "2026-08-18"},
+            entity_type="consent", entity_id=uuid.uuid4(),
+        )
+        assert row is not None
+        assert row.status == "queued", "seeded and queued, not suppressed"
+        assert "Marketing" in row.subject_rendered
+
+        # And the template now exists for next time.
+        seeded = await s.scalar(
+            select(NotificationTemplate).where(
+                NotificationTemplate.key == "consent.withdrawn"
+            )
+        )
+        assert seeded is not None
+
+
+async def test_a_deactivated_template_is_not_resurrected(
+    app_session_factory, tenant_a, provider
+):
+    """Deactivating is a decision. Seeding around it would override a human.
+
+    This is the distinction that makes the lazy seed safe: it fills a gap where
+    nothing was ever created, and leaves alone anything somebody switched off.
+    """
+    provider(_Failing(fail_times=0))
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        await s.execute(
+            text("UPDATE notification_templates SET is_active = false "
+                 "WHERE key = 'consent.withdrawn'")
+        )
+        row = await notification_service.enqueue(
+            s, tenant_id=tenant_a["id"], key="consent.withdrawn",
+            to_address="person@example.com",
+            context={"purpose": "Marketing", "effective_from": "2026-08-18"},
+            entity_type="consent", entity_id=uuid.uuid4(),
+        )
+        assert row.status == "suppressed"
+        assert "template" in row.suppression_reason

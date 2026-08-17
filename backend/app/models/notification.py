@@ -70,6 +70,11 @@ TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
     # it gets ignored.
     "grievance.confirm": ("reference", "code", "deadline", "organisation"),
     "retention.pre_purge": ("category", "purge_date", "organisation"),
+    # DPDP §8(6). Notifying the Board is only half the duty — the affected people
+    # are a separate, mandatory obligation, and this is how that half is done.
+    "breach.principal_notice": (
+        "reference", "categories", "discovered_on", "remediation", "organisation",
+    ),
 }
 
 

@@ -75,7 +75,7 @@ export const MODULE_STATUS = {
   // "Verify chain integrity" walks it and reports the first break. The backend
   // chain was already real from Phase 2 — this only connected the screen to it.
   audit: "live",
-  breach: "preview",
+  breach: "live",
   notifications: "live",
   users: "preview",
 };
@@ -116,6 +116,15 @@ export const MODULE_CAVEATS = {
     "overnight; an anonymous complaint will not escalate until the filer confirms " +
     "their email, and if they never do it needs picking up by hand; and there is " +
     "no attachment support, so a person cannot submit supporting documents.",
+  breach:
+    "The register, both halves of the §8(6) notification duty, and a resumable " +
+    "bulk send are real. Two limits by design rather than by omission: the " +
+    "product does not submit to the Data Protection Board — it generates the " +
+    "text and records that a named person submitted it, because unattended " +
+    "software contacting a regulator is not something it should do — and the " +
+    "72-hour countdown is this product's reading of \u201cwithout delay\u201d, not a " +
+    "figure from the statute. There is no breach detection; this is a register, " +
+    "not a monitoring system.",
   reports:
     "Six registers, every figure from a query, streamed as CSV or JSON and never " +
     "stored. Three limits: no PDF yet, so a DPO forwarding one to a board sends a " +
@@ -150,7 +159,6 @@ export const MODULE_CAVEATS = {
 export const MODULE_ROADMAP = {
   consent_guardian: "Verifiable parental consent — a real guardian identity check (DigiLocker or equivalent), which a publishable key cannot perform.",
   retention_edit: "Updating an existing policy. Create a replacement in the meantime.",
-  breach: "Breach register with Board and Data Principal notification workflows.",
   users: "Server-side user invitation and role assignment.",
 };
 

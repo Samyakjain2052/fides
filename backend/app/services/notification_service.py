@@ -164,6 +164,50 @@ async def resolve_template(
         )
         if row is not None:
             return row, candidate
+
+    # Nothing found. Before giving up, seed the shipped default for this key if
+    # this workspace has never had one.
+    #
+    # This exists because of a real gap: `seed_default_templates` runs once, when a
+    # workspace is created. Adding a new template key later — as the breach module
+    # did — left every existing workspace unable to send that message, silently and
+    # forever. They suppressed with "no active template", which is honest and
+    # useless: nobody was told about a breach and nothing looked broken.
+    #
+    # Only when NO row exists for the key at all. A template an administrator
+    # deliberately deactivated stays deactivated; resurrecting it would override a
+    # decision somebody made.
+    if channel == "email" and key in DEFAULT_TEMPLATES:
+        any_existing = await session.scalar(
+            select(NotificationTemplate.id).where(
+                NotificationTemplate.tenant_id == tenant_id,
+                NotificationTemplate.key == key,
+                NotificationTemplate.channel == channel,
+            )
+        )
+        if any_existing is None:
+            subject, body = DEFAULT_TEMPLATES[key]
+            validate_template(key, subject, body)
+            seeded = NotificationTemplate(
+                tenant_id=tenant_id, key=key, channel="email", language="English",
+                subject=subject, body=body,
+            )
+            try:
+                async with session.begin_nested():
+                    session.add(seeded)
+                    await session.flush()
+            except IntegrityError:
+                # Another request seeded it first. Read it back rather than failing.
+                return await resolve_template(
+                    session, tenant_id=tenant_id, key=key, channel=channel,
+                    language=language,
+                )
+            logger.info(
+                "seeded a missing default template on first use",
+                extra={"context": {"key": key, "tenant_id": str(tenant_id)}},
+            )
+            return seeded, "English"
+
     return None
 
 
@@ -579,6 +623,19 @@ DEFAULT_TEMPLATES: dict[str, tuple[str, str]] = {
         "Your complaint is logged either way. Confirming it means we will escalate "
         "it to our Grievance Officer if it is not resolved in time.\n\n"
         "{{organisation}}",
+    ),
+    "breach.principal_notice": (
+        "Important: a data security incident affecting your information",
+        "We are writing to tell you about a personal data breach that affected "
+        "information we hold about you.\n\n"
+        "What happened: we became aware of this on {{discovered_on}}. Our internal "
+        "reference is {{reference}}.\n\n"
+        "What was affected: {{categories}}\n\n"
+        "What we have done: {{remediation}}\n\n"
+        "You may wish to be alert to unexpected messages referring to this "
+        "information. If you have questions, or wish to raise a complaint, you can "
+        "contact our Grievance Officer. You may also approach the Data Protection "
+        "Board of India.\n\n{{organisation}}",
     ),
     "retention.pre_purge": (
         "Scheduled deletion of your {{category}} data",

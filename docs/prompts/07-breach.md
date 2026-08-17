@@ -1,5 +1,52 @@
 # Build brief — `breach` (breach register & the DPDP notification duty)
 
+> **STATUS: DONE.** Built and live. All three `[DECIDE]` items took the
+> recommendation:
+>
+> * **Affected principals: a saved category query plus a reviewable list.**
+>   `POST /affected/preview` shows exactly who would be attached and sends nothing;
+>   the list is then reviewable per person before any notification runs. The query
+>   excludes already-purged principals — their identifiers are masked, so including
+>   them would inflate the count with people who cannot be notified even in
+>   principle.
+> * **No automated Board submission.** `GET /board-notice` generates the §8(6) text
+>   for a human to paste into the portal; `POST /notify-board` records who
+>   submitted it and the reference they were given. `submitted_by` is required,
+>   because "the system reported it" would be false and a compliance record whose
+>   most load-bearing claim is false is worse than no record.
+> * **No deletion — `void` with a reason, kept.** There is no DELETE grant on any
+>   of the three tables.
+>
+> The constraint the module is built around: `status = 'notified'` requires **both**
+> `board_notified_at` and `principals_notified_at`, enforced by CHECK. There is
+> also no route that sets that status — it follows the work. A status the UI can
+> assert independently of the work is one that will eventually be wrong, and here
+> it would be a false claim about a statutory duty.
+>
+> Beyond the brief:
+>
+> * **The 72-hour threshold is labelled as ours.** The Rules say "without delay",
+>   which is not a number. The API response and the screen both say the countdown
+>   is this product's operational reading, not a statutory figure. The lateness
+>   judgement is written into the audit entry *with the threshold it was made
+>   against*, so changing that number later cannot retroactively make somebody
+>   late.
+> * **`discovered_at` has its own audit action**, and the entry carries both the
+>   old and the new value. Backdating awareness moves the deadline a fiduciary is
+>   judged against; the chain shows the movement, not just the destination.
+> * **Unreachable people are recorded, not skipped.** Somebody with no address is
+>   stamped suppressed with a reason and counts as handled — otherwise the run
+>   never completes and `remaining` is permanently wrong — but is not counted as
+>   notified.
+>
+> One defect found while verifying live, worth recording because it is a whole
+> class: **`seed_default_templates` runs once, at workspace creation.** Adding
+> `breach.principal_notice` left every existing workspace unable to send it,
+> silently and forever, suppressing with "no active template". `resolve_template`
+> now seeds a shipped default the first time it is needed — but only where no row
+> for that key exists at all, so a template an administrator deliberately
+> deactivated stays deactivated.
+
 > Paste this whole file as the opening prompt. Fill the `[DECIDE]` block first.
 
 **Size: ~1 week.** Depends on `03-notifications.md`.

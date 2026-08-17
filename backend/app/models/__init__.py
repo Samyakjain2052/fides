@@ -6,6 +6,7 @@ autogenerates, so a new table can never be silently left out of a migration.
 
 from app.models.api_key import ApiKey
 from app.models.audit import AuditAction, AuditEvent
+from app.models.breach import Breach, BreachAffectedPrincipal, BreachEvent
 from app.models.consent import Consent, DataPrincipal, Notice, Purpose
 from app.models.dsar import DsarEvent, DsarRequest
 from app.models.grievance import Grievance, GrievanceEvent
@@ -21,6 +22,9 @@ __all__ = [
     "ApiRequestLog",
     "AuditAction",
     "AuditEvent",
+    "Breach",
+    "BreachAffectedPrincipal",
+    "BreachEvent",
     "Consent",
     "ConsentProvenance",
     "DsarEvent",
@@ -75,4 +79,8 @@ TENANT_SCOPED_TABLES = [
     # Phase 6 — grievances.
     "grievances",
     "grievance_events",
+    # Phase 9 — the breach register.
+    "breaches",
+    "breach_affected_principals",
+    "breach_events",
 ]

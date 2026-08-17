@@ -28,7 +28,7 @@ If the two ever disagree, the file is right and this document is stale.
 | Notifications | **live** | no scheduler; SMS modelled but unimplemented; console provider ships by default |
 | Grievance redressal | **live** | no attachments; no scheduler (escalation evaluated on read) |
 | Reports | **live** | no PDF; nothing signed (chain-hash anchor only) |
-| Breach management | preview | register + Board/principal notification |
+| Breach management | **live** | no Board API (human submits); no breach detection |
 | Users & roles | preview | server-side invitation and role assignment |
 
 Two things are worth separating, because they fail differently:
@@ -53,8 +53,9 @@ environment does not make it more complete — it makes it expensive.
   7  Retention + purge   ← DONE. Built before notifications; see the note below
   8  Notifications       ← DONE. Moved up from 8; the pre-purge seam closed here
   6  Grievances          ← DONE. Public filing, escalation clock, officer contact
-  9  Reports + breach    ← Reports DONE. Breach register is next.
+  9  Reports + breach    ← DONE. Both.
  10  Hardening           ← SSO, field encryption, WORM anchoring, load tests
+  8  Users & roles       ← NEXT. The last preview module.
 ```
 
 **The one reordering from ARCHITECTURE.md §9:** notifications moved from 8 to

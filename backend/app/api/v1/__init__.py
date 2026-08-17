@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     admin,
     audit,
+    breaches,
     auth,
     consent,
     dsar,
@@ -18,6 +19,7 @@ api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(admin.router)
 api_router.include_router(audit.router)
+api_router.include_router(breaches.router)
 api_router.include_router(consent.router)
 api_router.include_router(dsar.router)
 api_router.include_router(grievances.router)

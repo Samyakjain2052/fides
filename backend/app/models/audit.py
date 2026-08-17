@@ -134,6 +134,19 @@ class AuditAction:
     RETENTION_PREVIEWED = "retention.previewed"
     RETENTION_PURGED = "retention.purged"
 
+    # breaches (DPDP §8(6))
+    BREACH_RECORDED = "breach.recorded"
+    BREACH_UPDATED = "breach.updated"
+    # Its own action, separate from BREACH_UPDATED, because this is the field the
+    # whole statutory obligation hangs on and somebody will eventually litigate
+    # when it changed and why.
+    BREACH_DISCOVERY_CHANGED = "breach.discovery_changed"
+    BREACH_AFFECTED_ATTACHED = "breach.affected_attached"
+    BREACH_BOARD_NOTIFIED = "breach.board_notified"
+    BREACH_PRINCIPALS_NOTIFIED = "breach.principals_notified"
+    BREACH_CLOSED = "breach.closed"
+    BREACH_VOIDED = "breach.voided"
+
     # reporting
     #
     # Worth auditing: "who extracted the consent register last quarter" is a
