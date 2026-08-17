@@ -114,6 +114,26 @@ class AuditAction:
     DSAR_STATUS_CHANGED = "dsar.status_changed"
     DSAR_COMPLETED = "dsar.completed"
 
+    # grievances (Phase 6)
+    GRIEVANCE_SUBMITTED = "grievance.submitted"
+    GRIEVANCE_ASSIGNED = "grievance.assigned"
+    GRIEVANCE_STATUS_CHANGED = "grievance.status_changed"
+    GRIEVANCE_ESCALATED = "grievance.escalated"
+    GRIEVANCE_RESOLVED = "grievance.resolved"
+    GRIEVANCE_REOPENED = "grievance.reopened"
+    GRIEVANCE_RATED = "grievance.rated"
+    GRIEVANCE_OFFICER_CHANGED = "grievance.officer_changed"
+
+    # retention
+    #
+    # These existed as behaviour before they existed as names: the purge
+    # executor recorded its runs as `tenant.updated`, which is true in the
+    # narrowest sense and useless in an audit. "Which entries show data being
+    # destroyed?" had no answer you could filter for.
+    RETENTION_POLICY_CREATED = "retention.policy_created"
+    RETENTION_PREVIEWED = "retention.previewed"
+    RETENTION_PURGED = "retention.purged"
+
     # integrity
     AUDIT_VERIFIED = "audit.verified"
     AUDIT_INTEGRITY_FAILED = "audit.integrity_failed"

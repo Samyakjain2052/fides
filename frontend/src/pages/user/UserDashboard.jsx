@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getUserDashboard, MOCK_NOTICES } from "../../api";
+import { myGrievances } from "../../api/grievances";
 import { useApp } from "../../context/AppContext";
 import StatCard from "../../components/common/StatCard";
 
@@ -26,14 +27,23 @@ const ACTION_LABEL = {
 export default function UserDashboard() {
   const { t } = useApp();
   const [data, setData] = useState(null);
+  // Real, from /v1/grievances/mine. The rest of this screen is still sample
+  // data, but a live module must not be represented by a mock number — that is
+  // the one inconsistency the honesty layer exists to catch.
+  const [grievances, setGrievances] = useState([]);
 
   useEffect(() => {
     getUserDashboard().then(setData);
+    myGrievances().then(setGrievances).catch(() => setGrievances([]));
   }, []);
 
   if (!data) {
     return <p className="text-sm text-muted">Loading your summary…</p>;
   }
+
+  const openGrievances = grievances.filter(
+    (g) => !["resolved", "rejected"].includes(g.status),
+  ).length;
 
   return (
     <div className="space-y-6">
@@ -61,8 +71,8 @@ export default function UserDashboard() {
         />
         <StatCard
           label={t("Open Grievances")}
-          value={data.open_grievances}
-          tone={data.open_grievances > 0 ? "warning" : "neutral"}
+          value={openGrievances}
+          tone={openGrievances > 0 ? "warning" : "neutral"}
           to="/user/grievance/status"
           hint="See resolution status"
         />

@@ -5,7 +5,7 @@
 // ============================================================================
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getNotifications } from "../../api";
+import { myNotifications } from "../../api/notifications";
 import { myRows } from "../../api/dsar";
 import StatusBadge from "../../components/common/StatusBadge";
 import SLACountdown from "../../components/common/SLACountdown";
@@ -23,11 +23,17 @@ export default function DSARStatus() {
       setRows(r);
       setSelected((prev) => prev || r[0] || null);
     });
-    getNotifications("user").then(setNotifications);
+    // A bell-and-braces failure here must not blank the page the person came
+    // for: their requests matter more than the history of emails about them.
+    myNotifications().then(setNotifications).catch(() => setNotifications([]));
   }, []);
 
+  // Matched on entity_id, not on whether the reference appears in the subject
+  // line. Substring-matching a subject breaks the moment somebody edits a
+  // template to drop {{reference}} — and silently, showing "no notifications"
+  // for a request that was in fact acknowledged.
   const related = selected
-    ? notifications.filter((n) => n.subject.includes(selected.reference))
+    ? notifications.filter((n) => n.entity_id === selected.id)
     : [];
 
   return (
@@ -200,9 +206,10 @@ export default function DSARStatus() {
                     {related.map((n) => (
                       <li key={n.id} className="flex flex-wrap items-center gap-2 py-2 text-sm">
                         <StatusBadge status={n.status} />
-                        <span className="text-ink">{n.subject}</span>
+                        <span className="text-ink">{n.subject_rendered}</span>
                         <span className="text-xs text-muted">
-                          {n.channel} · {new Date(n.sent_at).toLocaleString()}
+                          {n.channel} ·{" "}
+                          {new Date(n.sent_at || n.queued_at).toLocaleString()}
                         </span>
                       </li>
                     ))}

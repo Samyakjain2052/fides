@@ -8,6 +8,8 @@ from app.models.api_key import ApiKey
 from app.models.audit import AuditAction, AuditEvent
 from app.models.consent import Consent, DataPrincipal, Notice, Purpose
 from app.models.dsar import DsarEvent, DsarRequest
+from app.models.grievance import Grievance, GrievanceEvent
+from app.models.notification import Notification, NotificationTemplate
 from app.models.retention import PurgeRun, PurgeRunItem, RetentionPolicy
 from app.models.public_api import ApiRequestLog, IdempotencyKey
 from app.models.publishable_key import ConsentProvenance, PublishableKey
@@ -24,8 +26,12 @@ __all__ = [
     "DsarEvent",
     "DsarRequest",
     "DataPrincipal",
+    "Grievance",
+    "GrievanceEvent",
     "IdempotencyKey",
     "Notice",
+    "Notification",
+    "NotificationTemplate",
     "PublishableKey",
     "PurgeRun",
     "PurgeRunItem",
@@ -63,4 +69,10 @@ TENANT_SCOPED_TABLES = [
     "retention_policies",
     "purge_runs",
     "purge_run_items",
+    # Phase 8 — notifications.
+    "notification_templates",
+    "notifications",
+    # Phase 6 — grievances.
+    "grievances",
+    "grievance_events",
 ]

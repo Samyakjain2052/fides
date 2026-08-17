@@ -6,7 +6,8 @@
 // ============================================================================
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getAdminDashboard, GRIEVANCE_ESCALATION_DAYS } from "../../api";
+import { getAdminDashboard } from "../../api";
+import { CATEGORY_LABEL, listGrievances, officer as fetchOfficer } from "../../api/grievances";
 import StatCard from "../../components/common/StatCard";
 import StatusBadge from "../../components/common/StatusBadge";
 import SLACountdown from "../../components/common/SLACountdown";
@@ -27,14 +28,26 @@ function EmptyChart({ children }) {
 
 export default function AdminDashboard() {
   const [data, setData] = useState(null);
+  // Grievances are live now, so they are read from the API rather than taken
+  // from the dashboard mock. A real module showing sample numbers on the one
+  // screen a DPO opens every morning is the exact failure the honesty layer
+  // exists to prevent.
+  const [grievances, setGrievances] = useState(null);
+  const [officer, setOfficer] = useState(null);
 
   useEffect(() => {
     getAdminDashboard().then(setData);
+    listGrievances({ overdueOnly: true })
+      .then(setGrievances)
+      .catch(() => setGrievances(null));
+    fetchOfficer().then(setOfficer).catch(() => setOfficer(null));
   }, []);
 
   if (!data) return <p className="text-sm text-muted">Loading compliance summary…</p>;
 
   const { stats, attention, charts } = data;
+  const gCounts = grievances?.counts;
+  const overdueGrievances = grievances?.items ?? [];
 
   return (
     <div className="space-y-6">
@@ -55,9 +68,11 @@ export default function AdminDashboard() {
             Mixed
           </span>
           <p className="min-w-0 flex-1 text-sm text-ink">
-            <strong className="font-semibold">Data request figures are real.</strong>{" "}
-            Consent and grievance figures on this page are sample data — those
-            modules are still in preview.{" "}
+            <strong className="font-semibold">
+              Data request and grievance figures are real.
+            </strong>{" "}
+            The consent tiles and the consent chart on this page are still sample
+            data.{" "}
             <Link to="/roadmap" className="text-teal underline">
               See what is live today
             </Link>
@@ -83,7 +98,20 @@ export default function AdminDashboard() {
             ) : null
           }
         />
-        <StatCard label="Open grievances" value={stats.open_grievances} tone="warning" to="/admin/grievances" sample />
+        <StatCard
+          label="Open grievances"
+          value={gCounts ? gCounts.open : stats.open_grievances}
+          tone={gCounts?.overdue ? "danger" : "warning"}
+          to="/admin/grievances"
+          sample={!gCounts}
+          badge={
+            gCounts?.overdue ? (
+              <span className="rounded-full bg-danger px-2 py-0.5 text-[10px] font-bold text-white">
+                {gCounts.overdue} LATE
+              </span>
+            ) : null
+          }
+        />
         <StatCard label="Expiring in 30 days" value={stats.expiring_30} tone="warning" sample />
       </div>
 
@@ -166,29 +194,50 @@ export default function AdminDashboard() {
             )}
           </div>
 
-          {/* Grievances beyond the escalation threshold */}
+          {/* Grievances past their statutory deadline. Real, from the API —
+              `overdueOnly` is evaluated against the clock server-side rather
+              than derived here from a constant that would be wrong for any
+              customer with a different SLA. */}
           <div className="px-5 py-4">
             <p className="text-sm font-medium text-ink">
-              Grievances open more than {GRIEVANCE_ESCALATION_DAYS} days (
-              {attention.stale_grievances.length})
+              Grievances past their response deadline ({overdueGrievances.length})
             </p>
-            {attention.stale_grievances.length === 0 ? (
-              <p className="mt-1 text-sm text-muted">Nothing overdue.</p>
+            {overdueGrievances.length === 0 ? (
+              <p className="mt-1 text-sm text-muted">
+                {grievances ? "Nothing overdue." : "Could not load grievances."}
+              </p>
             ) : (
               <ul className="mt-2 space-y-2">
-                {attention.stale_grievances.map((g) => (
+                {overdueGrievances.map((g) => (
                   <li key={g.id}
                       className="flex flex-wrap items-center gap-3 rounded-lg border border-danger/40 bg-danger/5 px-3 py-2 text-sm">
                     <span className="font-mono text-xs">{g.reference}</span>
-                    <span className="text-ink">{g.category}</span>
-                    <span className="text-muted">
-                      {Math.floor((Date.now() - new Date(g.submitted_at)) / DAY)} days open
+                    <span className="text-ink">
+                      {CATEGORY_LABEL[g.category] || g.category}
                     </span>
-                    <StatusBadge status={g.status} />
-                    <Link to="/admin/grievances" className="ml-auto text-teal underline">Open</Link>
+                    <span className="text-muted">{g.days_open} days open</span>
+                    {g.escalated && <StatusBadge status="escalated" />}
+                    <span className="ml-auto">
+                      <SLACountdown deadlineAt={g.deadline_at} showDate />
+                    </span>
+                    <Link to="/admin/grievances" className="text-teal underline">Open</Link>
                   </li>
                 ))}
               </ul>
+            )}
+            {gCounts?.confirmation_expired > 0 && (
+              <p className="mt-2 text-xs text-muted">
+                {gCounts.confirmation_expired} anonymous complaint
+                {gCounts.confirmation_expired === 1 ? "" : "s"} whose confirmation
+                window has closed. They will never escalate on their own — if they
+                look genuine, somebody has to pick them up.
+              </p>
+            )}
+            {officer && !officer.published && (
+              <p className="mt-2 text-xs text-danger">
+                No Grievance Officer is published, so escalations cannot be
+                delivered.
+              </p>
             )}
           </div>
 

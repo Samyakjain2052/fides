@@ -372,6 +372,17 @@ services:
       DS_JWT_SECRET: ${DS_JWT_SECRET}
       DS_AUDIT_HMAC_KEY: ${DS_AUDIT_HMAC_KEY}
       DS_COOKIE_SECURE: ${DS_COOKIE_SECURE:-false}
+      # Notifications. `console` logs instead of sending, which is why it is safe
+      # as a default and why the backend refuses it in prod.
+      DS_NOTIFICATION_PROVIDER: ${DS_NOTIFICATION_PROVIDER:-console}
+      DS_NOTIFICATION_FROM_ADDRESS: ${DS_NOTIFICATION_FROM_ADDRESS:-}
+      DS_SMTP_HOST: ${DS_SMTP_HOST:-}
+      DS_SMTP_PORT: ${DS_SMTP_PORT:-587}
+      DS_SMTP_USE_TLS: ${DS_SMTP_USE_TLS:-true}
+      DS_SMTP_USERNAME: ${DS_SMTP_USERNAME:-}
+      DS_SMTP_PASSWORD: ${DS_SMTP_PASSWORD:-}
+      DS_ACS_ENDPOINT: ${DS_ACS_ENDPOINT:-}
+      DS_ACS_ACCESS_KEY: ${DS_ACS_ACCESS_KEY:-}
       # nginx mounts this API at /api, so the refresh cookie must be scoped there.
       # Scoped to /v1/auth instead, the browser holds a cookie it never sends
       # back: sign-in works, the next reload signs you out, and nothing is logged.

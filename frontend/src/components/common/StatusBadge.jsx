@@ -10,6 +10,12 @@ const VARIANTS = {
   delivered: { dot: "bg-success", text: "Delivered" },
 
   pending: { dot: "bg-warning", text: "Pending" },
+  queued: { dot: "bg-warning", text: "Queued" },
+  sending: { dot: "bg-info", text: "Sending" },
+  // Not a failure, and must not be coloured like one. "Deliberately not sent,
+  // and here is why" is a defensible answer; showing it in red trains people to
+  // treat it as a bug and go looking for a fix that does not exist.
+  suppressed: { dot: "bg-muted", text: "Not sent" },
   expiring: { dot: "bg-warning", text: "Expiring soon" },
   acknowledged: { dot: "bg-warning", text: "Acknowledged" },
   investigating: { dot: "bg-warning", text: "Investigating" },

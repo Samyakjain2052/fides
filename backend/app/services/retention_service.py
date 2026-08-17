@@ -177,6 +177,58 @@ async def _blocked_reason(
 # Running
 # --------------------------------------------------------------------------- #
 
+async def warn_upcoming(
+    session: AsyncSession, *, tenant_id: uuid.UUID, policy: RetentionPolicy
+) -> int:
+    """Warn people whose data this policy will purge within `notify_days`.
+
+    The seam retention was built around but could not use until notifications
+    existed. A policy that destroys data on a timer must tell people first —
+    that is why `auto_delete` cannot be set without a notice period.
+
+    Idempotent by construction: the notification table's unique constraint on
+    (template, entity) means running this daily warns each person once, not once
+    per run.
+    """
+    from app.services import notification_service
+
+    # Who would be purged if the retention window were `notify_days` shorter —
+    # i.e. who is about to become eligible.
+    lookahead = RetentionPolicy(
+        tenant_id=policy.tenant_id,
+        name=policy.name,
+        data_category=policy.data_category,
+        retention_days=max(1, policy.retention_days - policy.notify_days),
+        action=policy.action,
+    )
+    upcoming = await select_candidates(session, tenant_id=tenant_id, policy=lookahead)
+
+    purge_date = (
+        datetime.now(UTC) + timedelta(days=policy.notify_days)
+    ).date().isoformat()
+
+    sent = 0
+    for candidate in upcoming:
+        if not candidate.purgeable or not candidate.principal.email:
+            continue
+        queued = await notification_service.enqueue(
+            session,
+            tenant_id=tenant_id,
+            key="retention.pre_purge",
+            to_address=candidate.principal.email,
+            context={"category": policy.data_category, "purge_date": purge_date},
+            entity_type="retention_policy",
+            # Keyed on the PRINCIPAL, not the policy, so each person is warned
+            # once about this category rather than once per policy run.
+            entity_id=candidate.principal.id,
+            principal_id=candidate.principal.id,
+        )
+        if queued is not None:
+            await notification_service.send_now(session, notification=queued)
+            sent += 1
+    return sent
+
+
 async def preview(
     session: AsyncSession, *, tenant_id: uuid.UUID, actor: Actor, policy_id: uuid.UUID
 ) -> PurgeRun:
@@ -322,7 +374,7 @@ async def _run(
         await session.flush()
         await audit_service.record(
             session, tenant_id=tenant_id, actor=actor,
-            action=AuditAction.TENANT_UPDATED,
+            action=AuditAction.RETENTION_PURGED,
             entity_type="purge_run", entity_id=run.id,
             payload={"policy": policy.name, "mode": mode, "status": "failed",
                      "error": run.error},
@@ -333,7 +385,13 @@ async def _run(
         session,
         tenant_id=tenant_id,
         actor=actor,
-        action=AuditAction.TENANT_UPDATED,
+        # A preview and a live run are different facts, and an audit trail that
+        # calls them the same thing cannot answer "when was data actually
+        # destroyed?" — the only question this table exists for.
+        action=(
+            AuditAction.RETENTION_PREVIEWED if mode == "dry_run"
+            else AuditAction.RETENTION_PURGED
+        ),
         entity_type="purge_run",
         entity_id=run.id,
         payload={
@@ -427,7 +485,7 @@ async def create_policy(
 
     await audit_service.record(
         session, tenant_id=tenant_id, actor=actor,
-        action=AuditAction.TENANT_UPDATED,
+        action=AuditAction.RETENTION_POLICY_CREATED,
         entity_type="retention_policy", entity_id=policy.id,
         payload={"name": policy.name, "category": data_category,
                  "retention_days": retention_days, "action": action,

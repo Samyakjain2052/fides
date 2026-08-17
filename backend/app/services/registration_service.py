@@ -230,9 +230,14 @@ async def register_tenant(
     # Starter purposes and published notices, so the consent module can actually
     # be used the moment someone signs in. Configuration only — no consents are
     # created, because a consent has to be an act by a person.
-    from app.services import notice_service
+    from app.services import notice_service, notification_service
 
     await notice_service.seed_default_purposes(session, tenant_id=tenant.id, actor=actor)
+
+    # English email templates for every key the product sends. Without them every
+    # call site would suppress with "no active template" — honest, but it hands a
+    # new fiduciary a system that silently tells nobody anything.
+    await notification_service.seed_default_templates(session, tenant_id=tenant.id)
 
     logger.info("tenant registered", extra={"context": {"slug": chosen}})
     return Registration(tenant=tenant, admin=admin)

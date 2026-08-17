@@ -13,17 +13,21 @@ so, in a banner derived from one file. That honesty is now the specification:
 **every preview banner in the app is a line item in this plan.** When the last
 one disappears, the product is feature-complete.
 
-| Module | Today | What "real" requires |
+`frontend/src/config/modules.js` is the single source of truth for this table.
+If the two ever disagree, the file is right and this document is stale.
+
+| Module | Today | What is still missing |
 | --- | --- | --- |
 | Accounts & sign-in | **live** | — |
-| Data requests | **live** (submit + track) | server-side persistence; correction; real identity verification |
-| DSAR triage queue | preview | approve/reject/reassign/export against real records |
-| Consent management | **live** *(Phase 3, built)* | — |
-| Public consent/cookie banners | preview | anonymous collection via the public API (Phase 4) |
-| Grievance redressal | preview | intake, assignment, statutory escalation clock |
-| Retention & purge | preview | policies with real purge execution |
+| Data requests | **live** | correction runs on sample data; identity check is simulated |
+| DSAR triage queue | **live** | — |
+| Consent management | **live** | — |
+| Public consent/cookie banners | **live** | withdrawal from a banner (collect-only by design) |
+| Retention & purge | **live** | reaches this product's tables, not connected systems; no scheduler |
+| Audit trail | **live** | cannot detect truncation of the newest entries (needs external anchoring) |
+| Notifications | **live** | no scheduler; SMS modelled but unimplemented; console provider ships by default |
+| Grievance redressal | **live** | no attachments; no scheduler (escalation evaluated on read) |
 | Reports | preview | generated from real data, exportable, signed |
-| Audit trail | preview *(UI)* | the backend chain is real; the screen is not reading it |
 | Breach management | preview | register + Board/principal notification |
 | Users & roles | preview | server-side invitation and role assignment |
 
@@ -43,21 +47,30 @@ environment does not make it more complete — it makes it expensive.
 ## 2. Order of work, and why this order
 
 ```
-  3  Consent core        ← the product. Everything below assumes it.
-  4  Public API          ← the thing customers integrate against (N5)
-  5  DSAR workflow       ← persist requests; bridge to the Fides engine
-  8  Notifications       ← moved UP: phases 6 and 7 are both unusable without it
-  6  Grievances          ← needs notifications for the escalation clock
-  7  Retention + purge   ← needs notifications for the pre-purge warning
-  9  Reports + breach    ← reporting on data that now exists
+  3  Consent core        ← DONE. The product. Everything below assumes it.
+  4  Public API          ← DONE. The thing customers integrate against (N5)
+  5  DSAR workflow       ← DONE. Persist requests; bridge to the Fides engine
+  7  Retention + purge   ← DONE. Built before notifications; see the note below
+  8  Notifications       ← DONE. Moved up from 8; the pre-purge seam closed here
+  6  Grievances          ← DONE. Public filing, escalation clock, officer contact
+  9  Reports + breach    ← NEXT. Reporting on data that now exists
  10  Hardening           ← SSO, field encryption, WORM anchoring, load tests
 ```
 
-**The one reordering from ARCHITECTURE.md §9:** notifications move from 8 to
+**The one reordering from ARCHITECTURE.md §9:** notifications moved from 8 to
 just after 5. Grievances have a statutory escalation clock and retention has a
 "notify N days before purge" setting — both are *specified* in terms of sending
-someone a message. Building them against a notifications module that does not
-exist means building them twice.
+someone a message, and building them against a notifications module that does
+not exist means building them twice.
+
+**What actually happened, and it is worth recording:** retention was built
+*before* notifications anyway, and shipped with its notice period stored,
+constrained (`auto_delete` is refused without one) and honoured by the UI — but
+with nothing able to send it. That gap was visible in the module's own caveat for
+two phases. Notifications then closed it with one function,
+`retention_service.warn_upcoming`. So the reordering argument was right in
+principle and the cost of ignoring it was one seam, not a rebuild — because the
+seam was designed in rather than discovered.
 
 ### Phase 3 — Consent core (the domain)
 

@@ -1,5 +1,28 @@
 # Build brief — `notifications` (email/SMS delivery)
 
+> **STATUS: DONE.** Built and live. What shipped, and where it differs from this
+> brief:
+>
+> * **Provider**: pluggable (`ConsoleProvider` / `SmtpProvider` /
+>   `AzureCommunicationEmailProvider`) rather than one vendor decided up front.
+>   The console provider is the default and writes to the log instead of sending,
+>   so nothing downstream was blocked on the `[DECIDE]`. ACS request signing is
+>   an unfinished `TODO(acs)` that fails loudly rather than pretending to send.
+> * **No message bodies at rest.** The delivery log keeps the address, subject and
+>   outcome. A body exists only while a message is in flight, enforced by a CHECK
+>   constraint (`ck_notifications_no_body_once_settled`) rather than by intention.
+> * **SMS is modelled but not implemented** — no SMS provider exists.
+> * **No scheduler.** The queue is drained by `POST /v1/notifications/drain`, and
+>   the screen says so. A message that hits a transient failure waits for a human
+>   or for a cron job that is not yet deployed.
+> * **Added beyond the brief**: `GET /v1/notifications/mine`, so a data principal
+>   can see what they were told without asking. "You were informed on the 14th" is
+>   a claim made about somebody.
+>
+> Seams wired: `dsar.received` / `dsar.completed` / `dsar.rejected`,
+> `consent.withdrawn`, `retention.pre_purge`. Grievance keys and templates exist
+> and are unwired, waiting on module 04.
+
 > Paste this whole file as the opening prompt. Fill the `[DECIDE]` block first.
 
 **Size: ~1 week**, plus a provider decision. **Build this before grievances (04)

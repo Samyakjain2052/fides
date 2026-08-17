@@ -282,6 +282,31 @@ async def withdraw(
             "reason": reason,
         },
     )
+
+    # Confirm it in writing. Somebody who withdraws consent and hears nothing has
+    # no way to know it worked, which is how a withdrawal becomes a grievance.
+    from app.services import notification_service
+
+    principal = await session.scalar(
+        select(DataPrincipal).where(DataPrincipal.id == principal_id)
+    )
+    await notification_service.send_now(
+        session,
+        notification=await notification_service.enqueue(
+            session,
+            tenant_id=tenant_id,
+            key="consent.withdrawn",
+            to_address=principal.email if principal else None,
+            context={
+                "purpose": purpose.name,
+                "effective_from": consent.withdrawn_at.date().isoformat(),
+            },
+            entity_type="consent",
+            entity_id=consent.id,
+            principal_id=principal_id,
+            language=consent.language,
+        ),
+    )
     return consent
 
 

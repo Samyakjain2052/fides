@@ -133,11 +133,8 @@ let dsarRequests = [];
 
 export const MOCK_DSAR_REQUESTS = clone(dsarRequests);
 
-let grievances = [
-  { id: "g1", user_id: "u001", user_email: "priya@example.com", category: "Consent Violation", description: "I withdrew marketing consent but still received emails.", status: "in_progress", submitted_at: "2026-07-01T08:00:00Z", reference: "GRV-2026-001", related_dsar: null, officer: "Meena Patel", resolution_notes: "", escalated: false, feedback: null },
-  { id: "g2", user_id: "u002", user_email: "rahul@example.com", category: "Data Breach", description: "I received a notification about my data being accessed without consent.", status: "open", submitted_at: "2026-07-15T08:00:00Z", reference: "GRV-2026-002", related_dsar: "d1", officer: "Meena Patel", resolution_notes: "", escalated: false, feedback: null },
-];
-export const MOCK_GRIEVANCES = clone(grievances);
+// The mock grievance rows lived here. Removed with the module: both dashboards
+// now read grievance figures from /v1/grievances.
 
 let auditLogs = [
   { id: "a1", log_id: "LOG-001", user_id: "u001", purpose_id: "n2", action_type: "withdraw", timestamp: "2026-05-01T09:00:00Z", consent_status: "withdrawn", initiator: "user", source_ip: "192.168.1.1", audit_hash: "sha256:abc123def456..." },
@@ -184,22 +181,11 @@ export const ERASURE_REASONS = [
 
 export const CORRECTABLE_FIELDS = ["Full name", "Email address", "Phone", "Postal address", "Date of birth"];
 
-let notifications = [
-  { id: "nt1", audience: "user", to: "priya@example.com", subject: "Consent withdrawal confirmed", scenario: "withdrawal_confirmation", channel: "Email", status: "delivered", sent_at: "2026-05-01T09:01:00Z", language: "English" },
-  { id: "nt2", audience: "user", to: "priya@example.com", subject: "Your data request DSAR-2026-001 is complete", scenario: "dsar_update", channel: "Email", status: "delivered", sent_at: "2026-06-20T08:05:00Z", language: "English" },
-  { id: "nt3", audience: "user", to: "rahul@example.com", subject: "Consent renewal due in 30 days", scenario: "renewal_reminder", channel: "SMS", status: "failed", sent_at: "2026-07-18T06:00:00Z", language: "Hindi" },
-  { id: "nt4", audience: "user", to: "anita@example.com", subject: "We received your correction request", scenario: "dsar_update", channel: "In-App", status: "pending", sent_at: "2026-07-20T08:01:00Z", language: "English" },
-  { id: "nt5", audience: "fiduciary", to: "billing-processor.example.com", subject: "Consent withdrawn: Marketing Communications (u001)", scenario: "withdrawal_alert", channel: "Webhook", status: "delivered", http_status: 200, sent_at: "2026-05-01T09:00:30Z", acknowledged: true },
-  { id: "nt6", audience: "fiduciary", to: "analytics-processor.example.com", subject: "Validation request: u002 / n4", scenario: "validation_request", channel: "Webhook", status: "failed", http_status: 500, sent_at: "2026-07-20T14:00:05Z", acknowledged: false, escalated: true },
-];
-
-export const NOTIFICATION_TEMPLATES = [
-  { id: "t1", scenario: "consent_confirmation", subject: "Your consent choices have been saved", body: "Hello {{name}}, we have recorded your consent for {{purpose}} on {{date}}. You can change this any time in your Preference Centre." },
-  { id: "t2", scenario: "withdrawal_confirmation", subject: "Consent withdrawal confirmed", body: "Hello {{name}}, your consent for {{purpose}} was withdrawn on {{date}}. {{withdrawal_policy}}" },
-  { id: "t3", scenario: "dsar_update", subject: "Update on your data request {{reference}}", body: "Hello {{name}}, your {{type}} request is now {{status}}. We will respond by {{deadline}}." },
-  { id: "t4", scenario: "renewal_reminder", subject: "Consent renewal due", body: "Hello {{name}}, your consent for {{purpose}} expires on {{expires_at}}. No action means it will lapse." },
-];
-
+// The notification mock data that used to live here is gone. Templates and the
+// delivery log are real: see src/api/notifications.js and the /v1/notifications
+// routes. The removed `fiduciary` rows carried invented webhook HTTP codes,
+// acknowledgements and escalations for a processor-alerting system that does not
+// exist in this product.
 let breaches = [
   { id: "b1", reference: "BRE-2026-001", detected_at: "2026-07-22T02:15:00Z", reported_at: "2026-07-22T09:40:00Z", severity: "high", status: "reported_to_dpb", affected_users: 1420, categories: "Contact Data", description: "Misconfigured storage bucket exposed marketing contact exports for ~6 hours.", remediation: "Bucket policy corrected, access logs reviewed, affected users notified." },
   { id: "b2", reference: "BRE-2026-002", detected_at: "2026-07-28T18:05:00Z", reported_at: null, severity: "medium", status: "investigating", affected_users: 12, categories: "Usage Data", description: "Support agent accessed session records outside assigned ticket scope.", remediation: "Access revoked pending review." },
@@ -569,71 +555,20 @@ export async function prepareDataExport(id) {
 }
 
 // ============================================================================
-// GRIEVANCES
+// GRIEVANCES — moved to src/api/grievances.js against /v1/grievances.
+//
+// The mocks that were here are gone. Worth noting what they did, because the
+// same shapes recur: `submitGrievance` enforced a 50-character minimum that
+// existed nowhere else, `updateGrievance` accepted an arbitrary patch (so any
+// field could be set to anything, including `status: 'resolved'` with no notes),
+// and it wrote a fake delivery row to the notification mock. It also still
+// assigned to a `notifications` array that had already been deleted — dead code
+// that would have thrown the moment anything called it.
+//
+// `GRIEVANCE_ESCALATION_DAYS = 10` is gone too. The threshold is per tenant
+// (`grievance_escalation_days`) and comes from the API; a constant here was
+// wrong for every customer who chose a different one, and wrong silently.
 // ============================================================================
-export async function submitGrievance({ category, description, relatedDsar, language }) {
-  await delay(500);
-  if (!description || description.length < 50) {
-    throw new Error("Please describe the issue in at least 50 characters.");
-  }
-  const n = grievances.length + 1;
-  const row = {
-    id: "g" + n,
-    user_id: subject.id,
-    user_email: subject.email,
-    category,
-    description,
-    status: "open",
-    submitted_at: nowIso(),
-    reference: "GRV-2026-" + String(n).padStart(3, "0"),
-    related_dsar: relatedDsar || null,
-    officer: "Meena Patel",
-    resolution_notes: "",
-    escalated: false,
-    feedback: null,
-    language,
-  };
-  grievances = [row, ...grievances];
-  appendAuditLog({ action_type: "grievance_submitted", purpose_id: "-", consent_status: category });
-  return clone(row);
-}
-
-export async function getGrievances({ userId } = {}) {
-  await delay();
-  let rows = clone(grievances);
-  if (userId) rows = rows.filter((r) => r.user_id === userId);
-  return rows;
-}
-
-export async function updateGrievance(id, patch) {
-  await delay(350);
-  const row = grievances.find((r) => r.id === id);
-  if (!row) throw new Error("Grievance not found.");
-  Object.assign(row, patch);
-  const audit = appendAuditLog({
-    action_type: patch.escalated ? "grievance_escalated" : "grievance_" + (patch.status || "updated"),
-    user_id: row.user_id,
-    initiator: "Data Fiduciary",
-    consent_status: row.status,
-  });
-  if (patch.notify) {
-    notifications = [
-      { id: "nt" + (notifications.length + 1), audience: "user", to: row.user_email, subject: `Update on your complaint ${row.reference}: ${row.status}`, scenario: "grievance_update", channel: "Email", status: "delivered", sent_at: nowIso(), language: "English" },
-      ...notifications,
-    ];
-  }
-  return { grievance: clone(row), audit };
-}
-
-export async function submitGrievanceFeedback(id, { rating, comment }) {
-  await delay(300);
-  const row = grievances.find((r) => r.id === id);
-  if (row) row.feedback = { rating, comment, at: nowIso() };
-  return clone(row);
-}
-
-// The escalation threshold the brief wants configurable.
-export const GRIEVANCE_ESCALATION_DAYS = 10;
 
 // ============================================================================
 // ADMIN: users, retention, notifications, reports, breaches
@@ -703,30 +638,6 @@ export async function runPurge(id) {
   return { category: row.category, records_deleted: deleted, at: row.last_purge, audit };
 }
 
-export async function getNotifications(audience) {
-  await delay();
-  return clone(audience ? notifications.filter((n) => n.audience === audience) : notifications);
-}
-
-export async function retryNotification(id) {
-  await delay(600);
-  const row = notifications.find((n) => n.id === id);
-  if (row) {
-    row.status = "delivered";
-    if (row.http_status) row.http_status = 200;
-    row.sent_at = nowIso();
-  }
-  appendAuditLog({ action_type: "notification_retried", initiator: "system" });
-  return clone(row);
-}
-
-export async function sendTestAlert(target) {
-  await delay(700);
-  const row = { id: "nt" + (notifications.length + 1), audience: "fiduciary", to: target || "test-processor.example.com", subject: "Test alert", scenario: "test", channel: "Webhook", status: "delivered", http_status: 200, sent_at: nowIso(), acknowledged: true };
-  notifications = [row, ...notifications];
-  return clone(row);
-}
-
 export async function getBreaches() {
   await delay();
   return clone(breaches);
@@ -772,12 +683,10 @@ export async function getUserDashboard(userId = subject.id) {
     (c) => c.status === "active" && c.expires_at && new Date(c.expires_at) - Date.now() < 30 * DAY
   );
   const myDsar = dsarRequests.filter((r) => r.user_id === userId);
-  const myGrv = grievances.filter((g) => g.user_id === userId);
   const recent = clone(auditLogs).filter((l) => l.user_id === userId).slice(0, 5);
   return {
     active_consents: mine.filter((c) => c.status === "active").length,
     pending_dsar: myDsar.filter((r) => r.status !== "completed" && r.status !== "rejected").length,
-    open_grievances: myGrv.filter((g) => g.status !== "resolved").length,
     expiring_soon: soon.length,
     recent_activity: recent,
   };
@@ -794,9 +703,6 @@ export async function getAdminDashboard() {
     const left = new Date(r.deadline_at) - Date.now();
     return left > 0 && left < 5 * DAY;
   });
-  const staleGrievances = grievances.filter(
-    (g) => g.status !== "resolved" && Date.now() - new Date(g.submitted_at) > GRIEVANCE_ESCALATION_DAYS * DAY
-  );
   const expiring7 = consents.filter(
     (c) => c.status === "active" && c.expires_at && new Date(c.expires_at) - Date.now() < 7 * DAY
   );
@@ -809,12 +715,14 @@ export async function getAdminDashboard() {
       withdrawn_this_month: consents.filter((c) => c.withdrawn_at && c.withdrawn_at > monthAgo).length,
       open_dsar: dsarRequests.filter((r) => r.status !== "completed" && r.status !== "rejected").length,
       overdue_dsar: overdue.length,
-      open_grievances: grievances.filter((g) => g.status !== "resolved").length,
+      // Grievances are live: the dashboard reads them from the API directly.
+      // Leaving a mock count here would give the screen something plausible to
+      // fall back to, which is exactly how a sample number ends up presented as
+      // real when a request fails.
       expiring_30: expiring30.length,
     },
     attention: {
       dsar_due_soon: clone([...overdue, ...dueSoon]),
-      stale_grievances: clone(staleGrievances),
       consents_expiring_7: clone(expiring7),
     },
     charts: {

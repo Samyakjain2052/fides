@@ -60,7 +60,7 @@ export const MODULE_STATUS = {
   // live without this split would have silently unlocked a flow that still
   // writes to the in-memory mock.
   consent_guardian: "preview",
-  grievance: "preview",
+  grievance: "live",
   // Real: policies, a dry run that provably changes nothing, a live run that
   // demands the policy name back, and append-only receipts that record every
   // skip with its reason.
@@ -76,7 +76,7 @@ export const MODULE_STATUS = {
   // chain was already real from Phase 2 — this only connected the screen to it.
   audit: "live",
   breach: "preview",
-  notifications: "preview",
+  notifications: "live",
   users: "preview",
 };
 
@@ -106,17 +106,33 @@ export const MODULE_CAVEATS = {
   retention:
     "Purging masks a person's identifiers and keeps their consent records, " +
     "matching the DSAR erasure path. It reaches this product's own tables, not " +
-    "a customer's connected systems. The pre-purge warning cannot be sent yet — " +
-    "that needs the notifications module — so a policy's notice period is stored " +
-    "and honoured by the UI but nobody is emailed.",
+    "a customer's connected systems. The pre-purge warning is now sent, but only " +
+    "when a run is triggered — there is no scheduler, so nothing warns anybody " +
+    "on its own overnight.",
+  grievance:
+    "Filing, triage, the statutory clock and automatic escalation are real, and " +
+    "anyone can file without an account. Three limits worth knowing: there is no " +
+    "scheduler, so escalation is evaluated whenever the queue is read rather than " +
+    "overnight; an anonymous complaint will not escalate until the filer confirms " +
+    "their email, and if they never do it needs picking up by hand; and there is " +
+    "no attachment support, so a person cannot submit supporting documents.",
+  notifications:
+    "Templates, rendering, the queue and the delivery log are real, and messages " +
+    "go out on request received / completed / refused, consent withdrawal and " +
+    "pre-purge warnings. Two things are not: no scheduler is deployed, so a " +
+    "message that hits a transient failure waits until somebody presses " +
+    "\u201cProcess queue now\u201d; and the provider shipped by default writes to " +
+    "the server log instead of sending, which the screen says at the top. SMS is " +
+    "modelled but no SMS provider is implemented.",
   audit:
     "The chain detects any entry being edited, removed or reordered. It cannot " +
     "yet detect removal of the most recent entries — that needs external " +
     "anchoring, and the screen says so next to the result.",
   dsar_workflow:
-    "Triage is real. Notifying the person of a status change is not wired yet — "
-    + "that needs the notifications module, so a status change today is recorded "
-    + "and audited but nobody is emailed about it.",
+    "Triage is real, and the person is now emailed when a request is received, "
+    + "completed or refused. Intermediate transitions are deliberately silent: a "
+    + "message for every internal step trains people to ignore the one that "
+    + "matters.",
   dsar:
     "Access and erasure run for real against four datastores. Two parts are not: " +
     "correction is sample data (the engine has no correction action yet), and " +
@@ -126,11 +142,9 @@ export const MODULE_CAVEATS = {
 /** What each preview module needs before it can be called live. */
 export const MODULE_ROADMAP = {
   consent_guardian: "Verifiable parental consent — a real guardian identity check (DigiLocker or equivalent), which a publishable key cannot perform.",
-  grievance: "Grievance intake, officer assignment, and the statutory escalation clock.",
   retention_edit: "Updating an existing policy. Create a replacement in the meantime.",
   reports: "Reports generated from real consent and request data, exportable.",
   breach: "Breach register with Board and Data Principal notification workflows.",
-  notifications: "Email and SMS delivery with per-tenant templates.",
   users: "Server-side user invitation and role assignment.",
 };
 

@@ -98,6 +98,24 @@ class Settings(BaseSettings):
     gateway_url: str = "http://fastapi-gateway:8000"
     gateway_timeout_seconds: float = 15.0
 
+    # ------------------------------------------------------------ notifications --
+    # Which provider actually sends. `console` logs instead of sending, and is the
+    # default everywhere but prod — local development and the test suite must not
+    # be able to email a real person about their data.
+    notification_provider: str = "console"
+    notification_from_address: str | None = None
+
+    # Azure Communication Services
+    acs_endpoint: str | None = None
+    acs_access_key: str | None = None
+
+    # Generic SMTP, for anyone who already has a relay
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_use_tls: bool = True
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+
     cookie_domain: str | None = None
     cookie_secure: bool = True
     refresh_cookie_name: str = "ds_refresh"
@@ -138,6 +156,18 @@ class Settings(BaseSettings):
                 raise ValueError("debug must be off in prod")
             if not self.cookie_secure:
                 raise ValueError("cookie_secure must be on in prod")
+            if self.notification_provider == "console":
+                # In prod, "logged instead of sent" means a statutory
+                # notification silently did not happen. Better to refuse to boot
+                # than to appear to be notifying people.
+                raise ValueError(
+                    "notification_provider must not be 'console' in prod — "
+                    "statutory notifications would be logged instead of sent"
+                )
+            if not self.notification_from_address:
+                raise ValueError(
+                    "notification_from_address is required in prod"
+                )
             if "*" in self.cors_origins:
                 raise ValueError("wildcard CORS origin is not allowed in prod")
             # Unencrypted database traffic in production is not a warning-level

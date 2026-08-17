@@ -41,7 +41,18 @@ async def create_tenant(
     if existing:
         raise Conflict(f"A tenant with slug '{slug}' already exists.")
 
-    tenant = Tenant(slug=slug, name=name, legal_name=legal_name or name)
+    tenant = Tenant(
+        slug=slug,
+        name=name,
+        legal_name=legal_name or name,
+        # DPDP §13 requires a *published* Grievance Officer. Defaulted to the
+        # first admin so no workspace is ever non-compliant purely by omission —
+        # and set here as well as in `registration_service` because whether a
+        # statutory contact exists must not depend on which code path created the
+        # tenant. Changeable afterwards; see grievance_service.set_officer.
+        grievance_officer_name=admin_name,
+        grievance_officer_email=admin_email.lower(),
+    )
     session.add(tenant)
     await session.flush()
 
@@ -74,6 +85,14 @@ async def create_tenant(
         entity_type="user", entity_id=admin.id,
         payload={"role": admin.role, "bootstrap": True},
     )
+
+    # Same reasoning as the officer default above: without these every statutory
+    # notification this workspace tries to send suppresses with "no active
+    # template". Honest, but useless — and a workspace that silently cannot tell
+    # anybody anything is a trap regardless of which code path created it.
+    from app.services import notification_service
+
+    await notification_service.seed_default_templates(session, tenant_id=tenant.id)
     return tenant, admin
 
 

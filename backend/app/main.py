@@ -18,7 +18,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api.public import public_banner_router, public_v1_router
+from app.api.public import (
+    public_banner_router,
+    public_grievance_router,
+    public_v1_router,
+)
 from app.api.v1 import api_router
 from app.core.config import get_settings
 from app.core.errors import register_error_handlers
@@ -139,3 +143,4 @@ app.include_router(api_router, prefix=settings.api_prefix)
 # API's version prefix changes. That is the whole reason the two are separate.
 app.include_router(public_v1_router)
 app.include_router(public_banner_router)
+app.include_router(public_grievance_router)

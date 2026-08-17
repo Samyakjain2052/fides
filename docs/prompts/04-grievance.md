@@ -1,5 +1,41 @@
 # Build brief — `grievance` (redressal & the statutory escalation clock)
 
+> **STATUS: DONE.** Built and live. How the three `[DECIDE]` items were settled,
+> and where the build differs from this brief:
+>
+> * **Non-account-holders can file** — `POST /public/v1/grievance`, no credential.
+>   NOT via a publishable key: those are capped at `consent:collect` by a CHECK
+>   constraint, and widening that would trade a strong, testable property for
+>   convenience. So the endpoint is unauthenticated, addressed by workspace slug
+>   (already public), with an email round trip.
+> * **Confirmation gates escalation, not filing.** A barrier in front of a
+>   statutory right is a barrier, so the complaint is recorded and the deadline
+>   starts running immediately. What confirmation unlocks is the ability to page a
+>   Grievance Officer — waking one over an address nobody has proven they own turns
+>   the statutory alarm into noise.
+> * **Two throttles instead of stored client IPs**: one unconfirmed complaint per
+>   address at a time, and a per-workspace hourly cap. Logging the IP of everyone
+>   who files a privacy complaint, to protect the privacy complaint system, would
+>   be a poor trade.
+> * **Escalation notifies the officer and raises the item.** It does not contact
+>   the Data Protection Board — unattended regulator contact stays a human
+>   decision, and the flag is what prompts it.
+> * **Officer name/email needed no answer.** Both `registration_service` and
+>   `tenant_service` now default them to the first admin, so no workspace is ever
+>   non-compliant by omission. `PUT /v1/grievances/officer` changes them, and a
+>   cleared contact reports `published: false` so the screens can say so instead of
+>   rendering a blank line where a statutory contact belongs.
+>
+> Not built, and visible in the module's caveat: **no attachments**, so a person
+> cannot submit supporting documents; and **no scheduler**, so escalation is
+> evaluated whenever the queue is read rather than overnight.
+>
+> One state the brief did not anticipate: the confirmation window (7 days) is
+> shorter than the default escalation threshold (10 days), so an anonymous
+> complaint that is never confirmed becomes permanently unconfirmable *and*
+> unescalatable. It is counted separately as `confirmation_expired` rather than
+> left in a growing pile a DPO believes is still in flight.
+
 > Paste this whole file as the opening prompt. Fill the `[DECIDE]` block first.
 
 **Size: ~1 week.** Depends on `03-notifications.md` — the escalation clock is

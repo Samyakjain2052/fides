@@ -225,3 +225,18 @@ export function suggestWorkspace(companyName) {
     .slice(0, 63)
     .replace(/-+$/, "");
 }
+
+/**
+ * Users in this workspace — needed to assign a grievance to somebody.
+ *
+ * Lives here rather than in a `users.js` because module 08 (users & roles) is
+ * still preview: this is the one read the rest of the product genuinely needs
+ * today, and inventing a client for an unbuilt module would be worse.
+ *
+ * Requires USER_MANAGE. A grievance_officer will get a 403 — deliberately, since
+ * the whole point of that role is that it cannot read anything but grievances —
+ * so callers must handle the rejection rather than treat it as an error.
+ */
+export function listUsers() {
+  return apiFetch("/admin/users");
+}

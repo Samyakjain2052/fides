@@ -202,6 +202,27 @@ async def submit(
             "verification_method": verification_method,
         },
     )
+    # Tell the person. A suppression (no address, no template) is recorded on the
+    # notification row rather than failing the request that has already happened.
+    from app.services import notification_service
+
+    await notification_service.send_now(
+        session,
+        notification=await notification_service.enqueue(
+            session,
+            tenant_id=tenant_id,
+            key="dsar.received",
+            to_address=principal.email,
+            context={
+                "reference": request.reference,
+                "type": type,
+                "deadline": deadline.date().isoformat(),
+            },
+            entity_type="dsar_request",
+            entity_id=request.id,
+            principal_id=principal_id,
+        ),
+    )
     return request
 
 
@@ -367,6 +388,33 @@ async def change_status(
             "note": note,
         },
     )
+
+    # Only the outcomes a person needs to hear about. Notifying on every internal
+    # transition would train people to ignore these, which is worse than not
+    # sending them.
+    if to_status in ("completed", "rejected"):
+        from app.services import notification_service
+
+        principal = await session.scalar(
+            select(DataPrincipal).where(DataPrincipal.id == request.principal_id)
+        )
+        await notification_service.send_now(
+            session,
+            notification=await notification_service.enqueue(
+                session,
+                tenant_id=tenant_id,
+                key=f"dsar.{to_status}",
+                to_address=principal.email if principal else None,
+                context={
+                    "reference": request.reference,
+                    "type": request.type,
+                    "reason": reason or "",
+                },
+                entity_type="dsar_request",
+                entity_id=request.id,
+                principal_id=request.principal_id,
+            ),
+        )
     return request
 
 
