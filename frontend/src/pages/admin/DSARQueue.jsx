@@ -1,22 +1,66 @@
 // ============================================================================
-// DSAR Admin Queue (/admin/dsar)
-// The main working screen: filter bar, search, sortable table with the SLA
-// countdown, and a slide-in detail panel with the actions for each request type.
+// DSAR triage queue (/admin/dsar)
+//
+// Rewritten against the real API. It was previously reading the mock
+// `getDSARRequests()` while the module was flagged live — so a request filed
+// through the real user portal landed in PostgreSQL and never appeared here. File
+// as a user, look as an admin, and it was not there.
+//
+// It was also half-migrated and broken: `changeStatus` and `downloadPackage` were
+// called but never imported, so "Save & Notify User" threw a ReferenceError.
+//
+// Four things this version stops inventing:
+//
+//   * **The status options come from the server.** `allowed_transitions` per
+//     request, so the control cannot offer a move the state machine will refuse.
+//     The old list included "pending", which is not a status this product has.
+//   * **Identity verification is reported, not asserted.** The old badge rendered
+//     "OTP verified" from the method alone — the method is what was asked for,
+//     `verified_at` is what actually happened. Unverified now says so.
+//   * **The per-request history is the server's timeline**, not a filtered slice
+//     of a mock audit log.
+//   * **The "exempt under law" toggle is gone.** It stored nothing; it appended a
+//     sentence to a note while implying a recorded legal exemption. A note field
+//     that says it is a note replaces it.
 // ============================================================================
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  getAuditLogs,
-  getDSARRequests,
-} from "../../api";
+  changeStatus,
+  downloadPackage,
+  getRequest,
+  queueRows,
+  retryDispatch,
+} from "../../api/dsar";
 import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/common/StatusBadge";
 import SLACountdown, { slaTone } from "../../components/common/SLACountdown";
 import SlideOver from "../../components/common/SlideOver";
 import ConfirmModal from "../../components/common/ConfirmModal";
-import AuditHashBadge from "../../components/common/AuditHashBadge";
 
-const FILTERS = ["All", "Access", "Correct", "Erase", "Pending", "In Progress", "Completed", "Overdue"];
-const STATUSES = ["pending", "in_progress", "completed", "rejected"];
+// Server vocabulary. `erasure` and `correction`, not `erase` and `correct` — the
+// old screen filtered on names the API never returns, so those filters matched
+// nothing.
+const TYPE_FILTERS = [
+  { id: "", label: "All" },
+  { id: "access", label: "Access" },
+  { id: "correction", label: "Correction" },
+  { id: "erasure", label: "Erasure" },
+];
+
+const STATUS_FILTERS = [
+  { id: "", label: "Any status" },
+  { id: "received", label: "Received" },
+  { id: "verifying", label: "Verifying" },
+  { id: "in_progress", label: "In progress" },
+  { id: "completed", label: "Completed" },
+  { id: "rejected", label: "Rejected" },
+  { id: "cancelled", label: "Cancelled" },
+];
+
+const STATUS_LABEL = Object.fromEntries(
+  STATUS_FILTERS.filter((s) => s.id).map((s) => [s.id, s.label]),
+);
+
 const SORTS = [
   { id: "deadline_at", label: "Deadline" },
   { id: "submitted_at", label: "Submitted" },
@@ -28,60 +72,78 @@ const SORTS = [
 export default function DSARQueue() {
   const { notify } = useApp();
   const [rows, setRows] = useState([]);
-  const [filter, setFilter] = useState("All");
+  const [total, setTotal] = useState(0);
+  const [type, setType] = useState("");
+  const [status, setStatus] = useState("");
+  const [overdueOnly, setOverdueOnly] = useState(false);
   const [q, setQ] = useState("");
   const [sort, setSort] = useState("deadline_at");
   const [dir, setDir] = useState("asc");
   const [selected, setSelected] = useState(null);
-  const [audit, setAudit] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
-  // panel form state
-  const [nextStatus, setNextStatus] = useState("pending");
+  // panel state
+  const [nextStatus, setNextStatus] = useState("");
   const [rejection, setRejection] = useState("");
-  const [exempt, setExempt] = useState(false);
-  const [exemptReason, setExemptReason] = useState("");
+  const [note, setNote] = useState("");
   const [confirmErase, setConfirmErase] = useState(false);
 
-  const load = () => getDSARRequests().then(setRows);
+  const load = useCallback(async () => {
+    try {
+      const page = await queueRows({ status, type, overdueOnly });
+      setRows(page.rows);
+      setTotal(page.total);
+    } catch (e) {
+      setError(e.message);
+    }
+  }, [status, type, overdueOnly]);
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
+
+  // The panel needs the detail shape — the list rows carry no timeline and no
+  // allowed transitions, and guessing either would put this screen back in the
+  // business of re-implementing the state machine.
+  const open = async (row) => {
+    setError("");
+    try {
+      const detail = await getRequest(row.id);
+      setSelected(detail);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
 
   useEffect(() => {
     if (!selected) return;
-    setNextStatus(selected.status);
+    setNextStatus("");
     setRejection(selected.rejection_reason || "");
-    setExempt(Boolean(selected.exempt));
-    setExemptReason(selected.exempt_reason || "");
-    getAuditLogs({ user_id: selected.user_id }).then((all) =>
-      setAudit(all.filter((a) => a.action_type.startsWith("dsar")))
-    );
+    setNote("");
   }, [selected]);
 
-  const filtered = useMemo(() => {
+  // Search is client-side over the fetched page; the filters are server-side.
+  // Reference and email are the two things somebody reads off a phone call.
+  const shown = useMemo(() => {
     let out = [...rows];
-    const f = filter.toLowerCase().replace(" ", "_");
-    if (["access", "correct", "erase"].includes(f)) out = out.filter((r) => r.type === f);
-    else if (["pending", "in_progress", "completed"].includes(f)) out = out.filter((r) => r.status === f);
-    else if (f === "overdue")
-      out = out.filter((r) => r.status !== "completed" && r.status !== "rejected" && slaTone(r.deadline_at) === "overdue");
-
     if (q) {
       const needle = q.toLowerCase();
       out = out.filter(
-        (r) => r.reference.toLowerCase().includes(needle) || (r.user_email || "").toLowerCase().includes(needle)
+        (r) =>
+          r.reference.toLowerCase().includes(needle) ||
+          (r.user_email || "").toLowerCase().includes(needle),
       );
     }
-
     out.sort((a, b) => {
-      const av = a[sort] || "";
-      const bv = b[sort] || "";
-      return dir === "asc" ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+      const av = a[sort] ?? "";
+      const bv = b[sort] ?? "";
+      return dir === "asc"
+        ? String(av).localeCompare(String(bv))
+        : String(bv).localeCompare(String(av));
     });
     return out;
-  }, [rows, filter, q, sort, dir]);
+  }, [rows, q, sort, dir]);
 
   const toggleSort = (id) => {
     if (sort === id) setDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -91,79 +153,117 @@ export default function DSARQueue() {
     }
   };
 
-  const save = async (extra = {}) => {
+  const act = async (fn, message) => {
     setBusy(true);
+    setError("");
     try {
-      const target = extra.status || nextStatus;
-      const updated = await changeStatus(selected.id, {
-        toStatus: target,
-        // The server AND the database refuse a rejection with no reason, so
-        // sending it is not optional — see the error surfaced below.
-        reason: target === "rejected" ? rejection : undefined,
-        note: exempt ? `Retention exemption applied: ${exemptReason}` : undefined,
-      });
-      setSelected(updated);
+      const updated = await fn();
+      if (updated?.id) setSelected(updated);
       await load();
-      notify(`Request ${updated.reference} is now ${updated.status}.`);
+      if (message) notify(message);
+      return updated;
     } catch (e) {
-      // The server gives real reasons — an illegal transition names what IS
+      // The server gives real reasons: an illegal transition names what IS
       // allowed, a reasonless rejection says so. Passing them through is the
       // difference between a usable queue and a mystery.
-      notify(e.message || "That change could not be made.", "error");
+      setError(e.message);
+      return null;
     } finally {
       setBusy(false);
     }
   };
 
-  const doExport = async () => {
-    setBusy(true);
-    try {
-      // The real access package. Every retrieval is audited server-side, and
-      // an expired package says so rather than 404ing.
-      await downloadPackage(selected.id, selected.reference);
-      await load();
-      notify("Access package downloaded. The retrieval is in the audit trail.");
-    } catch (e) {
-      notify(e.message || "The package could not be retrieved.", "error");
-    } finally {
-      setBusy(false);
-    }
-  };
+  const move = (target) =>
+    act(
+      () =>
+        changeStatus(selected.id, {
+          toStatus: target,
+          // Required by both the server and a CHECK constraint. Sending it is
+          // not optional.
+          reason: target === "rejected" ? rejection : undefined,
+          note: note.trim() || undefined,
+        }),
+      target === "rejected"
+        ? "Rejected. The person has been emailed the reason."
+        : target === "completed"
+          ? "Completed. The person has been emailed."
+          : `Moved to ${STATUS_LABEL[target] || target}.`,
+    );
+
+  const allowed = selected?.allowed_transitions ?? [];
 
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-xl font-semibold text-ink">DSAR queue</h1>
+        <h1 className="text-xl font-semibold text-ink">Data request queue</h1>
         <p className="text-sm text-muted">
-          Every rights request, with its statutory deadline. 30 days from submission.
+          Every rights request with its statutory deadline, soonest first. The
+          deadline comes from this workspace&rsquo;s configured response window,
+          not a fixed 30 days.
         </p>
       </div>
 
+      {error && (
+        <div className="rounded-lg border border-danger/50 bg-danger/10 p-3 text-sm text-ink">
+          {error}
+        </div>
+      )}
+
       <div className="card space-y-3 p-4">
         <div className="flex flex-wrap gap-2">
-          {FILTERS.map((f) => (
+          {TYPE_FILTERS.map((f) => (
             <button
-              key={f}
+              key={f.id || "all"}
               type="button"
-              onClick={() => setFilter(f)}
+              onClick={() => setType(f.id)}
               className={`rounded-full px-3 py-1.5 text-sm transition ${
-                filter === f ? "bg-navy text-white" : "border border-line bg-surface text-ink hover:bg-line/40"
+                type === f.id
+                  ? "bg-navy text-white"
+                  : "border border-line bg-surface text-ink hover:bg-line/40"
               }`}
             >
-              {f}
+              {f.label}
             </button>
           ))}
         </div>
-        <div>
-          <label className="sr-only" htmlFor="dsar-search">Search</label>
-          <input
-            id="dsar-search"
-            className="input"
-            placeholder="Search by reference number or user email…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="label" htmlFor="dsar-status">Status</label>
+            <select
+              id="dsar-status"
+              className="input"
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+            >
+              {STATUS_FILTERS.map((s) => (
+                <option key={s.id || "any"} value={s.id}>{s.label}</option>
+              ))}
+            </select>
+          </div>
+          <label className="flex items-center gap-2 pb-2 text-sm text-ink">
+            <input
+              type="checkbox"
+              checked={overdueOnly}
+              onChange={(e) => setOverdueOnly(e.target.checked)}
+            />
+            Past the deadline only
+          </label>
+          <div className="min-w-[16rem] flex-1">
+            <label className="sr-only" htmlFor="dsar-search">Search</label>
+            <input
+              id="dsar-search"
+              className="input"
+              placeholder="Search this page by reference or email…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
         </div>
+        <p className="text-xs text-muted">
+          {shown.length === total
+            ? `${total} request${total === 1 ? "" : "s"}`
+            : `${shown.length} of ${total} shown`}
+        </p>
       </div>
 
       <div className="card overflow-hidden">
@@ -173,109 +273,122 @@ export default function DSARQueue() {
               <tr>
                 {SORTS.map((s) => (
                   <th key={s.id} className="th">
-                    <button type="button" className="inline-flex items-center gap-1"
-                            onClick={() => toggleSort(s.id)}>
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1"
+                      onClick={() => toggleSort(s.id)}
+                    >
                       {s.label}
-                      {sort === s.id && <span aria-hidden="true">{dir === "asc" ? "↑" : "↓"}</span>}
+                      {sort === s.id && (
+                        <span aria-hidden="true">{dir === "asc" ? "↑" : "↓"}</span>
+                      )}
                     </button>
                   </th>
                 ))}
-                <th className="th">User</th>
-                <th className="th">SLA</th>
+                <th className="th">Person</th>
+                <th className="th">Deadline</th>
                 <th className="th sr-only">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
-              {filtered.length === 0 && (
+              {shown.length === 0 && (
                 <tr>
                   <td className="td text-center text-muted" colSpan={8}>
                     No requests match this view.
                   </td>
                 </tr>
               )}
-              {filtered.map((r) => {
-                const overdue =
-                  r.status !== "completed" && r.status !== "rejected" && slaTone(r.deadline_at) === "overdue";
-                return (
-                  <tr
-                    key={r.id}
-                    onClick={() => setSelected(r)}
-                    className={`cursor-pointer hover:bg-canvas ${overdue ? "bg-danger/5" : ""}`}
-                  >
-                    <td className="td font-mono text-xs">{r.reference}</td>
-                    <td className="td">
-                      <span className="tag capitalize">{r.type}</span>
-                    </td>
-                    <td className="td text-xs text-muted">
-                      {new Date(r.submitted_at).toLocaleDateString()}
-                    </td>
-                    <td className="td text-xs">
-                      {new Date(r.deadline_at).toLocaleDateString()}
-                    </td>
-                    <td className="td">
-                      <StatusBadge status={overdue ? "overdue" : r.status} />
-                    </td>
-                    <td className="td text-xs text-muted">{r.user_email}</td>
-                    <td className="td">
-                      {r.status === "completed" || r.status === "rejected" ? (
-                        <span className="text-xs text-muted">closed</span>
-                      ) : (
-                        <SLACountdown deadlineAt={r.deadline_at} />
-                      )}
-                    </td>
-                    <td className="td">
-                      <span className="text-sm text-teal underline">View</span>
-                    </td>
-                  </tr>
-                );
-              })}
+              {shown.map((r) => (
+                <tr
+                  key={r.id}
+                  onClick={() => open(r)}
+                  className={`cursor-pointer hover:bg-canvas ${
+                    r.overdue ? "bg-danger/5" : ""
+                  }`}
+                >
+                  <td className="td font-mono text-xs">{r.reference}</td>
+                  <td className="td">
+                    <span className="tag capitalize">{r.type}</span>
+                  </td>
+                  <td className="td text-xs text-muted">
+                    {new Date(r.submitted_at).toLocaleDateString()}
+                  </td>
+                  <td className="td text-xs">
+                    {new Date(r.deadline_at).toLocaleDateString()}
+                  </td>
+                  <td className="td">
+                    {/* `overdue` is computed server-side against the clock on
+                        every read, so it cannot lag behind a job. */}
+                    <StatusBadge
+                      status={r.overdue ? "overdue" : r.status}
+                      label={r.overdue ? "Overdue" : STATUS_LABEL[r.status] || r.status}
+                    />
+                  </td>
+                  <td className="td text-xs text-muted">
+                    {r.user_email || r.user_id || "—"}
+                  </td>
+                  <td className="td">
+                    {["completed", "rejected", "cancelled"].includes(r.status) ? (
+                      <span className="text-xs text-muted">closed</span>
+                    ) : (
+                      <SLACountdown deadlineAt={r.deadline_at} />
+                    )}
+                  </td>
+                  <td className="td">
+                    <span className="text-sm text-teal underline">View</span>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* ------------------------------------------------- detail panel -- */}
+      {/* --------------------------------------------------- detail panel -- */}
       <SlideOver
         open={Boolean(selected)}
-        title={selected ? `${selected.type.toUpperCase()} — ${selected.reference}` : ""}
-        subtitle={selected?.user_email}
+        title={selected ? `${selected.type} — ${selected.reference}` : ""}
+        subtitle={selected?.principal_email}
         onClose={() => setSelected(null)}
-        footer={
-          selected && (
-            <div className="flex flex-wrap items-center gap-3">
-              <button type="button" className="btn-primary" onClick={() => save()} disabled={busy}>
-                {busy ? "Saving…" : "Save & Notify User"}
-              </button>
-              <button type="button" className="btn-ghost" onClick={() => setSelected(null)}>
-                Close
-              </button>
-            </div>
-          )
-        }
       >
         {selected && (
           <div className="space-y-5">
             <dl className="grid gap-3 text-sm sm:grid-cols-2">
               <div>
                 <dt className="text-xs text-muted">Type</dt>
-                <dd className="capitalize">{selected.type}</dd>
+                <dd className="capitalize text-ink">{selected.type}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted">Raised by</dt>
+                <dd className="text-ink">
+                  {selected.requested_by_actor === "staff"
+                    ? "staff, on their behalf"
+                    : "the person themselves"}
+                </dd>
               </div>
               <div>
                 <dt className="text-xs text-muted">Submitted</dt>
-                <dd>{new Date(selected.submitted_at).toLocaleString()}</dd>
+                <dd className="text-ink">
+                  {new Date(selected.submitted_at).toLocaleString()}
+                </dd>
               </div>
               <div>
-                <dt className="text-xs text-muted">Legal deadline</dt>
-                <dd>
+                <dt className="text-xs text-muted">Deadline</dt>
+                <dd className="text-ink">
                   {new Date(selected.deadline_at).toLocaleDateString()}
-                  {/* A closed request has no live clock — showing "OVERDUE" against
-                      something already answered would misreport compliance. */}
                   <div className="mt-1">
-                    {selected.status === "completed" || selected.status === "rejected" ? (
+                    {["completed", "rejected", "cancelled"].includes(selected.status) ? (
+                      // A closed request has no live clock. Showing "OVERDUE"
+                      // against something already answered would misreport
+                      // compliance in the direction that looks worse than reality.
                       <span className="text-xs text-muted">
-                        Closed{selected.resolved_at ? ` ${new Date(selected.resolved_at).toLocaleDateString()}` : ""}
-                        {selected.resolved_at && new Date(selected.resolved_at) <= new Date(selected.deadline_at)
-                          ? " — within deadline"
+                        Closed
+                        {selected.resolved_at
+                          ? ` ${new Date(selected.resolved_at).toLocaleDateString()}`
+                          : ""}
+                        {selected.resolved_at &&
+                        new Date(selected.resolved_at) <= new Date(selected.deadline_at)
+                          ? " — within the deadline"
                           : ""}
                       </span>
                     ) : (
@@ -285,144 +398,236 @@ export default function DSARQueue() {
                 </dd>
               </div>
               <div>
-                <dt className="text-xs text-muted">Identity verification</dt>
+                <dt className="text-xs text-muted">Identity check</dt>
                 <dd>
-                  <StatusBadge
-                    status="verified"
-                    label={selected.verification === "digilocker" ? "DigiLocker verified" : "OTP verified"}
-                  />
+                  {/* Reported, not asserted. `verification_method` is what was
+                      asked for; `verified_at` is what happened. */}
+                  {selected.verified_at ? (
+                    <StatusBadge
+                      status="verified"
+                      label={`${selected.verification_method || "verified"} · ${new Date(
+                        selected.verified_at,
+                      ).toLocaleDateString()}`}
+                    />
+                  ) : (
+                    <StatusBadge status="pending" label="Not verified" />
+                  )}
                 </dd>
               </div>
+              {selected.engine_ref && (
+                <div>
+                  <dt className="text-xs text-muted">Engine reference</dt>
+                  <dd className="font-mono text-xs text-ink">{selected.engine_ref}</dd>
+                </div>
+              )}
             </dl>
 
-            {/* type-specific action */}
+            {/* The engine failed — the request survived, and can be re-dispatched. */}
+            {selected.engine_error && (
+              <div className="rounded-lg border border-danger/40 bg-danger/5 p-3">
+                <p className="text-sm font-semibold text-ink">
+                  The privacy engine could not be reached
+                </p>
+                <p className="mt-1 text-xs text-danger">{selected.engine_error}</p>
+                <p className="mt-1 text-xs text-muted">
+                  The request was not lost — it is still recorded and its deadline
+                  is still running.
+                </p>
+                <button
+                  type="button"
+                  className="btn-secondary mt-2"
+                  disabled={busy}
+                  onClick={() =>
+                    act(() => retryDispatch(selected.id), "Re-dispatched to the engine.")
+                  }
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+
+            {/* ----------------------------------------- type-specific work -- */}
             <div className="rounded-lg border border-line p-4">
-              <p className="text-sm font-semibold text-ink">Action required</p>
+              <p className="text-sm font-semibold text-ink">What this request needs</p>
 
               {selected.type === "access" && (
-                <div className="mt-2">
+                <div className="mt-2 space-y-2">
                   <p className="text-sm text-muted">
-                    Collect every piece of personal data held about this person and package it.
+                    The engine collects this person&rsquo;s data across every
+                    connected datastore. The package expires, and every retrieval
+                    is audited.
                   </p>
-                  <button type="button" className="btn-secondary mt-3" onClick={doExport} disabled={busy}>
-                    Prepare Data Export
-                  </button>
-                  {selected.export_url && (
-                    <p className="mt-2 text-xs text-success">
-                      Export ready — <a className="underline" href={selected.export_url}>download</a>
+                  {selected.package_available_until ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        disabled={busy}
+                        onClick={() =>
+                          act(
+                            () => downloadPackage(selected.id, selected.reference),
+                            "Package downloaded. The retrieval is in the audit trail.",
+                          )
+                        }
+                      >
+                        Download the access package
+                      </button>
+                      <p className="text-xs text-muted">
+                        Available until{" "}
+                        {new Date(selected.package_available_until).toLocaleString()}.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted">
+                      No package yet — one is produced when the request completes.
                     </p>
                   )}
                 </div>
               )}
 
-              {selected.type === "correct" && (
+              {selected.type === "correction" && (
                 <div className="mt-2 space-y-2">
-                  {selected.correction ? (
+                  {selected.correction_payload ? (
                     <div className="rounded-lg bg-canvas p-3 text-sm">
                       <p className="text-xs text-muted">Requested correction</p>
-                      <p className="mt-1 text-ink">
-                        <strong>{selected.correction.field}</strong>: “{selected.correction.current}”
-                        → “{selected.correction.corrected}”
-                      </p>
+                      <pre className="mt-1 whitespace-pre-wrap text-xs text-ink">
+                        {JSON.stringify(selected.correction_payload, null, 2)}
+                      </pre>
                     </div>
                   ) : (
                     <p className="text-sm text-muted">No correction details recorded.</p>
                   )}
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => {
-                      setNextStatus("completed");
-                      save({ status: "completed" });
-                    }}
-                    disabled={busy}
-                  >
-                    Mark Corrected
-                  </button>
+                  <p className="text-xs text-warning">
+                    Correction is a manual workflow — the privacy engine has no
+                    correction action, so somebody has to make the change and then
+                    complete the request.
+                  </p>
                 </div>
               )}
 
-              {selected.type === "erase" && (
+              {selected.type === "erasure" && (
                 <div className="mt-2 space-y-2">
                   <p className="text-sm text-muted">
-                    Erasure removes personal data across every connected system. Records held under a
-                    legal obligation are retained and reported back to the user.
+                    Erasure masks this person&rsquo;s identifiers across every
+                    connected datastore. Records held under a legal obligation are
+                    retained and reported back.
                   </p>
-                  <button type="button" className="btn-danger" onClick={() => setConfirmErase(true)}
-                          disabled={busy}>
-                    Initiate Erasure
-                  </button>
+                  {selected.status === "received" && (
+                    <button
+                      type="button"
+                      className="btn-danger"
+                      onClick={() => setConfirmErase(true)}
+                      disabled={busy}
+                    >
+                      Begin the erasure
+                    </button>
+                  )}
                 </div>
               )}
             </div>
 
-            {/* status */}
-            <div>
-              <label className="label" htmlFor="p-status">Status</label>
-              <select id="p-status" className="input" value={nextStatus}
-                      onChange={(e) => setNextStatus(e.target.value)}>
-                {STATUSES.map((s) => (
-                  <option key={s} value={s}>{s.replace("_", " ")}</option>
-                ))}
-              </select>
-
-              {nextStatus === "rejected" && (
-                <div className="mt-3">
-                  <label className="label" htmlFor="p-reason">Reason for rejection (shown to the user)</label>
-                  <textarea id="p-reason" className="input min-h-[80px]" value={rejection}
-                            onChange={(e) => setRejection(e.target.value)} />
+            {/* ----------------------------------------------------- action -- */}
+            {allowed.length > 0 ? (
+              <div className="space-y-3">
+                <div>
+                  <label className="label" htmlFor="p-note">
+                    Note for the timeline (optional)
+                  </label>
+                  <input
+                    id="p-note"
+                    className="input"
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    placeholder="What you did, or why."
+                  />
                 </div>
-              )}
-            </div>
 
-            {/* legal exception */}
-            <div className="rounded-lg border border-line p-4">
-              <label className="flex items-start justify-between gap-3">
-                <span className="text-sm text-ink">
-                  This request is exempt under law
-                  <span className="mt-0.5 block text-xs text-muted">
-                    e.g. data retained under a statutory obligation. The reason is recorded.
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={exempt}
-                  aria-label="Legal exception"
-                  onClick={() => setExempt((v) => !v)}
-                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition ${
-                    exempt ? "bg-warning" : "bg-line"
-                  }`}
-                >
-                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition ${
-                    exempt ? "translate-x-6" : "translate-x-1"
-                  }`} />
-                </button>
-              </label>
-              {exempt && (
-                <textarea
-                  className="input mt-3 min-h-[70px]"
-                  placeholder="Which law or rule requires this?"
-                  value={exemptReason}
-                  onChange={(e) => setExemptReason(e.target.value)}
-                />
-              )}
-            </div>
+                {allowed.includes("rejected") && (
+                  <div>
+                    <label className="label" htmlFor="p-reason">
+                      Reason for rejection
+                    </label>
+                    <textarea
+                      id="p-reason"
+                      className="input min-h-[80px]"
+                      value={rejection}
+                      onChange={(e) => setRejection(e.target.value)}
+                    />
+                    <p className="mt-1 text-xs text-muted">
+                      Required to reject, and emailed to the person. A rejection
+                      with no recorded reason is not a decision anybody can defend.
+                    </p>
+                  </div>
+                )}
 
-            {/* audit trail for this request */}
+                {/* Only what the server will accept. The screen no longer keeps
+                    its own idea of the state machine. */}
+                <div className="flex flex-wrap gap-2">
+                  {allowed
+                    .filter((s) => s !== "rejected")
+                    .map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        className={s === "completed" ? "btn-primary" : "btn-secondary"}
+                        disabled={busy}
+                        onClick={() => move(s)}
+                      >
+                        {s === "completed"
+                          ? "Complete"
+                          : `Move to ${STATUS_LABEL[s] || s}`}
+                      </button>
+                    ))}
+                  {allowed.includes("rejected") && (
+                    <button
+                      type="button"
+                      className="btn-ghost text-danger"
+                      disabled={busy || !rejection.trim()}
+                      onClick={() => move("rejected")}
+                    >
+                      Reject
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-muted">
+                This request is closed. Nothing further can be changed — the record
+                stands as it is.
+              </p>
+            )}
+
+            {/* --------------------------------------------------- timeline -- */}
             <div>
-              <p className="text-sm font-semibold text-ink">Audit trail for this request</p>
-              {audit.length === 0 ? (
+              <p className="text-sm font-semibold text-ink">Timeline</p>
+              {(selected.timeline || []).length === 0 ? (
                 <p className="mt-1 text-sm text-muted">No entries yet.</p>
               ) : (
-                <ul className="mt-2 divide-y divide-line">
-                  {audit.map((a) => (
-                    <li key={a.id} className="flex flex-wrap items-center gap-2 py-2 text-xs">
-                      <span className="font-mono">{a.log_id}</span>
-                      <span className="text-ink">{a.action_type}</span>
-                      <span className="text-muted">{new Date(a.timestamp).toLocaleString()}</span>
-                      <span className="text-muted">by {a.initiator}</span>
-                      <AuditHashBadge hash={a.audit_hash} chars={10} />
+                <ul className="mt-2 space-y-2">
+                  {selected.timeline.map((e, i) => (
+                    <li
+                      key={i}
+                      className="rounded-lg border border-line px-3 py-2 text-xs"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-ink">
+                          {e.from_status && e.from_status !== e.to_status
+                            ? `${STATUS_LABEL[e.from_status] || e.from_status} → ${
+                                STATUS_LABEL[e.to_status] || e.to_status
+                              }`
+                            : STATUS_LABEL[e.to_status] || e.to_status}
+                        </span>
+                        {/* "The engine moved this" and "a human decided this" are
+                            different facts. */}
+                        {e.automated && <span className="tag">automatic</span>}
+                        <span className="ml-auto text-muted">
+                          {new Date(e.created_at).toLocaleString()}
+                        </span>
+                      </div>
+                      {e.note && <p className="mt-1 text-muted">{e.note}</p>}
+                      {e.actor_label && (
+                        <p className="mt-0.5 text-muted">by {e.actor_label}</p>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -434,20 +639,21 @@ export default function DSARQueue() {
 
       <ConfirmModal
         open={confirmErase}
-        title="Initiate erasure?"
-        body={`This will erase personal data for ${selected?.user_email} across every connected system.`}
+        title="Begin the erasure?"
+        body={`This starts erasure for ${
+          selected?.principal_email || "this person"
+        } across every connected datastore.`}
         consequences={[
-          "Personal identifiers are removed or masked in each system that holds them.",
-          "Records held under a legal obligation are retained, and reported to the user.",
+          "Identifiers are masked in each system that holds them.",
+          "Records held under a legal obligation are retained, and reported back.",
           "The erasure is irreversible.",
-          "Every collection touched is written to the audit trail.",
+          "Every datastore touched is written to the audit trail.",
         ]}
-        confirmLabel="Yes, initiate erasure"
+        confirmLabel="Yes, begin the erasure"
         busy={busy}
         onCancel={() => setConfirmErase(false)}
         onConfirm={async () => {
-          setNextStatus("in_progress");
-          await save({ status: "in_progress" });
+          await move("in_progress");
           setConfirmErase(false);
         }}
       />

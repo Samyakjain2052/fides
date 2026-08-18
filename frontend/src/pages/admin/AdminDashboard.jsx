@@ -9,6 +9,7 @@ import { Link } from "react-router-dom";
 import { getAdminDashboard } from "../../api";
 import { CATEGORY_LABEL, listGrievances, officer as fetchOfficer } from "../../api/grievances";
 import { listBreaches } from "../../api/breaches";
+import { queueRows } from "../../api/dsar";
 import StatCard from "../../components/common/StatCard";
 import StatusBadge from "../../components/common/StatusBadge";
 import SLACountdown from "../../components/common/SLACountdown";
@@ -40,6 +41,12 @@ export default function AdminDashboard() {
   // one person's request, the breach is a statutory duty to a regulator and to
   // everybody affected.
   const [breaches, setBreaches] = useState(null);
+  // Data requests, from the API. The mock array they used to come from was
+  // emptied when the real DSAR record landed and nothing writes to it any more —
+  // so these tiles showed a hardcoded 0 while the banner above them claimed the
+  // figures were real. Same class of problem as the two live screens that were
+  // still reading mocks.
+  const [dsar, setDsar] = useState(null);
 
   useEffect(() => {
     getAdminDashboard().then(setData);
@@ -50,6 +57,7 @@ export default function AdminDashboard() {
     listBreaches({ openOnly: true })
       .then(setBreaches)
       .catch(() => setBreaches(null));
+    queueRows().then(setDsar).catch(() => setDsar(null));
   }, []);
 
   if (!data) return <p className="text-sm text-muted">Loading compliance summary…</p>;
@@ -57,6 +65,21 @@ export default function AdminDashboard() {
   const { stats, attention, charts } = data;
   const gCounts = grievances?.counts;
   const overdueGrievances = grievances?.items ?? [];
+
+  // Derived from the rows the server returned, so these cannot drift from the
+  // queue screen. `overdue` is computed server-side against the clock.
+  const dsarRows = dsar?.rows ?? [];
+  const openDsar = dsarRows.filter(
+    (r) => !["completed", "rejected", "cancelled"].includes(r.status),
+  );
+  const overdueDsar = openDsar.filter((r) => r.overdue);
+  const dsarDueSoon = openDsar.filter((r) => {
+    const left = new Date(r.deadline_at) - Date.now();
+    return left > 0 && left < 5 * DAY;
+  });
+  const dsarByType = Object.entries(
+    dsarRows.reduce((acc, r) => ({ ...acc, [r.type]: (acc[r.type] || 0) + 1 }), {}),
+  ).map(([label, value]) => ({ label, value }));
 
   return (
     <div className="space-y-6">
@@ -127,14 +150,19 @@ export default function AdminDashboard() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <StatCard label="Total active consents" value={stats.active_consents} tone="success" sample />
         <StatCard label="Withdrawn this month" value={stats.withdrawn_this_month} tone="neutral" sample />
-        <StatCard label="Open DSAR requests" value={stats.open_dsar} tone="info" to="/admin/dsar" />
+        <StatCard
+          label="Open data requests"
+          value={dsar ? openDsar.length : "—"}
+          tone="info"
+          to="/admin/dsar"
+        />
         <StatCard
           label="DSAR overdue"
-          value={stats.overdue_dsar}
-          tone={stats.overdue_dsar > 0 ? "danger" : "neutral"}
+          value={dsar ? overdueDsar.length : "—"}
+          tone={overdueDsar.length > 0 ? "danger" : "neutral"}
           to="/admin/dsar"
           badge={
-            stats.overdue_dsar > 0 ? (
+            overdueDsar.length > 0 ? (
               <span className="rounded-full bg-danger px-2 py-0.5 text-[10px] font-bold text-white">
                 ACTION
               </span>
@@ -164,8 +192,8 @@ export default function AdminDashboard() {
           <h2 className="font-semibold text-ink">Data requests by type</h2>
           <p className="text-xs text-muted">All requests on this account</p>
           <div className="mt-4">
-            {charts.dsar_by_type.length ? (
-              <BarChart data={charts.dsar_by_type} />
+            {dsarByType.length ? (
+              <BarChart data={dsarByType} />
             ) : (
               <EmptyChart>
                 No requests yet. Submit one from the Data Requests screen and it
@@ -207,13 +235,13 @@ export default function AdminDashboard() {
           {/* DSARs within 5 days or already overdue */}
           <div className="px-5 py-4">
             <p className="text-sm font-medium text-ink">
-              Data requests due within 5 days ({attention.dsar_due_soon.length})
+              Data requests due within 5 days ({dsarDueSoon.length})
             </p>
-            {attention.dsar_due_soon.length === 0 ? (
+            {dsarDueSoon.length === 0 ? (
               <p className="mt-1 text-sm text-muted">Nothing at risk.</p>
             ) : (
               <ul className="mt-2 space-y-2">
-                {attention.dsar_due_soon.map((r) => {
+                {[...overdueDsar, ...dsarDueSoon].map((r) => {
                   const isOverdue = new Date(r.deadline_at) < Date.now();
                   return (
                     <li

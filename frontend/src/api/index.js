@@ -131,8 +131,6 @@ let dsarRequests = [];
 // person cleared their browser — while the erasure it triggered had genuinely
 // happened. The record now lives in PostgreSQL: see src/api/dsar.js.
 
-export const MOCK_DSAR_REQUESTS = clone(dsarRequests);
-
 // The mock grievance rows lived here. Removed with the module: both dashboards
 // now read grievance figures from /v1/grievances.
 
@@ -191,12 +189,9 @@ export const CORRECTABLE_FIELDS = ["Full name", "Email address", "Phone", "Posta
 // arbitrary patch, so any field could be set to anything — including a status of
 // "reported_to_dpb" with neither notification actually performed, which is the
 // exact half-compliance the real schema refuses with a CHECK constraint.
-let validationLog = [
-  { id: "v1", user_id: "u001", purpose_id: "n1", result: "valid", checked_at: "2026-07-29T09:12:00Z", caller: "core-banking-api" },
-  { id: "v2", user_id: "u001", purpose_id: "n2", result: "withdrawn", checked_at: "2026-07-29T09:12:04Z", caller: "marketing-service" },
-  { id: "v3", user_id: "u003", purpose_id: "n3", result: "expired", checked_at: "2026-07-29T10:01:00Z", caller: "analytics-service" },
-];
-
+// The mock consent-validation log lived here. The real one is the audit
+// chain: every console check writes a `consent.validated` entry, and a second
+// list that could disagree with the chain would be worse than none.
 // The mock list of previously-generated reports lived here. Removed with the
 // module: reports are streamed and never stored, so there is nothing to list.
 // One of these rows carried `signed: true`, which the screen rendered as "carries
@@ -414,38 +409,6 @@ export async function getConsentHistory(userId = subject.id) {
     });
 }
 
-export async function validateConsent({ userId, purposeId }) {
-  await delay(350);
-  const row = consents.find((c) => c.user_id === userId && c.notice_id === purposeId);
-  let result = "invalid";
-  if (row) {
-    if (row.status === "withdrawn") result = "withdrawn";
-    else if (row.expires_at && row.expires_at < nowIso()) result = "expired";
-    else if (row.status === "active") result = "valid";
-  }
-  const entry = { id: "v" + (validationLog.length + 1), user_id: userId, purpose_id: purposeId, result, checked_at: nowIso(), caller: "admin-console" };
-  validationLog = [entry, ...validationLog];
-  appendAuditLog({ action_type: "validate", user_id: userId, purpose_id: purposeId, consent_status: row?.status || "none", initiator: "Data Fiduciary" });
-  return {
-    result,
-    purpose_alignment: row ? "matches declared purpose" : "no consent record",
-    timestamp_valid: Boolean(row),
-    consent_status: row?.status || "none",
-  };
-}
-
-export async function getValidationLog() {
-  await delay();
-  return clone(validationLog);
-}
-
-export async function bulkValidate(pairs) {
-  await delay(700);
-  const out = [];
-  for (const p of pairs) out.push({ ...p, ...(await validateConsent(p)) });
-  return out;
-}
-
 // ============================================================================
 // DSAR
 // ============================================================================
@@ -499,30 +462,6 @@ export async function submitDSAR({ type, verification, details = {} }) {
     ...notifications,
   ];
   return clone(row);
-}
-
-export async function getDSARRequests({ userId } = {}) {
-  await delay();
-  let rows = clone(dsarRequests);
-  if (userId) rows = rows.filter((r) => r.user_id === userId);
-
-  // Real requests get their live status from the gateway.
-  if (USE_REAL_DSAR_BACKEND) {
-    await Promise.all(
-      rows.filter((r) => r.real).map(async (r) => {
-        try {
-          const resp = await fetch(`${GATEWAY}/dsar/${r.id}`);
-          if (!resp.ok) return;
-          const live = await resp.json();
-          r.status = live.status === "complete" ? "completed" : live.status === "error" ? "rejected" : "in_progress";
-          r.execution_log = live.execution_log;
-          r.data = live.data;
-          if (live.finished_processing_at) r.resolved_at = live.finished_processing_at;
-        } catch (_) { /* keep the mock status */ }
-      })
-    );
-  }
-  return rows;
 }
 
 export async function updateDSAR(id, patch) {

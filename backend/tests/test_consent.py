@@ -415,3 +415,68 @@ async def test_every_consent_table_has_an_rls_policy(app_session_factory, tenant
             assert enabled, f"{table} has RLS disabled"
             assert forced, f"{table} does not FORCE RLS — the owner would bypass it"
             assert policies >= 1, f"{table} has no policy"
+
+
+async def test_a_console_consent_check_is_audited(app_session_factory, tenant_a):
+    """"Were we allowed to process this person's data?" must leave a trace.
+
+    `AuditAction.CONSENT_VALIDATED` existed as a constant that nothing wrote, so
+    the one question this endpoint exists to answer was unanswerable after the
+    fact. Being able to show that you checked is most of its value.
+
+    Deliberately console-only: machine callers hit the public equivalent before
+    every processing operation, and each audit entry takes a per-tenant advisory
+    lock, so auditing that path would serialise it. Those are recorded in
+    `api_request_log` instead.
+    """
+    import httpx
+
+    from app.main import app
+    from app.models.audit import AuditEvent
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.post(
+            "/v1/auth/login",
+            json={
+                "tenant_slug": tenant_a["slug"],
+                "email": tenant_a["admin_email"],
+                "password": tenant_a["password"],
+            },
+        )
+        assert r.status_code == 200, r.text
+        headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+        async with scoped(app_session_factory, tenant_a["id"]) as s:
+            purpose = await notice_service.create_purpose(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                key="probe_purpose", name="Probe", category="Contact Data",
+            )
+            principal = DataPrincipal(
+                tenant_id=tenant_a["id"], external_id="probe-1",
+                email="probe@example.com",
+            )
+            s.add(principal)
+            await s.flush()
+            principal_id = str(principal.id)
+            await s.commit()
+
+        check = await client.get(
+            "/v1/consents/check",
+            headers=headers,
+            params={"principal_id": principal_id, "purpose": "probe_purpose"},
+        )
+        assert check.status_code == 200, check.text
+        assert check.json()["allowed"] is False
+        assert check.json()["status"] == "never_given"
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        entry = await s.scalar(
+            select(AuditEvent)
+            .where(AuditEvent.action == "consent.validated")
+            .order_by(AuditEvent.seq.desc())
+        )
+        assert entry is not None, "the check left no trace"
+        assert entry.payload["purpose_key"] == "probe_purpose"
+        assert entry.payload["allowed"] is False
+        assert entry.payload["status"] == "never_given"

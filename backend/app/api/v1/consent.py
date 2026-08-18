@@ -16,6 +16,7 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, require
 from app.core.errors import NotFound
 from app.core.permissions import Capability
+from app.models.audit import AuditAction
 from app.models.consent import Consent, DataPrincipal, Notice, Purpose
 from app.schemas.consent import (
     ConsentCheckOut,
@@ -32,7 +33,7 @@ from app.schemas.consent import (
     PurposeCreate,
     PurposeOut,
 )
-from app.services import consent_service, notice_service
+from app.services import audit_service, consent_service, notice_service
 
 router = APIRouter(tags=["consent"])
 
@@ -295,6 +296,32 @@ async def check_consent(
         tenant_id=current.tenant_id,
         principal_id=principal_id,
         purpose_key=purpose,
+    )
+
+    # Audited — and only here, on the console route.
+    #
+    # `AuditAction.CONSENT_VALIDATED` existed as a constant that nothing wrote, so
+    # a human asking "were we allowed to process this person's data?" left no trace
+    # at all. That is the one question this endpoint exists to answer, and being
+    # able to show you asked it is most of its value.
+    #
+    # Deliberately NOT on the public API's equivalent. Machine callers hit that
+    # before every processing operation, and each audit entry takes a per-tenant
+    # advisory lock — auditing a hot path would serialise it and bury the chain in
+    # noise. Those calls are already recorded in `api_request_log`, which is the
+    # right place for high-volume access logging.
+    await audit_service.record(
+        current.session,
+        tenant_id=current.tenant_id,
+        actor=current.actor,
+        action=AuditAction.CONSENT_VALIDATED,
+        entity_type="consent",
+        entity_id=principal_id,
+        payload={
+            "purpose_key": purpose,
+            "status": result["status"],
+            "allowed": result["allowed"],
+        },
     )
     return ConsentCheckOut(**{k: v for k, v in result.items() if k != "notice_version"})
 

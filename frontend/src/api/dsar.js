@@ -107,6 +107,10 @@ export function toRow(d) {
     resolved_at: d.resolved_at,
     rejection_reason: d.rejection_reason,
     verification: d.verification_method,
+    // The timestamp, not just the method. A screen that renders "OTP verified"
+    // from the method alone claims a verification that may never have happened —
+    // the method is what was ASKED for, `verified_at` is what was done.
+    verified_at: d.verified_at,
     user_email: d.principal_email,
     user_id: d.principal_ref,
     correction: d.correction_payload,

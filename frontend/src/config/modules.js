@@ -140,15 +140,23 @@ export const MODULE_CAVEATS = {
     "\u201cProcess queue now\u201d; and the provider shipped by default writes to " +
     "the server log instead of sending, which the screen says at the top. SMS is " +
     "modelled but no SMS provider is implemented.",
+  consent:
+    "Purposes, notices, collection, withdrawal and validation all run against the "
+    + "real record, and every validation check from the console is written to the "
+    + "audit chain. One thing is not real: the consent tiles and the consent chart "
+    + "on the admin dashboard are still sample data, marked as such — they need an "
+    + "aggregate endpoint that does not exist yet.",
   audit:
     "The chain detects any entry being edited, removed or reordered. It cannot " +
     "yet detect removal of the most recent entries — that needs external " +
     "anchoring, and the screen says so next to the result.",
   dsar_workflow:
-    "Triage is real, and the person is now emailed when a request is received, "
-    + "completed or refused. Intermediate transitions are deliberately silent: a "
-    + "message for every internal step trains people to ignore the one that "
-    + "matters.",
+    "The triage queue reads the real record and the person is emailed when a "
+    + "request is received, completed or refused. Intermediate transitions are "
+    + "deliberately silent: a message for every internal step trains people to "
+    + "ignore the one that matters. The identity check offered on the request form "
+    + "is still simulated, not a real verification — the queue reports whether "
+    + "verification actually happened rather than assuming it did.",
   dsar:
     "Access and erasure run for real against four datastores. Two parts are not: " +
     "correction is sample data (the engine has no correction action yet), and " +
