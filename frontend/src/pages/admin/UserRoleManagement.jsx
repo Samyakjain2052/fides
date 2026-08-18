@@ -1,125 +1,248 @@
 // ============================================================================
-// User Role Management (/admin/roles)
-// Users and their roles, the permission matrix, MFA per user, SSO config, and a
-// role-change audit log. Revoking access is destructive → ConfirmModal.
+// Users & roles (/admin/roles)
+//
+// Real, against /v1/admin. The previous version rendered MOCK_USERS_ADMIN with
+// locked buttons and a hardcoded permissions table.
+//
+// Four things this screen is careful about:
+//
+//   * **Nobody sets anybody else's password.** People are invited and choose
+//     their own. An administrator who knows a colleague's password makes every
+//     audit entry attributed to that colleague arguable — and the audit chain is
+//     what this whole product is for.
+//   * **The invite link is shown once.** It is emailed too, but the default
+//     notification provider writes to a log rather than sending, so the link is
+//     displayed. Losing it means revoking and re-inviting, which the copy says.
+//   * **The capability matrix comes from the API.** A permissions table
+//     hardcoded here could disagree with the code enforcing it, which would tell
+//     an administrator their workspace is configured one way while it behaves
+//     another.
+//   * **A demotion or deactivation signs them out everywhere**, and the confirm
+//     dialog says so before the click rather than after.
 // ============================================================================
-import { useEffect, useState } from "react";
-import { addUser, getAuditLogs, getUsers, ROLE_PERMISSIONS, ROLES, updateUser } from "../../api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  capabilities as fetchCapabilities,
+  changeRole,
+  deactivateUser,
+  invite,
+  listInvitations,
+  listSessions,
+  listUsers,
+  revokeInvitation,
+  revokeSessions,
+  ROLE_BLURBS,
+  ROLE_LABELS,
+} from "../../api/users";
 import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/common/StatusBadge";
 import ConfirmModal from "../../components/common/ConfirmModal";
-import AuditHashBadge from "../../components/common/AuditHashBadge";
-import { previewLock } from "../../config/modules";
+import SlideOver from "../../components/common/SlideOver";
 
-const ROLE_LABEL = {
-  data_principal: "Data Principal",
-  admin: "Admin / DPO",
-  auditor: "Auditor",
-  grievance_officer: "Grievance Officer",
-};
+const ROLES = ["admin", "auditor", "grievance_officer", "data_principal"];
+
+function fmt(iso) {
+  return iso ? new Date(iso).toLocaleString() : "—";
+}
+
+/** A revealed-once secret. Copyable, and honest about not coming back. */
+function OnceOnly({ url, emailed, onDone }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="rounded-lg border border-warning/50 bg-warning/10 p-4">
+      <p className="text-sm font-semibold text-ink">
+        This link is shown once
+      </p>
+      <p className="mt-1 text-xs text-muted">
+        {emailed
+          ? "It has also been emailed. If your notification provider is the default one, that email went to the server log rather than an inbox — so copy it now."
+          : "The email could not be sent, so this is the only copy. The invitation itself is recorded and valid."}
+      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <code className="min-w-0 flex-1 overflow-x-auto rounded border border-line bg-surface px-2 py-1.5 text-[11px] text-ink">
+          {url}
+        </code>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => {
+            navigator.clipboard?.writeText(url);
+            setCopied(true);
+          }}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <p className="mt-2 text-xs text-muted">
+        Nothing stores it in a form we can read back. If it is lost, revoke the
+        invitation and send a new one.
+      </p>
+      <button type="button" className="btn-ghost mt-2" onClick={onDone}>
+        I have it
+      </button>
+    </div>
+  );
+}
 
 export default function UserRoleManagement() {
-  const { notify } = useApp();
-  const [users, setUsers] = useState([]);
-  const [roleLog, setRoleLog] = useState([]);
-  const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ name: "", email: "", role: "admin" });
-  const [editing, setEditing] = useState(null);
-  const [revoking, setRevoking] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [sso, setSso] = useState({ enabled: false, provider: "Azure AD (Entra ID)", domain: "example.com" });
+  const { notify, user: me } = useApp();
 
-  const load = async () => {
-    setUsers(await getUsers());
-    const logs = await getAuditLogs();
-    setRoleLog(logs.filter((l) => ["role_changed", "user_created", "access_revoked", "user_updated"].includes(l.action_type)));
-  };
+  const [users, setUsers] = useState([]);
+  const [invitations, setInvitations] = useState([]);
+  const [matrix, setMatrix] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  // invite form
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("auditor");
+  const [issued, setIssued] = useState(null);
+
+  // dialogs
+  const [confirmRole, setConfirmRole] = useState(null); // {user, role}
+  const [confirmDeactivate, setConfirmDeactivate] = useState(null);
+  const [confirmRevokeSessions, setConfirmRevokeSessions] = useState(null);
+  const [sessionsFor, setSessionsFor] = useState(null);
+  const [sessions, setSessions] = useState([]);
+
+  const load = useCallback(async () => {
+    try {
+      const [u, inv] = await Promise.all([listUsers(), listInvitations()]);
+      setUsers(u);
+      setInvitations(inv);
+    } catch (e) {
+      setError(e.message);
+    }
+  }, []);
 
   useEffect(() => {
     load();
-  }, []);
+    fetchCapabilities().then(setMatrix).catch(() => setMatrix(null));
+  }, [load]);
 
-  const create = async (e) => {
-    e.preventDefault();
+  useEffect(() => {
+    if (!sessionsFor) return;
+    listSessions(sessionsFor.id).then(setSessions).catch(() => setSessions([]));
+  }, [sessionsFor]);
+
+  const act = async (fn, message) => {
     setBusy(true);
+    setError("");
     try {
-      await addUser(form);
+      const out = await fn();
       await load();
-      setForm({ name: "", email: "", role: "admin" });
-      setAdding(false);
-      notify("User added and the change logged.");
+      if (message) notify(message);
+      return out;
+    } catch (e) {
+      setError(e.message);
+      return null;
     } finally {
       setBusy(false);
+      setConfirmRole(null);
+      setConfirmDeactivate(null);
+      setConfirmRevokeSessions(null);
     }
   };
 
-  const changeRole = async (id, role) => {
-    await updateUser(id, { role });
-    await load();
-    setEditing(null);
-    notify("Role changed. The change is in the audit trail.");
-  };
+  const activeAdmins = useMemo(
+    () => users.filter((u) => u.role === "admin"),
+    [users],
+  );
 
-  const toggleMfa = async (u) => {
-    await updateUser(u.id, { mfa: !u.mfa });
-    await load();
-    notify(u.mfa ? "MFA requirement removed." : "MFA now enforced for this user.");
-  };
-
-  const revoke = async () => {
-    setBusy(true);
-    try {
-      await updateUser(revoking.id, { active: false });
-      await load();
-      notify("Access revoked.");
-    } finally {
-      setBusy(false);
-      setRevoking(null);
-    }
-  };
+  const pending = invitations.filter((i) => i.status === "pending");
+  const settled = invitations.filter((i) => i.status !== "pending");
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-ink">Users and roles</h1>
-          <p className="text-sm text-muted">
-            Who can see and do what. Every role change is written to the audit trail.
-          </p>
-        </div>
-        <button type="button" className="btn-primary" onClick={() => setAdding((v) => !v)} {...previewLock("users", "Adding a user")}>
-          {adding ? "Cancel" : "Add user"}
-        </button>
+      <div>
+        <h1 className="text-xl font-semibold text-ink">Users &amp; roles</h1>
+        <p className="text-sm text-muted">
+          People are invited and choose their own password. Nobody here — including
+          you — can set or see somebody else&rsquo;s.
+        </p>
       </div>
 
-      {adding && (
-        <form onSubmit={create} className="card grid gap-3 p-5 sm:grid-cols-4">
-          <div>
-            <label className="label" htmlFor="u-name">Name</label>
-            <input id="u-name" className="input" value={form.name} required
-                   onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          </div>
-          <div>
-            <label className="label" htmlFor="u-email">Email</label>
-            <input id="u-email" type="email" className="input" value={form.email} required
-                   onChange={(e) => setForm({ ...form, email: e.target.value })} />
-          </div>
-          <div>
-            <label className="label" htmlFor="u-role">Role</label>
-            <select id="u-role" className="input" value={form.role}
-                    onChange={(e) => setForm({ ...form, role: e.target.value })}>
-              {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-            </select>
-          </div>
-          <div className="flex items-end">
-            <button type="submit" className="btn-primary w-full" disabled={busy} {...previewLock("users", "Creating a user")}>
-              {busy ? "Adding…" : "Create user"}
-            </button>
-          </div>
-        </form>
+      {error && (
+        <div className="rounded-lg border border-danger/50 bg-danger/10 p-3 text-sm text-ink">
+          {error}
+        </div>
       )}
 
-      <div className="card overflow-hidden">
+      {/* ----------------------------------------------------------- invite -- */}
+      <section className="card p-5">
+        <h2 className="font-semibold text-ink">Invite somebody</h2>
+        <p className="text-xs text-muted">
+          They receive a single-use link, valid for 72 hours, and set their own
+          password. You choose the role — they cannot.
+        </p>
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <div className="min-w-[16rem] flex-1">
+            <label className="label" htmlFor="inv-email">Email</label>
+            <input
+              id="inv-email"
+              className="input"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="colleague@company.com"
+            />
+          </div>
+          <div className="min-w-[12rem]">
+            <label className="label" htmlFor="inv-role">Role</label>
+            <select
+              id="inv-role"
+              className="input"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+            >
+              {ROLES.map((r) => (
+                <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+              ))}
+            </select>
+          </div>
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={busy || !email.includes("@")}
+            onClick={() =>
+              act(async () => {
+                const out = await invite({ email, role });
+                setIssued(out);
+                setEmail("");
+                return out;
+              }, "Invitation sent.")
+            }
+          >
+            {busy ? "Sending…" : "Send invitation"}
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-muted">{ROLE_BLURBS[role]}</p>
+
+        {issued && (
+          <div className="mt-4">
+            <OnceOnly
+              url={issued.accept_url}
+              emailed={issued.emailed}
+              onDone={() => setIssued(null)}
+            />
+          </div>
+        )}
+      </section>
+
+      {/* ------------------------------------------------------------ users -- */}
+      <section className="card overflow-hidden">
+        <div className="border-b border-line px-5 py-3">
+          <h2 className="font-semibold text-ink">
+            People in this workspace ({users.length})
+          </h2>
+          {activeAdmins.length === 1 && (
+            <p className="text-xs text-warning">
+              There is one administrator. A workspace must keep at least one — the
+              last one cannot be demoted or deactivated, because a workspace with
+              no administrator cannot be recovered without our support team.
+            </p>
+          )}
+        </div>
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-line">
             <thead className="bg-canvas">
@@ -127,176 +250,317 @@ export default function UserRoleManagement() {
                 <th className="th">Name</th>
                 <th className="th">Email</th>
                 <th className="th">Role</th>
-                <th className="th">Created</th>
                 <th className="th">MFA</th>
-                <th className="th">Status</th>
+                <th className="th">Last signed in</th>
                 <th className="th sr-only">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
-              {users.map((u) => (
-                <tr key={u.id} className={u.active ? "" : "opacity-60"}>
-                  <td className="td">{u.name}</td>
-                  <td className="td text-xs text-muted">{u.email}</td>
-                  <td className="td">
-                    {editing === u.id ? (
-                      <select className="input py-1 text-sm" defaultValue={u.role}
-                              onChange={(e) => changeRole(u.id, e.target.value)}>
-                        {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-                      </select>
-                    ) : (
-                      <span className="tag">{ROLE_LABEL[u.role] || u.role}</span>
-                    )}
-                  </td>
-                  <td className="td text-xs text-muted">{u.created_at}</td>
-                  <td className="td">
-                    <button type="button" role="switch" aria-checked={u.mfa}
-                            aria-label={`MFA for ${u.name}`} onClick={() => toggleMfa(u)}
-                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition ${
-                              u.mfa ? "bg-teal" : "bg-line"
-                            }`}>
-                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition ${
-                        u.mfa ? "translate-x-5" : "translate-x-1"
-                      }`} />
-                    </button>
-                  </td>
-                  <td className="td">
-                    <StatusBadge status={u.active ? "active" : "withdrawn"}
-                                 label={u.active ? "Active" : "Revoked"} />
-                  </td>
-                  <td className="td">
-                    <div className="flex gap-2">
-                      <button type="button" className="text-sm text-teal underline"
-                              onClick={() => setEditing(editing === u.id ? null : u.id)}>
-                        {editing === u.id ? "Done" : "Edit role"}
-                      </button>
-                      {u.active && (
-                        <button type="button" className="text-sm text-danger underline"
-                                onClick={() => setRevoking(u)}>
-                          Revoke
-                        </button>
-                      )}
-                    </div>
+              {users.length === 0 && (
+                <tr>
+                  <td className="td text-center text-muted" colSpan={6}>
+                    Loading…
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* --------------------------------------------- permission matrix -- */}
-      <section className="card overflow-hidden">
-        <div className="border-b border-line px-5 py-4">
-          <h2 className="font-semibold text-ink">Role permission matrix</h2>
-          <p className="text-xs text-muted">What each role can see and do.</p>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-line">
-            <thead className="bg-canvas">
-              <tr>
-                <th className="th">Capability</th>
-                <th className="th text-center">Data Principal</th>
-                <th className="th text-center">Admin / DPO</th>
-                <th className="th text-center">Auditor</th>
-                <th className="th text-center">Grievance Officer</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {ROLE_PERMISSIONS.map((p) => (
-                <tr key={p.capability}>
-                  <td className="td">{p.capability}</td>
-                  {["data_principal", "admin", "auditor", "grievance_officer"].map((r) => (
-                    <td key={r} className="td text-center">
-                      {p[r] ? (
-                        <span className="text-success" title="Allowed">✓ <span className="sr-only">allowed</span></span>
+              )}
+              {users.map((u) => {
+                const isMe = u.id === me?.id;
+                return (
+                  <tr key={u.id}>
+                    <td className="td">
+                      {u.full_name}
+                      {isMe && <span className="ml-1 tag">you</span>}
+                    </td>
+                    <td className="td text-xs text-muted">{u.email}</td>
+                    <td className="td">
+                      <select
+                        className="input py-1 text-xs"
+                        value={u.role}
+                        // You cannot change your own role — the server refuses it
+                        // too, so that a mis-click cannot lock a workspace out of
+                        // its own console.
+                        disabled={busy || isMe}
+                        onChange={(e) =>
+                          setConfirmRole({ user: u, role: e.target.value })
+                        }
+                      >
+                        {ROLES.map((r) => (
+                          <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="td text-xs">
+                      {u.mfa_enabled ? (
+                        <span className="text-success">on</span>
                       ) : (
-                        <span className="text-muted" title="Not allowed">— <span className="sr-only">not allowed</span></span>
+                        <span className="text-muted">off</span>
                       )}
                     </td>
-                  ))}
-                </tr>
-              ))}
+                    <td className="td text-xs text-muted">{fmt(u.last_login_at)}</td>
+                    <td className="td">
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        <button
+                          type="button"
+                          className="text-teal underline"
+                          onClick={() => setSessionsFor(u)}
+                        >
+                          Sessions
+                        </button>
+                        {!isMe && (
+                          <button
+                            type="button"
+                            className="text-danger underline"
+                            onClick={() => setConfirmDeactivate(u)}
+                          >
+                            Revoke access
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </section>
 
-      {/* -------------------------------------------------------- SSO ----- */}
-      <section className="card p-5">
-        <h2 className="font-semibold text-ink">Single sign-on</h2>
-        <p className="text-xs text-muted">
-          Configuration only in this build — no identity provider is contacted.
-        </p>
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <div>
-            <label className="label" htmlFor="sso-provider">Provider</label>
-            <select id="sso-provider" className="input" value={sso.provider}
-                    onChange={(e) => setSso({ ...sso, provider: e.target.value })}>
-              {["Azure AD (Entra ID)", "Okta", "Google Workspace", "Keycloak"].map((p) => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label" htmlFor="sso-domain">Allowed email domain</label>
-            <input id="sso-domain" className="input" value={sso.domain}
-                   onChange={(e) => setSso({ ...sso, domain: e.target.value })} />
-          </div>
-          <div className="flex items-end">
-            <label className="flex items-center gap-3">
-              <button type="button" role="switch" aria-checked={sso.enabled} aria-label="Enable SSO"
-                      onClick={() => setSso({ ...sso, enabled: !sso.enabled })}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
-                        sso.enabled ? "bg-teal" : "bg-line"
-                      }`}>
-                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition ${
-                  sso.enabled ? "translate-x-6" : "translate-x-1"
-                }`} />
-              </button>
-              <span className="text-sm text-ink">{sso.enabled ? "Enabled" : "Disabled"}</span>
-            </label>
-          </div>
-        </div>
-      </section>
-
-      {/* --------------------------------------------- role change log ---- */}
+      {/* ------------------------------------------------------ invitations -- */}
       <section className="card overflow-hidden">
-        <div className="border-b border-line px-5 py-4">
-          <h2 className="font-semibold text-ink">Role change log</h2>
-          <p className="text-xs text-muted">Every role change, creation and revocation.</p>
+        <div className="border-b border-line px-5 py-3">
+          <h2 className="font-semibold text-ink">
+            Invitations{pending.length > 0 && ` — ${pending.length} waiting`}
+          </h2>
+          <p className="text-xs text-muted">
+            Nothing is deleted here. An invitation that was withdrawn or that
+            lapsed stays on the record, because the fact a credential was issued
+            outlives the credential.
+          </p>
         </div>
-        {roleLog.length === 0 ? (
-          <p className="px-5 py-4 text-sm text-muted">Nothing recorded yet.</p>
+        {invitations.length === 0 ? (
+          <p className="px-5 py-8 text-center text-sm text-muted">
+            No invitations yet.
+          </p>
         ) : (
-          <ul className="divide-y divide-line">
-            {roleLog.map((l) => (
-              <li key={l.id} className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
-                <span className="font-mono text-xs">{l.log_id}</span>
-                <span className="tag">{l.action_type}</span>
-                <span className="font-mono text-xs">{l.user_id}</span>
-                <span className="text-xs text-muted">{new Date(l.timestamp).toLocaleString()}</span>
-                <span className="text-xs text-muted">by {l.initiator}</span>
-                <AuditHashBadge hash={l.audit_hash} chars={10} />
-              </li>
-            ))}
-          </ul>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-line">
+              <thead className="bg-canvas">
+                <tr>
+                  <th className="th">Email</th>
+                  <th className="th">Role</th>
+                  <th className="th">Status</th>
+                  <th className="th">Expires</th>
+                  <th className="th sr-only">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {[...pending, ...settled].map((i) => (
+                  <tr key={i.id} className={i.status === "pending" ? "" : "opacity-70"}>
+                    <td className="td text-xs">{i.email}</td>
+                    <td className="td text-xs">{ROLE_LABELS[i.role] || i.role}</td>
+                    <td className="td">
+                      <StatusBadge
+                        status={
+                          i.status === "accepted"
+                            ? "completed"
+                            : i.status === "pending"
+                              ? "pending"
+                              : "none"
+                        }
+                        label={i.status}
+                      />
+                      {i.revoked_reason && (
+                        <p className="mt-1 text-xs text-muted">{i.revoked_reason}</p>
+                      )}
+                    </td>
+                    <td className="td text-xs text-muted">{fmt(i.expires_at)}</td>
+                    <td className="td">
+                      {i.status === "pending" && (
+                        <button
+                          type="button"
+                          className="text-xs text-danger underline"
+                          disabled={busy}
+                          onClick={() =>
+                            act(
+                              () => revokeInvitation(i.id),
+                              "Invitation withdrawn.",
+                            )
+                          }
+                        >
+                          Withdraw
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
 
+      {/* -------------------------------------------------- capability matrix -- */}
+      <section className="card overflow-hidden">
+        <div className="border-b border-line px-5 py-3">
+          <h2 className="font-semibold text-ink">What each role may do</h2>
+          <p className="text-xs text-muted">
+            {matrix?.note ||
+              "Read from the API, not restated here — a permissions table that can disagree with the code enforcing it is worse than none."}
+          </p>
+        </div>
+        {!matrix ? (
+          <p className="px-5 py-8 text-center text-sm text-muted">
+            Could not load the capability matrix.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-line">
+              <thead className="bg-canvas">
+                <tr>
+                  <th className="th">Capability</th>
+                  {matrix.roles.map((r) => (
+                    <th key={r} className="th text-center">{ROLE_LABELS[r] || r}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {matrix.capabilities.map((cap) => (
+                  <tr key={cap}>
+                    <td className="td font-mono text-xs">{cap}</td>
+                    {matrix.roles.map((r) => (
+                      <td key={r} className="td text-center">
+                        {matrix.matrix[r].includes(cap) ? (
+                          <span className="text-success" aria-label="yes">✓</span>
+                        ) : (
+                          <span className="text-muted" aria-label="no">·</span>
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* --------------------------------------------------------- sessions -- */}
+      <SlideOver
+        open={Boolean(sessionsFor)}
+        title={sessionsFor ? `Sessions — ${sessionsFor.full_name}` : ""}
+        subtitle={sessionsFor?.email}
+        onClose={() => setSessionsFor(null)}
+      >
+        {sessionsFor && (
+          <div className="space-y-4">
+            <p className="text-xs text-muted">
+              One entry per browser. Ending them does not lock the account — their
+              password still works. Use &ldquo;Revoke access&rdquo; for that.
+            </p>
+            {sessions.length === 0 ? (
+              <p className="text-sm text-muted">No live sessions.</p>
+            ) : (
+              <ul className="space-y-2">
+                {sessions.map((s) => (
+                  <li key={s.family_id} className="rounded-lg border border-line p-3 text-xs">
+                    <p className="text-ink">{s.user_agent || "unknown device"}</p>
+                    <p className="mt-1 text-muted">
+                      {s.ip_address || "no address recorded"} · started{" "}
+                      {fmt(s.started_at)} · last used {fmt(s.last_used_at)}
+                    </p>
+                    <p className="mt-0.5 text-muted">
+                      expires {fmt(s.expires_at)} · {s.rotations} refresh
+                      {s.rotations === 1 ? "" : "es"}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {sessions.length > 0 && (
+              <button
+                type="button"
+                className="btn-secondary w-full"
+                disabled={busy}
+                onClick={() => setConfirmRevokeSessions(sessionsFor)}
+              >
+                Sign out of all {sessions.length} session
+                {sessions.length === 1 ? "" : "s"}
+              </button>
+            )}
+          </div>
+        )}
+      </SlideOver>
+
+      {/* ----------------------------------------------------------- dialogs -- */}
       <ConfirmModal
-        open={Boolean(revoking)}
-        title={`Revoke access for ${revoking?.name}?`}
-        body="They will be signed out and unable to sign back in."
+        open={Boolean(confirmRole)}
+        title={
+          confirmRole
+            ? `Change ${confirmRole.user.full_name} to ${ROLE_LABELS[confirmRole.role]}?`
+            : ""
+        }
+        body={confirmRole ? ROLE_BLURBS[confirmRole.role] : ""}
+        consequences={
+          confirmRole
+            ? [
+                confirmRole.user.role === "admin" && confirmRole.role !== "admin"
+                  ? "They will be signed out of every device immediately — a demotion has to mean now, not when their session happens to expire."
+                  : "This takes effect on their next request; the role is re-read every time.",
+                "The change is written to the audit trail.",
+              ]
+            : []
+        }
+        confirmLabel="Change the role"
+        destructive={confirmRole?.user.role === "admin"}
+        busy={busy}
+        onCancel={() => setConfirmRole(null)}
+        onConfirm={() =>
+          act(
+            () => changeRole(confirmRole.user.id, confirmRole.role),
+            `${confirmRole.user.full_name} is now ${ROLE_LABELS[confirmRole.role]}.`,
+          )
+        }
+      />
+
+      <ConfirmModal
+        open={Boolean(confirmDeactivate)}
+        title={confirmDeactivate ? `Revoke ${confirmDeactivate.full_name}'s access?` : ""}
+        body="They will not be able to sign in, and every live session ends immediately."
         consequences={[
-          "All active sessions for this user are ended.",
-          "Any queue items assigned to them stay assigned and need reassigning.",
-          "The revocation is written to the audit trail.",
+          "Signed out of every device now, not when their session expires.",
+          "Their record and everything they did is kept — the audit trail does not change.",
+          "You can restore access later by changing their role; nothing is deleted.",
         ]}
         confirmLabel="Revoke access"
         busy={busy}
-        onCancel={() => setRevoking(null)}
-        onConfirm={revoke}
+        onCancel={() => setConfirmDeactivate(null)}
+        onConfirm={() =>
+          act(
+            () => deactivateUser(confirmDeactivate.id),
+            `${confirmDeactivate.full_name} can no longer sign in.`,
+          )
+        }
+      />
+
+      <ConfirmModal
+        open={Boolean(confirmRevokeSessions)}
+        title="Sign them out everywhere?"
+        body="Every live session ends immediately. Their password still works, so this is not a lockout."
+        consequences={[
+          "They will have to sign in again on every device.",
+          "Use this when a laptop is lost or a session looks wrong.",
+        ]}
+        confirmLabel="Sign out everywhere"
+        destructive={false}
+        busy={busy}
+        onCancel={() => setConfirmRevokeSessions(null)}
+        onConfirm={() =>
+          act(async () => {
+            const out = await revokeSessions(confirmRevokeSessions.id);
+            setSessions([]);
+            return out;
+          }, "Signed out of every device.")
+        }
       />
     </div>
   );

@@ -624,6 +624,16 @@ DEFAULT_TEMPLATES: dict[str, tuple[str, str]] = {
         "it to our Grievance Officer if it is not resolved in time.\n\n"
         "{{organisation}}",
     ),
+    "user.invitation": (
+        "You have been invited to {{organisation}} on DataShield",
+        "{{organisation}} has invited you to their DataShield workspace as "
+        "{{role}}.\n\n"
+        "Set up your account here:\n\n    {{accept_url}}\n\n"
+        "The link is valid for {{expires_in}} and can be used once. You choose "
+        "your own password — nobody at {{organisation}} sets it or can see it.\n\n"
+        "If you were not expecting this, you can ignore this email and the "
+        "invitation will lapse.\n\n{{organisation}}",
+    ),
     "breach.principal_notice": (
         "Important: a data security incident affecting your information",
         "We are writing to tell you about a personal data breach that affected "

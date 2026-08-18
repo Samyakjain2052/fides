@@ -1,5 +1,47 @@
 # Build brief — `users` (invitations & role management)
 
+> **STATUS: DONE.** Built and live. This was the last of the eight briefs. All
+> three `[DECIDE]` items took the recommendation:
+>
+> * **Invitations, not admin-set passwords.** `user_invitations`, Argon2 at rest,
+>   single use, 72 hours, and the tenant inside the token (`<tenant-hex>.<secret>`)
+>   because acceptance happens before tenant context exists and the table is under
+>   RLS. That is the bug this codebase had already shipped three times. The link is
+>   emailed AND returned once to the console, because the default notification
+>   provider writes to a log rather than sending — an invitation that relied only on
+>   email would be undeliverable in the shipped configuration.
+> * **The last admin cannot be removed.** Refused in the service with a sentence a
+>   DPO can act on, and enforced by a `BEFORE UPDATE` trigger on `users`. A trigger
+>   rather than a CHECK because the rule is about the set of rows and no CHECK can
+>   count its own table.
+> * **Losing privileges revokes the refresh-token families.** The role is re-read
+>   per request so the change bites immediately, but a refresh token outlives it.
+>
+> Two things worth recording:
+>
+> **Over HTTP the last-admin rule is unreachable, and that is fine.** Both routes
+> refuse to act on your own account first, and with one admin left that admin is
+> the only account holding `user:manage` — so the only request that could remove
+> the last admin is one they make against themselves, which the self guard refuses
+> with a clearer message. The rule protects the paths a request cannot reach: a
+> script, a data fix, a migration, the owner role. That is precisely why it is a
+> trigger.
+>
+> **The demotion check was wrong on the first pass**, and a live walkthrough caught
+> it rather than a test. It read `role == "admin"`, so grievance_officer →
+> data_principal left a live session working after the privileges behind it were
+> removed. It now compares capability sets from the same matrix the API enforces:
+> if the new role's capabilities are not a superset of the old, something was taken
+> away and the sessions end.
+>
+> The capability matrix screen is generated from `permissions.capabilities_for`,
+> not restated in the frontend. The old hand-maintained `ROLE_PERMISSIONS` table
+> was deleted with the mocks.
+>
+> Not built, and named in the module caveat: no SSO (`external_idp` is still
+> reserved on the user model) and no MFA enrolment flow, so `require_mfa` on the
+> tenant has nothing to enrol against yet.
+
 > Paste this whole file as the opening prompt. Fill the `[DECIDE]` block first.
 
 **Size: 2–3 days.** The smallest remaining module, and it has no dependencies —

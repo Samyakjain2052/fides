@@ -890,18 +890,29 @@ async def test_a_deactivated_user_cannot_be_assigned(
 ):
     """Assigning a statutory complaint to somebody who cannot sign in is how a
     deadline passes unnoticed."""
+    from app.services import tenant_service
+
     provider()
     async with scoped(app_session_factory, tenant_a["id"]) as s:
         principal = await _principal(s, tenant_a)
         grievance, _ = await _file(s, tenant_a, principal_id=principal.id)
-        admin = await s.scalar(select(User).where(User.id == tenant_a["admin_id"]))
-        admin.is_active = False
+
+        # A second, non-admin user. Deactivating the tenant's only admin is now
+        # refused by a trigger on `users` — correctly, since a workspace with no
+        # administrator cannot be recovered — so this uses the realistic case: a
+        # colleague who has left.
+        leaver = await tenant_service.create_user(
+            s, tenant_id=tenant_a["id"], email="leaver@tenant-a.example.com",
+            full_name="Has Left", role="grievance_officer",
+            password="correct-horse-battery-staple-leaver", actor=_actor(tenant_a),
+        )
+        leaver.is_active = False
         await s.flush()
 
         with pytest.raises(Conflict) as exc:
             await grievance_service.assign(
                 s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
-                grievance=grievance, user_id=admin.id,
+                grievance=grievance, user_id=leaver.id,
             )
         assert "deactivated" in str(exc.value)
 

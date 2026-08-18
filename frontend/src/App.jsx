@@ -15,6 +15,7 @@ import Toast from "./components/common/Toast";
 
 import Login from "./pages/auth/Login";
 import ForgotPassword from "./pages/auth/ForgotPassword";
+import AcceptInvitation from "./pages/auth/AcceptInvitation";
 import Signup from "./pages/auth/Signup";
 import Roadmap from "./pages/Roadmap";
 
@@ -79,6 +80,11 @@ export default function App() {
       <Route path="/login" element={user ? <Navigate to={homeFor(user.role)} replace /> : <Login />} />
       <Route path="/signup" element={user ? <Navigate to={homeFor(user.role)} replace /> : <Signup />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
+      {/* Public: the person arriving has no account yet. Deliberately NOT
+          redirected away when somebody is already signed in — a colleague may
+          open an invitation in a browser where somebody else's session is live,
+          and bouncing them to a dashboard would be baffling. */}
+      <Route path="/accept-invitation" element={<AcceptInvitation />} />
 
       {/* Public: every preview banner links here, and a buyer should be able to
           read what is and isn't live before they have an account. */}

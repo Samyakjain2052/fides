@@ -98,6 +98,14 @@ class AuditAction:
     USER_UPDATED = "user.updated"
     USER_ROLE_CHANGED = "user.role_changed"
     USER_DEACTIVATED = "user.deactivated"
+    # Invitations. An invitation is a credential that grants account creation
+    # with a chosen role, so issuing, accepting and revoking one are each facts
+    # worth their own entry.
+    INVITATION_SENT = "user.invitation_sent"
+    INVITATION_ACCEPTED = "user.invitation_accepted"
+    INVITATION_REVOKED = "user.invitation_revoked"
+    SESSIONS_REVOKED = "user.sessions_revoked"
+
     APIKEY_CREATED = "apikey.created"
     APIKEY_REVOKED = "apikey.revoked"
     APIKEY_USED = "apikey.used"

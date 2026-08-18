@@ -96,6 +96,23 @@ async def create_tenant(
     return tenant, admin
 
 
+async def get_user(
+    session: AsyncSession, *, tenant_id: uuid.UUID, user_id: uuid.UUID
+) -> User:
+    """One user in this tenant, or a 404.
+
+    Scoped by tenant_id as well as id even though RLS already restricts the row.
+    Belt and braces: the explicit predicate documents the intent, and a future
+    caller running as the owner role would otherwise reach across tenants.
+    """
+    row = await session.scalar(
+        select(User).where(User.tenant_id == tenant_id, User.id == user_id)
+    )
+    if row is None:
+        raise NotFound("No such user in this workspace.")
+    return row
+
+
 async def create_user(
     session: AsyncSession,
     *,

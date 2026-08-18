@@ -16,7 +16,7 @@ see "Why this order" below.
 | 05 | [retention.md](05-retention.md) | `retention` | **DONE** — live |
 | 06 | [reports.md](06-reports.md) | `reports` | **DONE** — live |
 | 07 | [breach.md](07-breach.md) | `breach` | **DONE** — live |
-| 08 | [users.md](08-users.md) | `users` | 2–3 days |
+| 08 | [users.md](08-users.md) | `users` | **DONE** — live |
 
 ## Why this order
 

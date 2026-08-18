@@ -141,18 +141,13 @@ let auditLogs = [
 ];
 export const MOCK_AUDIT_LOGS = clone(auditLogs);
 
-let usersAdmin = [
-  { id: "u001", name: "Priya Sharma", email: "priya@example.com", role: "data_principal", created_at: "2026-01-15", mfa: true, active: true },
-  { id: "adm01", name: "Amit Kumar", email: "amit@example.com", role: "admin", created_at: "2025-12-01", mfa: true, active: true },
-  { id: "aud01", name: "Ravi Joshi", email: "ravi@example.com", role: "auditor", created_at: "2025-12-01", mfa: false, active: true },
-  { id: "grv01", name: "Meena Patel", email: "meena@example.com", role: "grievance_officer", created_at: "2025-12-01", mfa: true, active: true },
-];
-export const MOCK_USERS_ADMIN = clone(usersAdmin);
-
-let retentionPolicies = [
-  { id: "rp1", category: "Identity Data", retention_days: 1825, auto_delete: true, exemption: "Retain if RBI mandates", last_purge: "2026-07-01", notify_days: 7 },
-  { id: "rp2", category: "Marketing Data", retention_days: 730, auto_delete: true, exemption: null, last_purge: "2026-06-15", notify_days: 14 },
-];
+// The mock users, roles table and audit-log reader lived here. Removed with the
+// module: users, invitations and sessions are real at /v1/admin, and the
+// capability matrix is now GENERATED from the code that enforces it rather than
+// restated. The old ROLE_PERMISSIONS table was a hand-maintained copy that could
+// disagree with the enforcement — which is worse than showing nothing, because it
+// tells an administrator their workspace is configured one way while it behaves
+// another. See src/api/users.js.
 export const MOCK_RETENTION_POLICIES = clone(retentionPolicies);
 
 // --- supporting mock data the screens need ----------------------------------
@@ -241,19 +236,6 @@ export function appendAuditLog(entry) {
   return row;
 }
 
-export async function getAuditLogs(filters = {}) {
-  await delay();
-  let rows = clone(auditLogs);
-  const { action_type, user_id, purpose_id, initiator, from, to } = filters;
-  if (action_type) rows = rows.filter((r) => r.action_type === action_type);
-  if (user_id) rows = rows.filter((r) => r.user_id.toLowerCase().includes(user_id.toLowerCase()));
-  if (purpose_id) rows = rows.filter((r) => r.purpose_id === purpose_id);
-  if (initiator) rows = rows.filter((r) => r.initiator === initiator);
-  if (from) rows = rows.filter((r) => r.timestamp >= from);
-  if (to) rows = rows.filter((r) => r.timestamp <= to);
-  return rows;
-}
-
 export async function verifyLogIntegrity() {
   await delay(600);
   return { ok: true, checked: auditLogs.length, broken: [], verified_at: nowIso() };
@@ -269,20 +251,9 @@ export const ROLES = [
   { id: "grievance_officer", label: "Grievance Officer", home: "/admin/grievances" },
 ];
 
-export async function login({ email, password, role }) {
-  await delay(400);
-  if (!email || !password) throw new Error("Email and password are required.");
-  const known = usersAdmin.find((u) => u.email === email);
-  const profile = {
-    id: known?.id || (role === "data_principal" ? subject.id : "adm01"),
-    name: known?.name || (role === "data_principal" ? subject.name : "Compliance Officer"),
-    email,
-    role,
-  };
-  appendAuditLog({ action_type: "login", user_id: profile.id, initiator: "user" });
-  return profile;
-}
-
+// The mock `login` lived here. Removed: authentication is real (src/api/auth.js)
+// and nothing imported this. It also referenced the mock user array that went with
+// the users module, so it had become dead code that would have thrown.
 export async function sendResetLink(email) {
   await delay(500);
   if (!email) throw new Error("Enter your registered email address.");
@@ -513,47 +484,6 @@ export async function prepareDataExport(id) {
 // ============================================================================
 // ADMIN: users, retention, notifications, reports, breaches
 // ============================================================================
-export const ROLE_PERMISSIONS = [
-  { capability: "View own consents & requests", data_principal: true, admin: true, auditor: false, grievance_officer: false },
-  { capability: "Process DSAR queue", data_principal: false, admin: true, auditor: false, grievance_officer: false },
-  { capability: "Validate consent (API)", data_principal: false, admin: true, auditor: false, grievance_officer: false },
-  { capability: "Handle grievances", data_principal: false, admin: true, auditor: false, grievance_officer: true },
-  { capability: "Escalate to DPO", data_principal: false, admin: true, auditor: false, grievance_officer: true },
-  { capability: "View audit logs", data_principal: false, admin: true, auditor: true, grievance_officer: false },
-  { capability: "Export regulator reports", data_principal: false, admin: true, auditor: true, grievance_officer: false },
-  { capability: "Manage roles & MFA", data_principal: false, admin: true, auditor: false, grievance_officer: false },
-  { capability: "Edit retention policy", data_principal: false, admin: true, auditor: false, grievance_officer: false },
-  { capability: "Edit or delete audit logs", data_principal: false, admin: false, auditor: false, grievance_officer: false },
-];
-
-export async function getUsers() {
-  await delay();
-  return clone(usersAdmin);
-}
-
-export async function addUser({ name, email, role }) {
-  await delay(350);
-  const row = { id: "u" + (usersAdmin.length + 100), name, email, role, created_at: nowIso().slice(0, 10), mfa: false, active: true };
-  usersAdmin = [...usersAdmin, row];
-  appendAuditLog({ action_type: "user_created", user_id: row.id, initiator: "Data Fiduciary", consent_status: role });
-  return clone(row);
-}
-
-export async function updateUser(id, patch) {
-  await delay(300);
-  const row = usersAdmin.find((u) => u.id === id);
-  if (!row) throw new Error("User not found.");
-  const before = row.role;
-  Object.assign(row, patch);
-  appendAuditLog({
-    action_type: patch.role && patch.role !== before ? "role_changed" : patch.active === false ? "access_revoked" : "user_updated",
-    user_id: id,
-    initiator: "Data Fiduciary",
-    consent_status: row.role,
-  });
-  return clone(row);
-}
-
 export async function getRetentionPolicies() {
   await delay();
   return clone(retentionPolicies);

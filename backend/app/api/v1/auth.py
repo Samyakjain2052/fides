@@ -7,12 +7,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Request, Response, status
 
+from pydantic import BaseModel, Field
+
 from app.api.deps import CurrentUserDep, UnscopedSession, client_ip
+from app.core import throttle
 from app.core.config import get_settings
 from app.core.errors import AuthenticationError
 from app.core.permissions import capabilities_for
+from app.db.session import get_session_factory, set_tenant_context
 from app.schemas.auth import LoginRequest, RegisterRequest, SlugCheck, TokenResponse, UserOut
-from app.services import auth_service, registration_service
+from app.services import auth_service, invitation_service, registration_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 _settings = get_settings()
@@ -196,4 +200,75 @@ async def me(current: CurrentUserDep) -> TokenResponse:
         expires_at=expires,
         user=UserOut.model_validate(current.user),
         capabilities=sorted(c.value for c in capabilities_for(current.user.role)),
+    )
+
+
+class AcceptInvitation(BaseModel):
+    token: str = Field(..., min_length=16, max_length=200)
+    full_name: str = Field(..., min_length=2, max_length=255)
+    password: str = Field(..., min_length=12, max_length=256)
+
+
+@router.post("/accept-invitation", response_model=TokenResponse, status_code=201,
+             summary="Create an account from an invitation")
+async def accept_invitation(
+    payload: AcceptInvitation,
+    request: Request,
+    response: Response,
+    session: UnscopedSession,
+) -> TokenResponse:
+    """Public, unauthenticated, and it creates a user — so it gets the same care
+    as `/register`.
+
+    **The tenant comes out of the token.** This route has no tenant context and
+    `user_invitations` is under RLS, so a lookup that did not already know the
+    tenant would match zero rows and reject every valid invitation. The token is
+    formatted `<tenant-hex>.<secret>` for exactly that reason.
+
+    **Failures are deliberately indistinguishable.** Expired, already accepted,
+    revoked, malformed, and "this address already has an account" all return the
+    same sentence. Anything more specific turns this into an oracle for which
+    invitations and which accounts exist.
+
+    Signs the new user straight in, like registration does — there is nothing
+    useful they could do on a second screen first.
+    """
+    # Throttled per source address. Not the security boundary — that is the
+    # token's 256 bits behind a tenant UUID — but it keeps a retry loop or a
+    # scanner from filling the logs. See app/core/throttle.py on what this does
+    # and does not promise.
+    throttle.check(
+        f"accept-invitation:{client_ip(request) or 'unknown'}",
+        limit=10, window_seconds=300, what="invitation attempts",
+    )
+
+    tenant_id, secret = invitation_service.split_token(payload.token)
+
+    # Bind the tenant that travelled in the token, then do the work inside it so
+    # RLS applies to the insert exactly as it would for any other write.
+    async with get_session_factory()() as scoped:
+        async with scoped.begin():
+            await set_tenant_context(scoped, tenant_id)
+            user = await invitation_service.accept(
+                scoped,
+                tenant_id=tenant_id,
+                secret=secret,
+                full_name=payload.full_name,
+                password=payload.password,
+            )
+            pair = await auth_service.issue_session(
+                scoped,
+                user=user,
+                ip=client_ip(request),
+                user_agent=request.headers.get("user-agent"),
+            )
+            out = UserOut.model_validate(user)
+            caps = sorted(c.value for c in capabilities_for(user.role))
+
+    _set_refresh_cookie(response, pair.refresh_token, pair.refresh_expires_at)
+    return TokenResponse(
+        access_token=pair.access_token,
+        expires_at=pair.access_expires_at,
+        user=out,
+        capabilities=caps,
     )

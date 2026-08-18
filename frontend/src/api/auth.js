@@ -127,6 +127,26 @@ export async function login({ workspace, email, password }) {
 }
 
 /**
+ * Turn an invitation into an account, and sign straight in.
+ *
+ * Alongside `register` and `login` on purpose: it creates a session, so it needs
+ * the same `credentials: "include"` and the same `applySession` path. A separate
+ * implementation elsewhere would be exactly where the refresh cookie quietly
+ * stopped being set.
+ *
+ * The person accepting has no session yet, so this is unauthenticated — `call`
+ * without `auth: true`.
+ */
+export async function acceptInvitation({ token, fullName, password }) {
+  return applySession(
+    await call("/auth/accept-invitation", {
+      method: "POST",
+      body: { token, full_name: fullName, password },
+    })
+  );
+}
+
+/**
  * Restore a session from the HttpOnly cookie.
  *
  * Called on page load. Failure is normal and not an error — it just means

@@ -9,6 +9,7 @@ from app.models.audit import AuditAction, AuditEvent
 from app.models.breach import Breach, BreachAffectedPrincipal, BreachEvent
 from app.models.consent import Consent, DataPrincipal, Notice, Purpose
 from app.models.dsar import DsarEvent, DsarRequest
+from app.models.invitation import UserInvitation
 from app.models.grievance import Grievance, GrievanceEvent
 from app.models.notification import Notification, NotificationTemplate
 from app.models.retention import PurgeRun, PurgeRunItem, RetentionPolicy
@@ -43,6 +44,7 @@ __all__ = [
     "RetentionPolicy",
     "RefreshToken",
     "Tenant",
+    "UserInvitation",
     "User",
 ]
 
@@ -83,4 +85,6 @@ TENANT_SCOPED_TABLES = [
     "breaches",
     "breach_affected_principals",
     "breach_events",
+    # Phase 8 — invitations.
+    "user_invitations",
 ]

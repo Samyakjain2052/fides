@@ -77,7 +77,7 @@ export const MODULE_STATUS = {
   audit: "live",
   breach: "live",
   notifications: "live",
-  users: "preview",
+  users: "live",
 };
 
 export const MODULE_LABELS = {
@@ -125,6 +125,14 @@ export const MODULE_CAVEATS = {
     "72-hour countdown is this product's reading of \u201cwithout delay\u201d, not a " +
     "figure from the statute. There is no breach detection; this is a register, " +
     "not a monitoring system.",
+  users:
+    "Invitations, role changes, session management and the capability matrix are " +
+    "real. Nobody can set anybody else's password — people are invited and choose " +
+    "their own, which is what keeps an audit entry attributable to one person. " +
+    "Two limits: the invite link is displayed in the console as well as emailed, " +
+    "because the default notification provider writes to a log rather than " +
+    "sending; and there is no SSO and no MFA enrolment flow, so `require_mfa` on " +
+    "the workspace has nothing to enrol against yet.",
   reports:
     "Six registers, every figure from a query, streamed as CSV or JSON and never " +
     "stored. Three limits: no PDF yet, so a DPO forwarding one to a board sends a " +
@@ -167,7 +175,6 @@ export const MODULE_CAVEATS = {
 export const MODULE_ROADMAP = {
   consent_guardian: "Verifiable parental consent — a real guardian identity check (DigiLocker or equivalent), which a publishable key cannot perform.",
   retention_edit: "Updating an existing policy. Create a replacement in the meantime.",
-  users: "Server-side user invitation and role assignment.",
 };
 
 /**

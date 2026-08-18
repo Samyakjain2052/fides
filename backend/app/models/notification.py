@@ -72,6 +72,9 @@ TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
     "retention.pre_purge": ("category", "purge_date", "organisation"),
     # DPDP §8(6). Notifying the Board is only half the duty — the affected people
     # are a separate, mandatory obligation, and this is how that half is done.
+    # Console users, not data principals. An invitation is how somebody gets an
+    # account without an administrator ever knowing their password.
+    "user.invitation": ("role", "accept_url", "expires_in", "organisation"),
     "breach.principal_notice": (
         "reference", "categories", "discovered_on", "remediation", "organisation",
     ),

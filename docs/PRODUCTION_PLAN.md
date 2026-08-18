@@ -29,7 +29,7 @@ If the two ever disagree, the file is right and this document is stale.
 | Grievance redressal | **live** | no attachments; no scheduler (escalation evaluated on read) |
 | Reports | **live** | no PDF; nothing signed (chain-hash anchor only) |
 | Breach management | **live** | no Board API (human submits); no breach detection |
-| Users & roles | preview | server-side invitation and role assignment |
+| Users & roles | **live** | no SSO; no MFA enrolment flow |
 
 Two things are worth separating, because they fail differently:
 
@@ -55,7 +55,7 @@ environment does not make it more complete — it makes it expensive.
   6  Grievances          ← DONE. Public filing, escalation clock, officer contact
   9  Reports + breach    ← DONE. Both.
  10  Hardening           ← SSO, field encryption, WORM anchoring, load tests
-  8  Users & roles       ← NEXT. The last preview module.
+  8  Users & roles       ← DONE. Every module brief is now complete.
 ```
 
 **The one reordering from ARCHITECTURE.md §9:** notifications moved from 8 to
