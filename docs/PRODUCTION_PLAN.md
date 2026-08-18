@@ -23,10 +23,10 @@ If the two ever disagree, the file is right and this document is stale.
 | DSAR triage queue | **live** | — |
 | Consent management | **live** | — |
 | Public consent/cookie banners | **live** | withdrawal from a banner (collect-only by design) |
-| Retention & purge | **live** | reaches this product's tables, not connected systems; no scheduler |
+| Retention & purge | **live** | reaches this product's tables, not connected systems; purges stay manual by design |
 | Audit trail | **live** | cannot detect truncation of the newest entries (needs external anchoring) |
-| Notifications | **live** | no scheduler; SMS modelled but unimplemented; console provider ships by default |
-| Grievance redressal | **live** | no attachments; no scheduler (escalation evaluated on read) |
+| Notifications | **live** | SMS modelled but unimplemented; console provider ships by default |
+| Grievance redressal | **live** | no attachments; unconfirmed anonymous filings need picking up by hand |
 | Reports | **live** | no PDF; nothing signed (chain-hash anchor only) |
 | Breach management | **live** | no Board API (human submits); no breach detection |
 | Users & roles | **live** | no SSO; no MFA enrolment flow |
@@ -54,7 +54,10 @@ environment does not make it more complete — it makes it expensive.
   8  Notifications       ← DONE. Moved up from 8; the pre-purge seam closed here
   6  Grievances          ← DONE. Public filing, escalation clock, officer contact
   9  Reports + breach    ← DONE. Both.
- 10  Hardening           ← SSO, field encryption, WORM anchoring, load tests
+  S  Scheduler           ← DONE. Escalation, notification retries and pre-purge
+                             warnings now run unattended. Purges deliberately
+                             do not.
+ 10  Hardening           ← NEXT. SSO, field encryption, WORM anchoring, load tests
   8  Users & roles       ← DONE. Every module brief is now complete.
 ```
 

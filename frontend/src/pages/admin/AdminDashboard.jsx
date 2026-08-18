@@ -10,6 +10,7 @@ import { getAdminDashboard } from "../../api";
 import { CATEGORY_LABEL, listGrievances, officer as fetchOfficer } from "../../api/grievances";
 import { listBreaches } from "../../api/breaches";
 import { queueRows } from "../../api/dsar";
+import { jobs as fetchJobs } from "../../api/users";
 import StatCard from "../../components/common/StatCard";
 import StatusBadge from "../../components/common/StatusBadge";
 import SLACountdown from "../../components/common/SLACountdown";
@@ -47,6 +48,11 @@ export default function AdminDashboard() {
   // figures were real. Same class of problem as the two live screens that were
   // still reading mocks.
   const [dsar, setDsar] = useState(null);
+  // Scheduler health. A stale job means escalation, notification retries or
+  // pre-purge warnings have silently stopped — while the rest of this screen
+  // implies they are automatic. That inversion is why it is shown here and not on
+  // a settings page somebody visits twice a year.
+  const [jobs, setJobs] = useState(null);
 
   useEffect(() => {
     getAdminDashboard().then(setData);
@@ -58,6 +64,9 @@ export default function AdminDashboard() {
       .then(setBreaches)
       .catch(() => setBreaches(null));
     queueRows().then(setDsar).catch(() => setDsar(null));
+    // Requires TENANT_MANAGE, so a non-admin simply sees nothing here rather than
+    // an error for a permission they are not meant to have.
+    fetchJobs().then(setJobs).catch(() => setJobs(null));
   }, []);
 
   if (!data) return <p className="text-sm text-muted">Loading compliance summary…</p>;
@@ -111,6 +120,42 @@ export default function AdminDashboard() {
           </p>
         </div>
       </div>
+
+      {/* --------------------------------------------- scheduler is stopped -- */}
+      {/* Above the breach alert, because if this is broken the breach alert's own
+          escalation is not running either. */}
+      {jobs?.jobs?.every((j) => j.stale) && (
+        <div role="alert" className="rounded-lg border-2 border-danger bg-danger/10 p-4">
+          <p className="font-semibold text-danger">
+            The background scheduler is not running
+          </p>
+          <p className="mt-1 text-sm text-ink">
+            Grievance escalation, notification retries and pre-purge warnings are
+            not happening — regardless of what the rest of this page implies.
+          </p>
+          <p className="mt-2 text-xs text-muted">{jobs.note}</p>
+        </div>
+      )}
+      {jobs?.jobs?.some((j) => j.stale) && !jobs.jobs.every((j) => j.stale) && (
+        <div className="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm">
+          <p className="font-semibold text-ink">
+            {jobs.jobs.filter((j) => j.stale).length} scheduled job
+            {jobs.jobs.filter((j) => j.stale).length === 1 ? " has" : "s have"} not
+            run recently
+          </p>
+          <ul className="mt-2 space-y-1 text-xs">
+            {jobs.jobs.filter((j) => j.stale).map((j) => (
+              <li key={j.job}>
+                <span className="font-mono">{j.job}</span> —{" "}
+                {j.last_success_at
+                  ? `last succeeded ${new Date(j.last_success_at).toLocaleString()}`
+                  : "has never succeeded"}
+                {j.last_error && <span className="text-danger"> · {j.last_error}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* ------------------------------------------------ breach red alert -- */}
       {/* Above the stats, above everything. A late breach notification is the

@@ -129,3 +129,27 @@ export function capabilities() {
 // sign-in — a second implementation would be the place the refresh cookie
 // silently stopped being set.
 export { acceptInvitation } from "./auth";
+
+// --------------------------------------------------------------------------
+// Scheduled jobs
+// --------------------------------------------------------------------------
+
+/**
+ * Is the background scheduler running, and what has it done?
+ *
+ * Worth surfacing prominently rather than burying on a settings page. Four
+ * modules previously said "there is no scheduler", which was honest and visible.
+ * A scheduler that stopped weeks ago is worse: escalation, notification retries
+ * and pre-purge warnings all quietly stop while every screen implies they are
+ * automatic.
+ *
+ * `stale` is the field that matters. Requires TENANT_MANAGE — this is deployment
+ * health, not one workspace's compliance.
+ */
+export function jobs() {
+  return apiFetch("/admin/jobs");
+}
+
+export function runJob(name) {
+  return apiFetch(`/admin/jobs/${name}/run`, { method: "POST" });
+}

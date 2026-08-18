@@ -47,6 +47,35 @@ already holds that port locally; override with `WEB_PORT`.
 
 ---
 
+## 0b. Found while building the scheduler: nginx caches the API's IP
+
+Worth fixing before Phase 5, because nginx is the single public ingress and this
+breaks the whole product rather than one feature.
+
+nginx resolves an upstream hostname **once, at startup**, and caches the address.
+Recreating `cms-backend` gives it a new container IP, and nginx keeps proxying to
+the old one — every request through `/api` returns **502 until nginx is
+restarted**. The backend is healthy the whole time, which is what makes it
+confusing: `curl` directly against the API works, through the proxy it does not.
+
+Reproduced by accident: `docker compose up -d --force-recreate cms-backend` while
+adding the scheduler service.
+
+The fix is a `resolver` directive plus a variable upstream, so the name is
+re-resolved per request:
+
+```nginx
+resolver 127.0.0.11 valid=10s;      # Docker's embedded DNS
+set $api http://cms-backend:8100;   # a variable forces re-resolution
+proxy_pass $api;
+```
+
+On Azure Container Apps the platform's own ingress handles this and the concern
+largely disappears — but the compose stack is what the demo runs on, and "restart
+nginx after every backend deploy" is a footgun nobody will remember.
+
+---
+
 ## 1. Pre-flight: eight things that will break a deploy
 
 These are repo fixes, not Azure work. Each one is cheap now and expensive after

@@ -106,16 +106,19 @@ export const MODULE_CAVEATS = {
   retention:
     "Purging masks a person's identifiers and keeps their consent records, " +
     "matching the DSAR erasure path. It reaches this product's own tables, not " +
-    "a customer's connected systems. The pre-purge warning is now sent, but only " +
-    "when a run is triggered — there is no scheduler, so nothing warns anybody " +
-    "on its own overnight.",
+    "a customer's connected systems. Pre-purge warnings are now sent daily by the " +
+    "scheduler for policies set to auto-delete. The purge itself is never " +
+    "automatic: unattended data destruction on a timer is a different risk from " +
+    "sending a warning, so the notice period exists for a human to act on and the " +
+    "destruction stays a human action.",
   grievance:
     "Filing, triage, the statutory clock and automatic escalation are real, and " +
-    "anyone can file without an account. Three limits worth knowing: there is no " +
-    "scheduler, so escalation is evaluated whenever the queue is read rather than " +
-    "overnight; an anonymous complaint will not escalate until the filer confirms " +
-    "their email, and if they never do it needs picking up by hand; and there is " +
-    "no attachment support, so a person cannot submit supporting documents.",
+    "anyone can file without an account. Escalation now runs on a schedule as " +
+    "well as when the queue is read, so a complaint nobody looks at still reaches " +
+    "the Grievance Officer. Two limits remain: an anonymous complaint will not " +
+    "escalate until the filer confirms their email, and if they never do it needs " +
+    "picking up by hand; and there is no attachment support, so a person cannot " +
+    "submit supporting documents.",
   breach:
     "The register, both halves of the §8(6) notification duty, and a resumable " +
     "bulk send are real. Two limits by design rather than by omission: the " +
@@ -143,11 +146,12 @@ export const MODULE_CAVEATS = {
   notifications:
     "Templates, rendering, the queue and the delivery log are real, and messages " +
     "go out on request received / completed / refused, consent withdrawal and " +
-    "pre-purge warnings. Two things are not: no scheduler is deployed, so a " +
-    "message that hits a transient failure waits until somebody presses " +
-    "\u201cProcess queue now\u201d; and the provider shipped by default writes to " +
-    "the server log instead of sending, which the screen says at the top. SMS is " +
-    "modelled but no SMS provider is implemented.",
+    "pre-purge warnings, plus breach notices and user invitations. Retries are " +
+    "automatic now — the scheduler drains the queue every minute — so a message " +
+    "that hits a transient failure no longer waits for somebody to press " +
+    "\u201cProcess queue now\u201d. Two limits remain: the provider shipped by " +
+    "default writes to the server log instead of sending, which the screen says at " +
+    "the top; and SMS is modelled but no SMS provider is implemented.",
   consent:
     "Purposes, notices, collection, withdrawal and validation all run against the "
     + "real record, and every validation check from the console is written to the "

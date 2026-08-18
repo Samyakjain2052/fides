@@ -66,7 +66,7 @@ async def clean_db(owner_engine):
         await conn.execute(text("ALTER TABLE audit_events DISABLE TRIGGER audit_events_no_update_delete"))
         await conn.execute(text(
                 "TRUNCATE audit_events, refresh_tokens, api_keys, "
-                "user_invitations, "
+                "job_runs, user_invitations, "
                 "breach_events, breach_affected_principals, breaches, "
                 "grievance_events, grievances, "
                 "notifications, notification_templates, "
@@ -78,6 +78,27 @@ async def clean_db(owner_engine):
             ))
         await conn.execute(text("ALTER TABLE audit_events ENABLE TRIGGER audit_events_no_update_delete"))
     yield
+
+
+@pytest.fixture(autouse=True)
+async def dispose_cached_engines():
+    """Close the application's per-event-loop engines after each test.
+
+    `db/session.py` caches an engine per event loop, which is right in production —
+    one loop, one pool, for the process's lifetime. Under pytest-asyncio each test
+    gets a fresh loop, so the cache grows by one engine per test and none of them
+    are ever closed. Several hundred tests later Postgres refuses new connections
+    with `TooManyConnectionsError`, and the tests that fail are whichever ones
+    happen to run last rather than the ones at fault.
+
+    This surfaced when the scheduler tests arrived: they exercise
+    `tenant_session` / `unscoped_session`, which go through the cache, where most
+    tests use the `app_engine` fixture that already disposes itself.
+    """
+    yield
+    from app.db.session import dispose_engine
+
+    await dispose_engine()
 
 
 @pytest.fixture

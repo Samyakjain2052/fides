@@ -31,6 +31,7 @@ from app.services import (
     api_key_service,
     invitation_service,
     publishable_key_service,
+    scheduler,
     tenant_service,
 )
 
@@ -469,3 +470,92 @@ async def capabilities(
     configured one way while it behaves another.
     """
     return invitation_service.capability_matrix()
+
+
+# --------------------------------------------------------------- scheduled jobs --
+#
+# Why this endpoint exists: four modules previously disclosed "there is no
+# scheduler", which was honest and, being visible in the UI, harmless. A scheduler
+# creates a worse possibility — one that stopped weeks ago while every screen
+# quietly claims escalation and retry are automatic. Nobody notices, because
+# nothing looks broken.
+#
+# So `stale` is the important field here, and the module caveats quote this rather
+# than asserting the scheduler is alive.
+
+
+class JobStatusOut(BaseModel):
+    job: str
+    description: str
+    interval_seconds: int
+    last_status: str | None
+    last_started_at: Any | None
+    last_error: str | None
+    last_success_at: Any | None
+    last_success_items: int | None
+    # True when nothing has succeeded in three intervals — or ever. "We have no
+    # evidence this works" and "this stopped working" warrant the same response.
+    stale: bool
+    seconds_since_success: int | None
+
+
+class JobRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    job: str
+    status: str
+    started_at: Any
+    finished_at: Any | None
+    tenants_processed: int
+    items_processed: int
+    error: str | None
+
+
+class JobsOut(BaseModel):
+    jobs: list[JobStatusOut]
+    recent: list[JobRunOut]
+    note: str
+
+
+@router.get("/jobs", response_model=JobsOut,
+            summary="Is the scheduler running, and what has it done?")
+async def scheduled_jobs(
+    current: Annotated[CurrentUser, Depends(require(Capability.TENANT_MANAGE))],
+) -> Any:
+    """Platform-wide, not per tenant.
+
+    The scheduler sweeps every workspace, so its health is a property of the
+    deployment rather than of one customer. The log holds counts and job names only
+    — no tenant is named, because "which customers had overdue complaints last
+    night" is not a question this should make easy to ask.
+    """
+    return JobsOut(
+        jobs=await scheduler.status(current.session),
+        recent=await scheduler.recent_runs(current.session, limit=25),
+        note=(
+            "A job is stale when nothing has succeeded in three of its intervals, "
+            "or when it has never succeeded at all. If everything here is stale the "
+            "scheduler process is not running, and escalation, notification retries "
+            "and pre-purge warnings are not happening — regardless of what any "
+            "other screen implies."
+        ),
+    )
+
+
+@router.post("/jobs/{job_name}/run", response_model=JobRunOut,
+             summary="Run a scheduled job now")
+async def run_job_now(
+    job_name: str,
+    current: Annotated[CurrentUser, Depends(require(Capability.TENANT_MANAGE))],
+) -> Any:
+    """Takes the same advisory lock the scheduler does.
+
+    So this cannot double-run against a scheduler mid-sweep — it records
+    `skipped_locked` and returns, which is also how you can tell the scheduler is
+    genuinely working rather than merely deployed.
+    """
+    if job_name not in scheduler.JOBS:
+        raise Conflict(
+            f"Unknown job {job_name!r}. One of: {', '.join(sorted(scheduler.JOBS))}."
+        )
+    return await scheduler.run_job(job_name)

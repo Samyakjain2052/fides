@@ -10,6 +10,7 @@ from app.models.breach import Breach, BreachAffectedPrincipal, BreachEvent
 from app.models.consent import Consent, DataPrincipal, Notice, Purpose
 from app.models.dsar import DsarEvent, DsarRequest
 from app.models.invitation import UserInvitation
+from app.models.job_run import JobRun
 from app.models.grievance import Grievance, GrievanceEvent
 from app.models.notification import Notification, NotificationTemplate
 from app.models.retention import PurgeRun, PurgeRunItem, RetentionPolicy
@@ -34,6 +35,7 @@ __all__ = [
     "Grievance",
     "GrievanceEvent",
     "IdempotencyKey",
+    "JobRun",
     "Notice",
     "Notification",
     "NotificationTemplate",

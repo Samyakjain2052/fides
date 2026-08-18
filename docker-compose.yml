@@ -306,6 +306,40 @@ services:
   # to migrate on boot. It also meant the image could not be deployed without
   # also granting it schema-altering rights, which defeats the point of running
   # the app on a restricted role. Runs to completion, then the app starts.
+  # The scheduler. One process, not a thread in the API: with several API replicas
+  # a thread would run once per replica, and background work would compete with
+  # request serving on the same event loop. Safe to run exactly one of — each job
+  # takes a Postgres advisory lock, so a second copy records `skipped_locked`
+  # rather than doing the work twice.
+  cms-scheduler:
+    build:
+      context: ./backend
+      target: runtime
+    depends_on:
+      cms-db:
+        condition: service_healthy
+      cms-migrate:
+        condition: service_completed_successfully
+    environment:
+      DS_ENV: ${DS_ENV:-dev}
+      DS_DATABASE_URL: postgresql+asyncpg://datashield_app:apppassword@cms-db:5432/datashield
+      DS_DATABASE_OWNER_URL: postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield
+      DS_JWT_SECRET: ${DS_JWT_SECRET}
+      DS_AUDIT_HMAC_KEY: ${DS_AUDIT_HMAC_KEY}
+      # The scheduler sends real notifications, so it needs the same provider
+      # settings as the API. With the default console provider it logs instead.
+      DS_NOTIFICATION_PROVIDER: ${DS_NOTIFICATION_PROVIDER:-console}
+      DS_NOTIFICATION_FROM_ADDRESS: ${DS_NOTIFICATION_FROM_ADDRESS:-}
+      DS_SMTP_HOST: ${DS_SMTP_HOST:-}
+      DS_SMTP_PORT: ${DS_SMTP_PORT:-587}
+      DS_SMTP_USE_TLS: ${DS_SMTP_USE_TLS:-true}
+      DS_SMTP_USERNAME: ${DS_SMTP_USERNAME:-}
+      DS_SMTP_PASSWORD: ${DS_SMTP_PASSWORD:-}
+      DS_ACS_ENDPOINT: ${DS_ACS_ENDPOINT:-}
+      DS_ACS_ACCESS_KEY: ${DS_ACS_ACCESS_KEY:-}
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+
   cms-migrate:
     build:
       context: ./backend
