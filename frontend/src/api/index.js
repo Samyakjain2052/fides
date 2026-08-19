@@ -18,7 +18,8 @@
 // See ../../vite.config.js and the repo README.
 // ---------------------------------------------------------------------------
 export const USE_REAL_DSAR_BACKEND = true;
-const GATEWAY = "/gateway";
+// `GATEWAY` lived here. Removed: every gateway call goes through src/api/dsar.js
+// and the nginx /gateway/ proxy now, so nothing needed the base path.
 
 const delay = (ms = 220) => new Promise((r) => setTimeout(r, ms));
 const clone = (v) => JSON.parse(JSON.stringify(v));

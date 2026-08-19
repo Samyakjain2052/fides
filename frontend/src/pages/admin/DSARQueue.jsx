@@ -33,7 +33,7 @@ import {
 } from "../../api/dsar";
 import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/common/StatusBadge";
-import SLACountdown, { slaTone } from "../../components/common/SLACountdown";
+import SLACountdown from "../../components/common/SLACountdown";
 import SlideOver from "../../components/common/SlideOver";
 import ConfirmModal from "../../components/common/ConfirmModal";
 
@@ -84,7 +84,6 @@ export default function DSARQueue() {
   const [error, setError] = useState("");
 
   // panel state
-  const [nextStatus, setNextStatus] = useState("");
   const [rejection, setRejection] = useState("");
   const [note, setNote] = useState("");
   const [confirmErase, setConfirmErase] = useState(false);
@@ -118,7 +117,6 @@ export default function DSARQueue() {
 
   useEffect(() => {
     if (!selected) return;
-    setNextStatus("");
     setRejection(selected.rejection_reason || "");
     setNote("");
   }, [selected]);

@@ -150,6 +150,15 @@ export default function CookieConsent() {
           This is the banner a visitor sees on their first visit. It is shown here as a page so you
           can inspect it; in production it is pinned to the bottom of every page until answered.
         </p>
+        {/* This was captured into state and never rendered, so a banner that
+            could not load its purposes failed silently — the visitor saw an empty
+            banner and no reason. */}
+        {error && (
+          <div className="mt-4 rounded-lg border border-danger/50 bg-danger/10 p-3 text-sm text-ink">
+            <p className="font-medium">This banner could not load its options.</p>
+            <p className="mt-1 text-xs text-muted">{error}</p>
+          </div>
+        )}
         {dismissed && (
           <div className="mt-4 rounded-lg border border-success/40 bg-success/5 p-4">
             <p className="flex items-center gap-2 text-sm font-medium text-ink">
@@ -165,6 +174,29 @@ export default function CookieConsent() {
               . Your preferences will be renewed on{" "}
               {renewsAt ? new Date(renewsAt).toLocaleDateString() : "—"} (12 months).
             </p>
+            {/* The toast says "with a receipt" — so show it. A receipt the person
+                is told about but never given is not a receipt, and the server
+                mints these precisely so a choice can be quoted back later. */}
+            {receipts.length > 0 && (
+              <div className="mt-3 rounded-lg border border-line bg-surface p-3">
+                <p className="text-xs font-medium text-ink">
+                  Your receipt{receipts.length === 1 ? "" : "s"}
+                </p>
+                <ul className="mt-1 space-y-0.5">
+                  {receipts.map((r) => (
+                    <li key={r.server_receipt_id || r.purpose} className="text-xs text-muted">
+                      <span className="text-ink">{r.purpose}</span>
+                      {r.server_receipt_id && (
+                        <span className="ml-1 font-mono">{r.server_receipt_id}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-1 text-xs text-muted">
+                  Quote a receipt id to ask what was recorded and when.
+                </p>
+              </div>
+            )}
             <div className="mt-3 flex flex-wrap gap-3">
               <button type="button" className="btn-secondary" onClick={() => setDismissed(false)}>
                 Reopen Cookie Settings
