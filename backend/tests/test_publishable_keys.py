@@ -710,9 +710,28 @@ def test_the_nginx_config_proxies_the_public_path():
     assert conf is not None, f"nginx template not found in {candidates}"
     text_ = conf.read_text()
     assert "location /public/" in text_, "nginx does not proxy the public API"
-    # Path preserved, not rewritten: a published contract must not depend on the
-    # proxy's shape.
-    assert "proxy_pass         ${BACKEND_URL}/public/;" in text_
+
+    # Assert the PROPERTY, not the literal. This used to pin the exact string
+    # `proxy_pass ${BACKEND_URL}/public/;`, which broke when the proxy moved to a
+    # variable upstream — a change that fixed a real 502 and did not touch this
+    # behaviour at all. A guard test that fails on a correct refactor teaches
+    # people to edit the test without reading it.
+    block = text_[text_.index("location /public/"):]
+    block = block[: block.index("\n    location ") if "\n    location " in block else len(block)]
+
+    assert "proxy_pass" in block, "the /public/ block does not proxy anywhere"
+    assert "index.html" not in block, (
+        "/public/ must not fall through to the SPA — a machine caller would get a "
+        "200 carrying HTML, the worst possible failure for it"
+    )
+    # The path must arrive unrewritten: a published contract cannot depend on this
+    # proxy's shape. Either the literal form or $request_uri satisfies that; a
+    # rewrite that strips the prefix does not.
+    preserves_path = "/public/" in block.split("proxy_pass", 1)[1].split(";", 1)[0] \
+        or "$request_uri" in block
+    assert preserves_path, (
+        "the /public/ path is rewritten before it reaches the backend"
+    )
 
 
 # --------------------------------------------------------------------------- #

@@ -47,7 +47,7 @@ already holds that port locally; override with `WEB_PORT`.
 
 ---
 
-## 0b. Found while building the scheduler: nginx caches the API's IP
+## 0b. FIXED — nginx cached the API's IP (kept as the record of why)
 
 Worth fixing before Phase 5, because nginx is the single public ingress and this
 breaks the whole product rather than one feature.
@@ -61,7 +61,13 @@ confusing: `curl` directly against the API works, through the proxy it does not.
 Reproduced by accident: `docker compose up -d --force-recreate cms-backend` while
 adding the scheduler service.
 
-The fix is a `resolver` directive plus a variable upstream, so the name is
+**Fixed.** `frontend/nginx.conf.template` now proxies through an nginx variable
+with an explicit `resolver`, and `DNS_RESOLVER` is overridable for Container Apps
+and Kubernetes. Proved by parking a throwaway container on the old address to
+force a real IP move: the backend went .14 -> .15 with nginx untouched and every
+request stayed 200.
+
+The fix was a `resolver` directive plus a variable upstream, so the name is
 re-resolved per request:
 
 ```nginx
@@ -196,7 +202,7 @@ One Bicep deployment into the existing `rg-datashield`:
 | Storage Account + File share | Standard LRS | the shared `fides_uploads` (§1.3) |
 | Log Analytics workspace | Pay-as-you-go | logs are already structured JSON with a request id |
 | Azure Cache for Redis | Basic C0 | holds in-flight DSAR jobs — losing it loses work |
-| *(existing)* PostgreSQL Flexible Server 16 | Burstable B1ms | `datashield-pg-5b8c16`, already provisioned |
+| *(existing)* PostgreSQL Flexible Server 16 | Burstable B1ms | already provisioned; name in `backend/.env.azure` |
 
 **Check:** `az deployment group what-if` is clean, then apply; every resource
 exists and Key Vault RBAC resolves.

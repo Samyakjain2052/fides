@@ -626,6 +626,75 @@ def verify(f: Fides) -> None:
 
 
 # --------------------------------------------------------------------------
+def refresh_expiring_secrets(f: Fides) -> int:
+    """Re-push only the short-lived secrets. Returns how many were refreshed.
+
+    A narrow path through what `configure_saas_connections` does, for the one
+    problem that recurs: Zoho access tokens expire after an hour, so DSAR
+    acceptance started failing roughly hourly and the fix was to re-run the whole
+    provisioner by hand. That is a standing operational chore hiding a defect.
+
+    Deliberately narrow. It does not instantiate connections, register templates,
+    touch datasets, systems or policies — a token refresh must not be able to
+    reshape the configuration, and running full provisioning on a timer eventually
+    reverts something somebody changed in the UI on purpose.
+
+    Only connections that actually hold an `access_token` secret are touched. A
+    connector whose credential does not expire is left alone.
+    """
+    doc = load_yaml(CONNECTIONS_FILE, expand=True)
+    refreshed = 0
+    for c in doc.get("saas_connection", []) or []:
+        key = c["key"]
+        secrets = dict(c.get("secrets") or {})
+        if "access_token" not in secrets:
+            continue
+        if not f.exists(f"/connection/{key}"):
+            log(f"  [{key}] not provisioned yet; skipping (run full provisioning first)")
+            continue
+
+        secrets["access_token"] = refresh_zoho_access_token()
+        # verify=true so a refresh that produced an unusable token fails here,
+        # loudly, rather than at 3am inside somebody's rights request.
+        result = f.call("PUT", f"/connection/{key}/secret?verify=true", secrets)
+        status = (result or {}).get("test_status")
+        if status != "succeeded":
+            die(
+                f"connection '{key}' failed its connectivity test after a token "
+                f"refresh (test_status={status!r}, "
+                f"failure_reason={(result or {}).get('failure_reason')!r})"
+            )
+        log(f"  [{key}] access token refreshed and verified")
+        refreshed += 1
+    return refreshed
+
+
+def refresh_loop() -> None:
+    """Refresh on a timer, until killed.
+
+    Zoho's tokens last an hour, so the default is 45 minutes — comfortably inside
+    the window without being wasteful. The refresh token itself does not expire, so
+    there is nothing here that needs a human.
+
+    A failure sleeps and retries rather than exiting: a transient Zoho outage
+    should not leave the connector permanently stale, and a container that exits
+    on the first network blip would be restarted into the same blip.
+    """
+    every = int(os.environ.get("ZOHO_REFRESH_INTERVAL_SECONDS", 45 * 60))
+    log(f"secret refresher started; every {every}s")
+    while True:
+        try:
+            f = Fides(login())
+            n = refresh_expiring_secrets(f)
+            log(f"refreshed {n} connection secret(s)")
+        except SystemExit:
+            # die() raises SystemExit. Log it and keep the loop alive — see above.
+            log("refresh failed; will try again at the next interval")
+        except Exception as exc:  # noqa: BLE001
+            log(f"refresh failed ({type(exc).__name__}: {exc}); retrying next interval")
+        time.sleep(every)
+
+
 def main() -> None:
     log("=" * 68)
     log("Provisioning Fides from /fides-config")
@@ -652,4 +721,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Two modes from one image. `--refresh-secrets` is the long-running token
+    # refresher; no argument is the one-shot full provisioning run.
+    if "--refresh-secrets" in sys.argv:
+        refresh_loop()
+    elif "--refresh-secrets-once" in sys.argv:
+        sys.exit(0 if refresh_expiring_secrets(Fides(login())) >= 0 else 1)
+    else:
+        main()

@@ -5,7 +5,8 @@ How the 13 local services map onto Azure, following
 product data, the demo datastores stay containerised.**
 
 **Provisioned so far:** `cms-db` — an Azure Database for PostgreSQL Flexible
-Server 16 (`datashield-pg-5b8c16`, Central India), with the two roles, RLS
+Server 16 (Central India — the server name is in `backend/.env.azure`, not
+here), with the two roles, RLS
 policies and the append-only audit trigger created and verified by
 [`backend/scripts/verify_database.py`](../backend/scripts/verify_database.py).
 Everything else in the table below is still design, to build Bicep/Terraform from.
