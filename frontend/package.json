@@ -6,9 +6,9 @@
   "description": "DataShield \u2014 DPDP Act 2023 Consent Management System (user + admin)",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/check-preview-locks.mjs && vite build",
+    "build": "npm run lint && node scripts/check-preview-locks.mjs && vite build",
     "preview": "vite preview --host",
-    "lint": "echo \"no linter configured\" && exit 0",
+    "lint": "eslint src scripts --no-warn-ignored",
     "check:preview": "node scripts/check-preview-locks.mjs"
   },
   "dependencies": {
@@ -19,6 +19,8 @@
   "devDependencies": {
     "@vitejs/plugin-react": "4.3.2",
     "autoprefixer": "10.4.20",
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0",
     "postcss": "8.4.47",
     "tailwindcss": "3.4.13",
     "vite": "5.4.8"

@@ -148,8 +148,10 @@ export const MOCK_AUDIT_LOGS = clone(auditLogs);
 // disagree with the enforcement — which is worse than showing nothing, because it
 // tells an administrator their workspace is configured one way while it behaves
 // another. See src/api/users.js.
-export const MOCK_RETENTION_POLICIES = clone(retentionPolicies);
-
+// The retention mocks lived here and are gone. Retention is live: the screen
+// uses src/api/retention.js against /v1/retention, including the real purge
+// executor. `MOCK_RETENTION_POLICIES` was evaluated at module load and outlived
+// the array it cloned — see the note in this file's header about what that cost.
 // --- supporting mock data the screens need ----------------------------------
 
 export const COOKIE_CATEGORIES = [
@@ -389,74 +391,10 @@ export function deadlineFor(submittedAt) {
   return new Date(new Date(submittedAt).getTime() + DSAR_SLA_DAYS * 864e5).toISOString();
 }
 
-export async function submitDSAR({ type, verification, details = {} }) {
-  // --- real backend path (opt-in) -----------------------------------------
-  if (USE_REAL_DSAR_BACKEND && (type === "access" || type === "erase")) {
-    const resp = await fetch(`${GATEWAY}/dsar`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: subject.email, action: type === "erase" ? "erasure" : "access" }),
-    });
-    if (!resp.ok) throw new Error("Gateway rejected the request");
-    const created = await resp.json();
-    const row = {
-      id: created.request_id, user_id: subject.id, user_email: subject.email,
-      type, status: "in_progress", submitted_at: nowIso(),
-      deadline_at: deadlineFor(nowIso()), reference: created.request_id,
-      verification, details, real: true,
-    };
-    dsarRequests = [row, ...dsarRequests];
-    appendAuditLog({ action_type: "dsar_submitted", purpose_id: "-", consent_status: type });
-    return clone(row);
-  }
-
-  // --- mock path (default) ------------------------------------------------
-  await delay(500);
-  const n = dsarRequests.length + 1;
-  const submitted = nowIso();
-  const row = {
-    id: "d" + n,
-    user_id: subject.id,
-    user_email: subject.email,
-    type,
-    status: "pending",
-    submitted_at: submitted,
-    deadline_at: deadlineFor(submitted),
-    reference: "DSAR-2026-" + String(n).padStart(3, "0"),
-    verification,
-    ...details,
-  };
-  dsarRequests = [row, ...dsarRequests];
-  appendAuditLog({ action_type: "dsar_submitted", purpose_id: "-", consent_status: type });
-  notifications = [
-    { id: "nt" + (notifications.length + 1), audience: "user", to: subject.email, subject: `We received your ${type} request ${row.reference}`, scenario: "dsar_update", channel: "Email", status: "delivered", sent_at: submitted, language: "English" },
-    ...notifications,
-  ];
-  return clone(row);
-}
-
-export async function updateDSAR(id, patch) {
-  await delay(350);
-  const row = dsarRequests.find((r) => r.id === id);
-  if (!row) throw new Error("Request not found.");
-  Object.assign(row, patch);
-  if (patch.status === "completed") row.resolved_at = nowIso();
-  const audit = appendAuditLog({
-    action_type: "dsar_" + (patch.status || "updated"),
-    user_id: row.user_id,
-    purpose_id: "-",
-    consent_status: row.type,
-    initiator: "Data Fiduciary",
-  });
-  if (patch.notify) {
-    notifications = [
-      { id: "nt" + (notifications.length + 1), audience: "user", to: row.user_email, subject: `Update on your request ${row.reference}: ${row.status}`, scenario: "dsar_update", channel: "Email", status: "delivered", sent_at: nowIso(), language: "English" },
-      ...notifications,
-    ];
-  }
-  return { request: clone(row), audit };
-}
-
+// `submitDSAR` and `updateDSAR` lived here. Both were dead — DSARPortal and the
+// admin queue use src/api/dsar.js against /v1/dsar — and both still appended to
+// the `notifications` array that went with the notifications module, so calling
+// either would have thrown a ReferenceError. Landmines rather than code.
 export async function prepareDataExport(id) {
   await delay(900);
   const row = dsarRequests.find((r) => r.id === id);
@@ -484,30 +422,6 @@ export async function prepareDataExport(id) {
 // ============================================================================
 // ADMIN: users, retention, notifications, reports, breaches
 // ============================================================================
-export async function getRetentionPolicies() {
-  await delay();
-  return clone(retentionPolicies);
-}
-
-export async function updateRetentionPolicy(id, patch) {
-  await delay(300);
-  const row = retentionPolicies.find((p) => p.id === id);
-  if (!row) throw new Error("Policy not found.");
-  Object.assign(row, patch);
-  appendAuditLog({ action_type: "retention_policy_updated", initiator: "Data Fiduciary", consent_status: row.category });
-  return clone(row);
-}
-
-export async function runPurge(id) {
-  await delay(900);
-  const row = retentionPolicies.find((p) => p.id === id);
-  if (!row) throw new Error("Policy not found.");
-  row.last_purge = nowIso().slice(0, 10);
-  const deleted = Math.floor(Math.random() * 40) + 5;
-  const audit = appendAuditLog({ action_type: "purge_run", initiator: "system", consent_status: row.category });
-  return { category: row.category, records_deleted: deleted, at: row.last_purge, audit };
-}
-
 // ============================================================================
 // DASHBOARD AGGREGATES
 // ============================================================================
