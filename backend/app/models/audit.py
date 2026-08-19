@@ -139,6 +139,7 @@ class AuditAction:
     # narrowest sense and useless in an audit. "Which entries show data being
     # destroyed?" had no answer you could filter for.
     RETENTION_POLICY_CREATED = "retention.policy_created"
+    RETENTION_POLICY_UPDATED = "retention.policy_updated"
     RETENTION_PREVIEWED = "retention.previewed"
     RETENTION_PURGED = "retention.purged"
 

@@ -69,7 +69,6 @@ export const MODULE_STATUS = {
   // Editing an existing policy is not built — the API creates and runs, it does
   // not update. Split out so the control stays disabled rather than becoming a
   // button that errors when retention went live.
-  retention_edit: "preview",
   reports: "live",
   // Real: the screen reads the HMAC hash-chained trail in PostgreSQL, and
   // "Verify chain integrity" walks it and reports the first break. The backend
@@ -89,7 +88,6 @@ export const MODULE_LABELS = {
   consent_guardian: "Guardian consent (under-18)",
   grievance: "Grievance redressal",
   retention: "Retention & purge",
-  retention_edit: "Editing a retention policy",
   reports: "Reports",
   audit: "Audit trail",
   breach: "Breach management",
@@ -105,7 +103,8 @@ export const MODULE_LABELS = {
 export const MODULE_CAVEATS = {
   retention:
     "Purging masks a person's identifiers and keeps their consent records, " +
-    "matching the DSAR erasure path. It reaches this product's own tables, not " +
+    "matching the DSAR erasure path. Policies can be created, edited and run. " +
+    "It reaches this product's own tables, not " +
     "a customer's connected systems. Pre-purge warnings are now sent daily by the " +
     "scheduler for policies set to auto-delete. The purge itself is never " +
     "automatic: unattended data destruction on a timer is a different risk from " +
@@ -178,7 +177,6 @@ export const MODULE_CAVEATS = {
 /** What each preview module needs before it can be called live. */
 export const MODULE_ROADMAP = {
   consent_guardian: "Verifiable parental consent — a real guardian identity check (DigiLocker or equivalent), which a publishable key cannot perform.",
-  retention_edit: "Updating an existing policy. Create a replacement in the meantime.",
 };
 
 /**

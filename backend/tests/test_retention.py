@@ -16,8 +16,9 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
-from app.core.errors import Conflict
+from app.core.errors import Conflict, NotFound
 from app.db.session import set_tenant_context
+from app.models.audit import AuditEvent
 from app.models.consent import Consent, DataPrincipal
 from app.models.dsar import DsarRequest
 from app.models.retention import PurgeRun, PurgeRunItem, RetentionPolicy
@@ -512,3 +513,224 @@ async def test_the_retention_tables_have_rls_policies(app_session_factory, tenan
         assert len(found) == 3, f"missing: {found.keys()}"
         for table, (enabled, forced, policies) in found.items():
             assert enabled and forced and policies >= 1, f"{table} is not protected"
+
+
+# --------------------------------------------------------------------------- #
+# Editing a policy
+# --------------------------------------------------------------------------- #
+#
+# Until now a policy could only be created and run, and the screen told people to
+# "create a replacement in the meantime" — which leaves two policies over one
+# category, the older still purging on its own terms. That is worse than an edit.
+#
+# The dangerous edit is shortening the window on an auto-delete policy: nobody
+# presses anything and tomorrow more people are purged. These tests are mostly
+# about that one.
+
+async def test_an_ordinary_edit_is_applied_and_audited(app_session_factory, tenant_a):
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        policy = await _policy(s, tenant_a, retention_days=90, name="Marketing 90")
+
+        updated = await retention_service.update_policy(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a), policy_id=policy.id,
+            name="Marketing 180", retention_days=180,
+        )
+        assert updated.name == "Marketing 180"
+        assert updated.retention_days == 180
+
+        entry = await s.scalar(
+            select(AuditEvent).where(AuditEvent.action == "retention.policy_updated")
+            .order_by(AuditEvent.seq.desc())
+        )
+        assert entry is not None
+        # Before AND after, so the movement is readable rather than just the
+        # destination.
+        assert entry.payload["changed"]["retention_days"] == {"from": "90", "to": "180"}
+        assert entry.payload["shortened_window"] is False
+
+
+async def test_the_data_category_cannot_be_changed(app_session_factory, tenant_a):
+    """It would point a policy's history and receipts at different people.
+
+    Same name, same purge records, different population — that is a new policy
+    wearing an old one's record.
+    """
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        policy = await _policy(s, tenant_a)
+        with pytest.raises(Conflict) as exc:
+            await retention_service.update_policy(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                policy_id=policy.id, data_category="Usage Data",
+            )
+        assert "cannot be changed" in str(exc.value)
+
+
+async def test_shortening_an_auto_delete_window_needs_confirming(
+    app_session_factory, tenant_a
+):
+    """The one edit with an irreversible consequence and no obvious action.
+
+    Nobody presses a purge button; the next scheduled run simply destroys more.
+    """
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        policy = await _policy(
+            s, tenant_a, retention_days=365, auto_delete=True, notify_days=14
+        )
+        with pytest.raises(Conflict) as exc:
+            await retention_service.update_policy(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                policy_id=policy.id, retention_days=30,
+            )
+        assert "without anybody pressing anything" in str(exc.value)
+        await s.refresh(policy)
+        assert policy.retention_days == 365, "the refusal must not half-apply"
+
+        # With the confirmation it goes through, and the audit says it was confirmed.
+        await retention_service.update_policy(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a), policy_id=policy.id,
+            retention_days=30, confirm_shortening=True,
+        )
+        assert policy.retention_days == 30
+        entry = await s.scalar(
+            select(AuditEvent).where(AuditEvent.action == "retention.policy_updated")
+            .order_by(AuditEvent.seq.desc())
+        )
+        assert entry.payload["shortened_window"] is True
+        assert entry.payload["confirmed_shortening"] is True
+
+
+async def test_shortening_a_manual_policy_needs_no_confirmation(
+    app_session_factory, tenant_a
+):
+    """Nothing happens until a human runs it, and they confirm by name then."""
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        policy = await _policy(s, tenant_a, retention_days=365, auto_delete=False)
+        await retention_service.update_policy(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a), policy_id=policy.id,
+            retention_days=30,
+        )
+        assert policy.retention_days == 30
+
+
+async def test_turning_auto_delete_on_without_a_notice_period_is_refused(
+    app_session_factory, tenant_a
+):
+    """Validated against the MERGED result, not the incoming patch.
+
+    A patch naming only `auto_delete` would otherwise slip past a check that
+    looked at the request body alone.
+    """
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        policy = await _policy(s, tenant_a, auto_delete=False, notify_days=0)
+        with pytest.raises(Conflict) as exc:
+            await retention_service.update_policy(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                policy_id=policy.id, auto_delete=True,
+            )
+        assert "warn first" in str(exc.value)
+
+
+async def test_a_notice_period_longer_than_the_window_is_refused(
+    app_session_factory, tenant_a
+):
+    """The warning would go out before there is anything to warn about."""
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        policy = await _policy(
+            s, tenant_a, retention_days=30, auto_delete=True, notify_days=14
+        )
+        with pytest.raises(Conflict) as exc:
+            await retention_service.update_policy(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                policy_id=policy.id, notify_days=60, confirm_shortening=True,
+            )
+        assert "shorter than the retention period" in str(exc.value)
+
+
+async def test_an_exemption_still_needs_a_reference(app_session_factory, tenant_a):
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        policy = await _policy(s, tenant_a)
+        with pytest.raises(Conflict) as exc:
+            await retention_service.update_policy(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                policy_id=policy.id, exemption_code="statutory",
+            )
+        assert "needs a reference" in str(exc.value)
+
+
+async def test_an_edit_that_changes_nothing_writes_no_audit_entry(
+    app_session_factory, tenant_a
+):
+    """A chain full of no-op edits is a chain nobody reads."""
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        policy = await _policy(s, tenant_a, retention_days=90)
+        before = await s.scalar(
+            select(func.count()).select_from(AuditEvent)
+            .where(AuditEvent.action == "retention.policy_updated")
+        )
+        await retention_service.update_policy(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a), policy_id=policy.id,
+            retention_days=90,
+        )
+        after = await s.scalar(
+            select(func.count()).select_from(AuditEvent)
+            .where(AuditEvent.action == "retention.policy_updated")
+        )
+        assert after == before
+
+
+async def test_editing_another_tenants_policy_is_not_found(
+    app_session_factory, tenant_a, tenant_b
+):
+    async with app_session_factory() as s:
+        await s.begin()
+        await set_tenant_context(s, tenant_b["id"])
+        policy = await _policy(s, tenant_b)
+        pid = policy.id
+        await s.commit()
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        with pytest.raises(NotFound):
+            await retention_service.update_policy(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a), policy_id=pid,
+                retention_days=10,
+            )
+
+
+async def test_an_unknown_field_is_refused_rather_than_dropped(
+    app_session_factory, tenant_a, monkeypatch
+):
+    """Pydantic drops undeclared fields by default, which made this a silent 200.
+
+    A request asking to change `data_category` returned success while changing
+    nothing, so the caller believed it had worked and the service's refusal was
+    unreachable. `extra="forbid"` turns it into a 422 naming the field.
+    """
+    import httpx
+
+    from app.api.v1.retention import PolicyUpdate
+    from app.main import app
+
+    # The model itself must refuse it — that is what makes the route refuse it.
+    with pytest.raises(Exception) as exc:
+        PolicyUpdate(data_category="Usage Data")
+    assert "data_category" in str(exc.value)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.post("/v1/auth/login", json={
+            "tenant_slug": tenant_a["slug"], "email": tenant_a["admin_email"],
+            "password": tenant_a["password"],
+        })
+        headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+        async with scoped(app_session_factory, tenant_a["id"]) as s:
+            policy = await _policy(s, tenant_a)
+            pid = str(policy.id)
+            await s.commit()
+
+        resp = await client.patch(
+            f"/v1/retention/policies/{pid}", headers=headers,
+            json={"data_category": "Usage Data"},
+        )
+        assert resp.status_code == 422, resp.text
+        assert "data_category" in resp.text

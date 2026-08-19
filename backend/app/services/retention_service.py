@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
+from typing import Any
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
@@ -492,6 +493,131 @@ async def create_policy(
                  "auto_delete": auto_delete, "notify_days": notify_days,
                  "exemption_code": exemption_code},
     )
+    return policy
+
+
+# Fields an edit may touch. `data_category` is absent on purpose — see below.
+EDITABLE_FIELDS = frozenset({
+    "name", "retention_days", "action", "auto_delete", "notify_days",
+    "exemption_code", "exemption_reference", "is_active",
+})
+
+
+async def update_policy(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    actor: Actor,
+    policy_id: uuid.UUID,
+    confirm_shortening: bool = False,
+    **fields: Any,
+) -> RetentionPolicy:
+    """Edit a policy, with the same validation `create_policy` applies.
+
+    Until now a policy could only be created and run, and the screen said so:
+    "create a replacement in the meantime". That workaround leaves two policies
+    over the same category, which is worse than an edit — the older one keeps
+    purging on its own terms.
+
+    **`data_category` cannot be changed.** Repointing a policy at a different
+    category changes which people it destroys, while keeping its name, its history
+    and its purge receipts. That is a different policy wearing an existing one's
+    record, so it must be created as one.
+
+    **Shortening the window on an auto-delete policy needs confirming.** It is the
+    one edit that silently enlarges an unattended destruction set: nobody presses
+    anything, and tomorrow more people are purged than yesterday. The same
+    reasoning as the live run demanding the policy's name back — an irreversible
+    consequence should not follow from a single unremarkable form save.
+    """
+    policy = await session.scalar(
+        select(RetentionPolicy).where(
+            RetentionPolicy.tenant_id == tenant_id, RetentionPolicy.id == policy_id
+        )
+    )
+    if policy is None:
+        raise NotFound("No such retention policy.")
+
+    if "data_category" in fields:
+        raise PurgeRefused(
+            "A policy's data category cannot be changed — that would point its "
+            "history and its purge receipts at a different set of people. Create a "
+            "new policy for the other category and deactivate this one."
+        )
+    unknown = set(fields) - EDITABLE_FIELDS
+    if unknown:
+        raise PurgeRefused(f"Cannot change: {', '.join(sorted(unknown))}.")
+
+    proposed = {k: v for k, v in fields.items() if v is not None}
+    merged = {f: proposed.get(f, getattr(policy, f)) for f in EDITABLE_FIELDS}
+
+    # The same two rules create_policy enforces, applied to the merged result
+    # rather than the incoming patch — otherwise turning auto_delete on without
+    # mentioning notify_days would slip past.
+    if merged["auto_delete"] and merged["notify_days"] < 1:
+        raise PurgeRefused(
+            "A policy that destroys data automatically has to warn first. "
+            "Set a notice period of at least one day."
+        )
+    if merged["exemption_code"] != "none" and not (
+        merged["exemption_reference"] or ""
+    ).strip():
+        raise PurgeRefused(
+            "An exemption needs a reference — the statute or matter it rests on. "
+            "Without one it is an assertion, not a justification."
+        )
+    if merged["retention_days"] < 1:
+        raise PurgeRefused("A retention period has to be at least one day.")
+    if merged["auto_delete"] and merged["notify_days"] >= merged["retention_days"]:
+        raise PurgeRefused(
+            f"The notice period ({merged['notify_days']} days) has to be shorter "
+            f"than the retention period ({merged['retention_days']} days), or the "
+            "warning goes out before there is anything to warn about."
+        )
+
+    shortening = merged["retention_days"] < policy.retention_days
+    if shortening and merged["auto_delete"] and not confirm_shortening:
+        raise PurgeRefused(
+            f"This shortens the retention window from {policy.retention_days} to "
+            f"{merged['retention_days']} days on a policy that deletes "
+            "automatically, so more people become eligible for purging without "
+            "anybody pressing anything. Preview it first, then confirm."
+        )
+
+    before = {f: getattr(policy, f) for f in sorted(EDITABLE_FIELDS)}
+    for field, value in merged.items():
+        if isinstance(value, str):
+            value = value.strip() or None
+        setattr(policy, field, value)
+    # `name` is NOT NULL and is what the live run demands back as confirmation.
+    if not (policy.name or "").strip():
+        raise PurgeRefused("A policy needs a name — the live run asks for it back.")
+    await session.flush()
+
+    after = {f: getattr(policy, f) for f in sorted(EDITABLE_FIELDS)}
+    changed = {f: {"from": before[f], "to": after[f]}
+               for f in sorted(EDITABLE_FIELDS) if before[f] != after[f]}
+    if not changed:
+        return policy
+
+    await audit_service.record(
+        session, tenant_id=tenant_id, actor=actor,
+        action=AuditAction.RETENTION_POLICY_UPDATED,
+        entity_type="retention_policy", entity_id=policy.id,
+        payload={
+            "name": policy.name,
+            "category": policy.data_category,
+            "changed": {k: {"from": str(v["from"]), "to": str(v["to"])}
+                        for k, v in changed.items()},
+            # Recorded explicitly because it is the consequential direction and a
+            # reader should not have to work it out from the numbers.
+            "shortened_window": shortening,
+            "confirmed_shortening": bool(shortening and confirm_shortening),
+        },
+    )
+    logger.info("retention policy updated", extra={"context": {
+        "policy": policy.name, "changed": sorted(changed), "shortened": shortening,
+    }})
     return policy
 
 

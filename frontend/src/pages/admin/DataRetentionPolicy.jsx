@@ -11,11 +11,11 @@ import {
   preview as previewPurge,
   runItems,
   runPurge,
+  updatePolicy,
 } from "../../api/retention";
 import { useApp } from "../../context/AppContext";
 import ConfirmModal from "../../components/common/ConfirmModal";
 import StatusBadge from "../../components/common/StatusBadge";
-import { previewLock } from "../../config/modules";
 
 const DAY = 864e5;
 
@@ -24,6 +24,8 @@ export default function DataRetentionPolicy() {
   const [policies, setPolicies] = useState([]);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(null);
+  // Set when the server refuses to shorten an auto-delete window unconfirmed.
+  const [confirmShorten, setConfirmShorten] = useState(null);
   const [purging, setPurging] = useState(null);
   const [purgeResult, setPurgeResult] = useState(null);
   const [purgeLog, setPurgeLog] = useState([]);
@@ -46,11 +48,42 @@ export default function DataRetentionPolicy() {
     setForm({ ...p });
   };
 
-  // Editing an existing policy is not wired yet — the API creates and runs, it
-  // does not update. Left visibly unavailable rather than silently no-op.
-  const save = async () => {
-    notify("Editing a policy is not available yet — create a new one instead.", "error");
-    setEditing(null);
+  /**
+   * Save an edit.
+   *
+   * Shortening the window on an auto-delete policy is refused by the server
+   * unless confirmed, because it enlarges an unattended destruction set with no
+   * button pressed. Rather than sending `confirm_shortening` optimistically, the
+   * refusal is surfaced and the confirmation asked for — the point of the guard is
+   * that somebody sees it.
+   */
+  const save = async (confirmShortening = false) => {
+    setBusy(true);
+    try {
+      await updatePolicy(editing, {
+        name: form.name,
+        retentionDays: form.retention_days,
+        notifyDays: form.notify_days,
+        autoDelete: form.auto_delete,
+        exemptionCode: form.exemption_code,
+        exemptionReference: form.exemption_reference,
+        confirmShortening,
+      });
+      await load();
+      setEditing(null);
+      setConfirmShorten(null);
+      notify("Policy updated. The change is in the audit trail.");
+    } catch (e) {
+      // A refusal to shorten is not an error to shrug at — ask for the
+      // confirmation the server is holding out for.
+      if (/without anybody pressing anything/.test(e.message)) {
+        setConfirmShorten(e.message);
+      } else {
+        notify(e.message, "error");
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   /** The PRIMARY action. Reports what would happen, changes nothing. */
@@ -215,13 +248,33 @@ export default function DataRetentionPolicy() {
                   </span>
                 </label>
                 <div className="flex gap-3">
-                  <button type="button" className="btn-primary" onClick={save} disabled={busy} {...previewLock("retention", "Saving a retention policy")}>
+                  <button type="button" className="btn-primary"
+                          onClick={() => save(false)} disabled={busy}>
                     {busy ? "Saving…" : "Save policy"}
                   </button>
-                  <button type="button" className="btn-ghost" onClick={() => setEditing(null)}>
+                  <button type="button" className="btn-ghost"
+                          onClick={() => { setEditing(null); setConfirmShorten(null); }}>
                     Cancel
                   </button>
                 </div>
+                {confirmShorten && (
+                  <div className="rounded-lg border border-danger/50 bg-danger/10 p-3">
+                    <p className="text-sm font-semibold text-ink">
+                      This shortens an automatic deletion window
+                    </p>
+                    <p className="mt-1 text-xs text-muted">{confirmShorten}</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button type="button" className="btn-secondary"
+                              onClick={() => preview(p)} disabled={busy}>
+                        Preview what would be purged
+                      </button>
+                      <button type="button" className="btn-danger"
+                              onClick={() => save(true)} disabled={busy}>
+                        I understand — save it
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="flex flex-wrap items-start justify-between gap-4">
@@ -261,8 +314,8 @@ export default function DataRetentionPolicy() {
                           disabled={busy}>
                     {busy ? "Checking…" : "Preview — what would be purged"}
                   </button>
-                  <button type="button" className="btn-secondary" onClick={() => startEdit(p)}
-                          {...previewLock("retention_edit", "Editing a policy")}>
+                  <button type="button" className="btn-secondary"
+                          onClick={() => startEdit(p)}>
                     Edit policy
                   </button>
                   <button type="button" className="btn-danger" onClick={() => setPurging(p)}>

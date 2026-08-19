@@ -60,3 +60,37 @@ export function listRuns(policyId) {
 export function runItems(runId) {
   return apiFetch(`/retention/runs/${runId}/items`);
 }
+
+/**
+ * Edit a policy.
+ *
+ * A PATCH: omit a field to leave it alone. `dataCategory` is deliberately not
+ * accepted — the server refuses it, because repointing a policy at another
+ * category would carry its history and its purge receipts to a different set of
+ * people. Create a new policy for that.
+ *
+ * `confirmShortening` is required when shortening the window on an auto-delete
+ * policy. That edit enlarges an unattended destruction set without anybody
+ * pressing anything, which is the one consequence here that should not follow from
+ * an ordinary form save. Preview first, then confirm.
+ */
+export function updatePolicy(policyId, patch) {
+  const body = {};
+  const map = {
+    name: "name",
+    retentionDays: "retention_days",
+    action: "action",
+    autoDelete: "auto_delete",
+    notifyDays: "notify_days",
+    exemptionCode: "exemption_code",
+    exemptionReference: "exemption_reference",
+    isActive: "is_active",
+  };
+  for (const [from, to] of Object.entries(map)) {
+    if (patch[from] !== undefined && patch[from] !== "") body[to] = patch[from];
+  }
+  if (body.retention_days !== undefined) body.retention_days = Number(body.retention_days);
+  if (body.notify_days !== undefined) body.notify_days = Number(body.notify_days);
+  body.confirm_shortening = Boolean(patch.confirmShortening);
+  return apiFetch(`/retention/policies/${policyId}`, { method: "PATCH", body });
+}

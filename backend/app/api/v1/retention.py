@@ -122,6 +122,69 @@ async def create_policy(
     )
 
 
+class PolicyUpdate(BaseModel):
+    """Every field optional — a PATCH, so an untouched field keeps its value.
+
+    `data_category` is absent deliberately: changing it would point a policy's
+    history and its purge receipts at a different set of people. That is a new
+    policy, not an edit.
+
+    `extra="forbid"` matters here. Pydantic's default is to drop fields it does not
+    declare, so a request asking to change the category returned 200 while
+    changing nothing — the caller believed it had worked and the service-level
+    refusal was unreachable. A silent success is worse than a refusal, so an
+    unknown field is now a 422 that names it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(None, min_length=2, max_length=255)
+    retention_days: int | None = Field(None, ge=1, le=36500)
+    action: str | None = Field(None, pattern="^(mask|delete)$")
+    auto_delete: bool | None = None
+    notify_days: int | None = Field(None, ge=0, le=365)
+    exemption_code: str | None = Field(
+        None, pattern="^(none|statutory|legal_hold|dispute)$"
+    )
+    exemption_reference: str | None = Field(None, max_length=255)
+    is_active: bool | None = None
+    confirm_shortening: bool = Field(
+        False,
+        description="Required when shortening the window on an auto-delete policy. "
+                    "That edit enlarges an unattended destruction set without "
+                    "anybody pressing anything, so it does not follow from an "
+                    "ordinary form save.",
+    )
+
+
+@router.patch("/policies/{policy_id}", response_model=PolicyOut,
+              summary="Edit a policy — same validation as creating one")
+async def update_policy(
+    policy_id: uuid.UUID,
+    body: PolicyUpdate,
+    current: Annotated[CurrentUser, Depends(require(Capability.RETENTION_MANAGE))],
+) -> RetentionPolicy:
+    """Before this, a policy could only be created and run.
+
+    The screen said "create a replacement in the meantime", which leaves two
+    policies over one category — and the older one keeps purging on its own terms.
+    That is worse than an edit, not safer.
+
+    Every change is audited with its before and after, and a shortened window is
+    flagged as such in the entry so a reader does not have to infer the direction
+    from the numbers.
+    """
+    patch = body.model_dump(exclude={"confirm_shortening"}, exclude_none=True)
+    return await retention_service.update_policy(
+        current.session,
+        tenant_id=current.tenant_id,
+        actor=current.actor,
+        policy_id=policy_id,
+        confirm_shortening=body.confirm_shortening,
+        **patch,
+    )
+
+
 @router.post(
     "/policies/{policy_id}/preview", response_model=RunOut,
     summary="Dry run — reports exactly what WOULD be purged, and touches nothing",
