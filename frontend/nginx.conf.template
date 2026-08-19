@@ -17,6 +17,25 @@
 #
 # BACKEND_URL and GATEWAY_URL are substituted at container start by the
 # nginx:alpine entrypoint (it runs envsubst over /etc/nginx/templates/*.template).
+#
+# WHY proxy_pass GOES THROUGH A VARIABLE
+#
+# nginx resolves an upstream hostname ONCE, at startup, and caches the address
+# for the life of the process. Recreating the backend container gives it a new
+# IP, and nginx keeps proxying to the old one: every request through /api
+# returns 502 until nginx is restarted, while the backend stays perfectly
+# healthy the whole time. That combination — healthy backend, 502 through the
+# proxy, nothing in either log — is genuinely hard to diagnose, and it happened
+# here during a routine `docker compose up --force-recreate cms-backend`.
+#
+# Putting the upstream in an nginx variable defeats the startup-time caching:
+# nginx then resolves per request, using `resolver` below. The cost is one DNS
+# lookup per request against a local cache, which is nothing next to a proxy
+# that silently points at a dead container after every deploy.
+#
+# Because a variable proxy_pass does not apply the trailing-slash URI rewrite,
+# each location states its path handling explicitly. Those rewrites are the
+# reason this file has tests: getting one wrong reshapes a published contract.
 # =============================================================================
 
 server {
@@ -27,6 +46,16 @@ server {
 
     root /usr/share/nginx/html;
     index index.html;
+
+    # Docker's embedded DNS by default; overridable because Azure Container Apps
+    # and Kubernetes each publish their own. `valid=10s` bounds how long a stale
+    # address can survive a container replacement — long enough to be a cache,
+    # short enough that a deploy heals itself within a few seconds.
+    #
+    # ipv6=off because the compose network is v4-only and nginx would otherwise
+    # spend every lookup waiting on an AAAA query that always fails.
+    resolver ${DNS_RESOLVER} valid=10s ipv6=off;
+    resolver_timeout 3s;
 
     # Uploads are capped here too, not only in the app. The edge is the only
     # place a limit cannot be bypassed by calling the API directly.
@@ -52,7 +81,12 @@ server {
     # --- the CMS API ---------------------------------------------------------
     # Trailing slashes on both sides: /api/v1/auth/login -> /v1/auth/login
     location /api/ {
-        proxy_pass         ${BACKEND_URL}/;
+        # `rewrite ... break` plus a variable proxy_pass with no URI is the
+        # documented equivalent of `proxy_pass ${BACKEND_URL}/;` — it strips the
+        # /api prefix, and unlike the literal form it re-resolves the hostname.
+        set                $cms_backend ${BACKEND_URL};
+        rewrite            ^/api/(.*)$ /$1 break;
+        proxy_pass         $cms_backend;
         proxy_http_version 1.1;
 
         proxy_set_header   Host              $host;
@@ -73,7 +107,11 @@ server {
     # answered /public/* with index.html — a 200 carrying HTML, which is the
     # worst possible failure for a machine caller.
     location /public/ {
-        proxy_pass         ${BACKEND_URL}/public/;
+        # $request_uri, not a rewrite: this path must reach the backend byte for
+        # byte, query string included, because customers' systems are coded
+        # against it.
+        set                $cms_backend_public ${BACKEND_URL};
+        proxy_pass         $cms_backend_public$request_uri;
         proxy_http_version 1.1;
 
         proxy_set_header   Host              $host;
@@ -89,7 +127,9 @@ server {
     # A privacy request is queued to a Celery worker and polled, so the timeout
     # is generous: a slow fan-out across four datastores is normal, not a fault.
     location /gateway/ {
-        proxy_pass         ${GATEWAY_URL}/;
+        set                $dsar_gateway ${GATEWAY_URL};
+        rewrite            ^/gateway/(.*)$ /$1 break;
+        proxy_pass         $dsar_gateway;
         proxy_http_version 1.1;
 
         proxy_set_header   Host              $host;

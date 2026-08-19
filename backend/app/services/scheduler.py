@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -346,6 +347,26 @@ async def run_job(job_name: str) -> JobRun:
 # The loop
 # --------------------------------------------------------------------------- #
 
+HEARTBEAT_FILE = os.environ.get(
+    "DS_WORKER_HEARTBEAT_FILE", "/tmp/ds-scheduler-heartbeat"
+)
+
+
+def _touch_heartbeat() -> None:
+    """Record that the loop is turning.
+
+    Deliberately best-effort: a read-only or full filesystem must not stop the
+    scheduler from doing its actual work. A missing heartbeat degrades the
+    healthcheck to its database-based judgement, which is the more important half
+    anyway.
+    """
+    try:
+        with open(HEARTBEAT_FILE, "w") as fh:
+            fh.write(datetime.now(UTC).isoformat())
+    except OSError:
+        logger.debug("could not write the heartbeat file", exc_info=True)
+
+
 async def run_forever(*, once: bool = False) -> None:
     """Tick every job on its own interval.
 
@@ -365,6 +386,12 @@ async def run_forever(*, once: bool = False) -> None:
 
     try:
         while True:
+            # Touched every pass, before any work. The healthcheck reads its
+            # mtime, which is how it tells a loop that is turning with nothing to
+            # do from one that is wedged — a query-based check alone cannot see
+            # the difference if the wedge is in the sleep.
+            _touch_heartbeat()
+
             now = asyncio.get_event_loop().time()
             for name, job in JOBS.items():
                 if now < next_due[name]:

@@ -338,6 +338,19 @@ services:
       DS_ACS_ENDPOINT: ${DS_ACS_ENDPOINT:-}
       DS_ACS_ACCESS_KEY: ${DS_ACS_ACCESS_KEY:-}
     command: ["python", "-m", "app.worker"]
+    # The image's own HEALTHCHECK asks the API's /health on port 8100. This
+    # process serves no HTTP, so that check could never pass and the container sat
+    # permanently `unhealthy` while working perfectly — the exact false alarm the
+    # run log exists to prevent, and a readiness gate that would fail on Container
+    # Apps. Overridden with a check that asks whether the jobs are actually
+    # succeeding, which is the thing worth knowing.
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.healthcheck_worker"]
+      interval: 60s
+      timeout: 15s
+      # Long enough for every job to have had a turn, including the daily one.
+      start_period: 120s
+      retries: 3
     restart: unless-stopped
 
   cms-migrate:
@@ -452,6 +465,12 @@ services:
     environment:
       BACKEND_URL: http://cms-backend:8100
       GATEWAY_URL: http://fastapi-gateway:8000
+      # nginx caches an upstream's IP at startup, so recreating the backend used
+      # to 502 the whole site until nginx itself restarted. The template now
+      # proxies through a variable, which needs an explicit resolver. 127.0.0.11
+      # is Docker's embedded DNS; Azure Container Apps and Kubernetes each
+      # publish their own, hence the override.
+      DNS_RESOLVER: ${DNS_RESOLVER:-127.0.0.11}
     ports:
       # 8080 inside the container. The host port defaults to 8090 because Fides
       # already owns 8080 locally; in Azure this is the app's only ingress.
