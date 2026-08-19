@@ -8,10 +8,12 @@ than everything.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
+
+from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, require
 from app.core.errors import NotFound
@@ -354,3 +356,73 @@ async def consent_history(
         )
         for e in events
     ]
+
+
+# ------------------------------------------------------------------ overview --
+
+class ConsentOverviewOut(BaseModel):
+    """Dashboard totals.
+
+    `active` counts consents whose status says active AND whose expiry has not
+    passed — the same judgement `/consents/check` makes. `lapsed_not_yet_marked` is
+    the gap between the two: rows still reading `active` that the product will
+    already refuse. A dashboard claiming more active consents than validation
+    would honour is worse than no dashboard.
+    """
+
+    active: int
+    lapsed_not_yet_marked: int
+    withdrawn_30d: int
+    granted_30d: int
+    expiring_30d: int
+    expiring_7d: int
+    total: int
+
+
+class ConsentSliceOut(BaseModel):
+    label: str
+    value: int
+
+
+class ExpiringConsentOut(BaseModel):
+    principal_ref: str | None
+    principal_email: str | None
+    purpose_key: str
+    purpose_name: str
+    expires_at: Any
+
+
+class ConsentDashboardOut(BaseModel):
+    overview: ConsentOverviewOut
+    # Only non-zero slices. A chart that draws a shape over an empty set is the
+    # fabrication this codebase has already removed twice.
+    status_split: list[ConsentSliceOut]
+    expiring_soon: list[ExpiringConsentOut]
+
+
+@router.get("/consents/overview", response_model=ConsentDashboardOut,
+            summary="Consent totals, counted against the clock")
+async def consent_overview(
+    current: Annotated[CurrentUser, Depends(require(Capability.CONSENT_READ))],
+) -> Any:
+    """What the admin dashboard's consent tiles read.
+
+    They were the last sample data on that page while the consent module itself was
+    live — marked SAMPLE, so disclosed rather than dishonest, but the only figures
+    a DPO could not act on.
+
+    Expiry is evaluated per request rather than by a sweep, for the same reason
+    `/consents/check` does it: a nightly job leaves a window in which an expired
+    consent still counts as active, and processing in that window is unlawful.
+    """
+    return {
+        "overview": await consent_service.overview(
+            current.session, tenant_id=current.tenant_id
+        ),
+        "status_split": await consent_service.status_split(
+            current.session, tenant_id=current.tenant_id
+        ),
+        "expiring_soon": await consent_service.expiring_soon(
+            current.session, tenant_id=current.tenant_id, days=7
+        ),
+    }

@@ -480,3 +480,141 @@ async def test_a_console_consent_check_is_audited(app_session_factory, tenant_a)
         assert entry.payload["purpose_key"] == "probe_purpose"
         assert entry.payload["allowed"] is False
         assert entry.payload["status"] == "never_given"
+
+
+# --------------------------------------------------------------------------- #
+# Dashboard aggregates
+# --------------------------------------------------------------------------- #
+#
+# These replaced the last sample figures on the admin dashboard. The property that
+# matters is not the arithmetic — it is that `overview` and `check` agree. A
+# dashboard reporting more active consents than validation will honour is worse
+# than no dashboard, because somebody would act on it.
+
+class TestConsentOverview:
+
+    async def test_active_excludes_a_consent_past_its_expiry(
+        self, app_session_factory, tenant_a
+    ):
+        """The one that matters.
+
+        A row still reading `active` past its expiry is not active — `check` says
+        so, and this must agree or the two disagree about the same consent.
+        """
+        async with scoped(app_session_factory, tenant_a["id"]) as s:
+            purpose = await notice_service.create_purpose(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                key="ov_live", name="Live", category="Contact Data",
+            )
+            notice = await notice_service.draft_notice(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                purpose_id=purpose.id, content="x", data_collected="Email",
+                user_rights="Withdraw", withdrawal_policy="Stops",
+            )
+            await notice_service.publish_notice(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a), notice_id=notice.id
+            )
+            p1 = DataPrincipal(tenant_id=tenant_a["id"], external_id="ov-1",
+                               email="a@example.com")
+            p2 = DataPrincipal(tenant_id=tenant_a["id"], external_id="ov-2",
+                               email="b@example.com")
+            s.add_all([p1, p2]); await s.flush()
+
+            for p in (p1, p2):
+                await consent_service.grant(
+                    s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                    principal_id=p.id, purpose_id=purpose.id,
+                )
+            # Lapse one, leaving its status untouched — the state a nightly sweep
+            # would not yet have corrected.
+            await s.execute(
+                text("UPDATE consents SET expires_at = now() - interval '1 day' "
+                     "WHERE principal_id = :p"),
+                {"p": str(p1.id)},
+            )
+
+            counts = await consent_service.overview(s, tenant_id=tenant_a["id"])
+            assert counts["active"] == 1, "the lapsed consent must not count as active"
+            assert counts["lapsed_not_yet_marked"] == 1
+            assert counts["total"] == 2
+
+            # And `check` agrees about the same row, which is the whole point.
+            verdict = await consent_service.check(
+                s, tenant_id=tenant_a["id"], principal_id=p1.id,
+                purpose_key="ov_live",
+            )
+            assert verdict["allowed"] is False
+            assert verdict["status"] == "expired"
+
+    async def test_an_empty_workspace_reports_zeros_not_nothing(
+        self, app_session_factory, tenant_a
+    ):
+        """Zero is a real answer here — nobody has consented yet."""
+        async with scoped(app_session_factory, tenant_a["id"]) as s:
+            counts = await consent_service.overview(s, tenant_id=tenant_a["id"])
+            assert counts["active"] == 0
+            assert counts["total"] == 0
+            # But the chart must render nothing rather than a shape over zeros.
+            assert await consent_service.status_split(s, tenant_id=tenant_a["id"]) == []
+
+    async def test_the_status_split_has_no_zero_slices(
+        self, app_session_factory, tenant_a
+    ):
+        """A chart that draws a slice for an empty set is a fabricated shape.
+
+        This codebase has already had to remove two of those.
+        """
+        async with scoped(app_session_factory, tenant_a["id"]) as s:
+            purpose = await notice_service.create_purpose(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                key="ov_split", name="Split", category="Contact Data",
+            )
+            notice = await notice_service.draft_notice(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                purpose_id=purpose.id, content="x", data_collected="Email",
+                user_rights="Withdraw", withdrawal_policy="Stops",
+            )
+            await notice_service.publish_notice(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a), notice_id=notice.id
+            )
+            p = DataPrincipal(tenant_id=tenant_a["id"], external_id="ov-3",
+                              email="c@example.com")
+            s.add(p); await s.flush()
+            await consent_service.grant(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                principal_id=p.id, purpose_id=purpose.id,
+            )
+
+            slices = await consent_service.status_split(s, tenant_id=tenant_a["id"])
+            assert all(sl["value"] > 0 for sl in slices)
+            assert [sl["label"] for sl in slices] == ["Active"], \
+                "no Withdrawn or Expired slice when neither has happened"
+
+    async def test_the_aggregates_are_tenant_isolated(
+        self, app_session_factory, tenant_a, tenant_b
+    ):
+        async with scoped(app_session_factory, tenant_b["id"]) as s:
+            purpose = await notice_service.create_purpose(
+                s, tenant_id=tenant_b["id"], actor=_actor(tenant_b),
+                key="ov_b", name="B", category="Contact Data",
+            )
+            notice = await notice_service.draft_notice(
+                s, tenant_id=tenant_b["id"], actor=_actor(tenant_b),
+                purpose_id=purpose.id, content="x", data_collected="Email",
+                user_rights="Withdraw", withdrawal_policy="Stops",
+            )
+            await notice_service.publish_notice(
+                s, tenant_id=tenant_b["id"], actor=_actor(tenant_b), notice_id=notice.id
+            )
+            p = DataPrincipal(tenant_id=tenant_b["id"], external_id="ov-b",
+                              email="b1@example.com")
+            s.add(p); await s.flush()
+            await consent_service.grant(
+                s, tenant_id=tenant_b["id"], actor=_actor(tenant_b),
+                principal_id=p.id, purpose_id=purpose.id,
+            )
+            await s.commit()
+
+        async with scoped(app_session_factory, tenant_a["id"]) as s:
+            counts = await consent_service.overview(s, tenant_id=tenant_a["id"])
+            assert counts["total"] == 0, "tenant A must not see tenant B's consents"

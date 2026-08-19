@@ -176,3 +176,19 @@ export async function consentHistoryRows(user) {
 
   return { rows, purposes };
 }
+
+/**
+ * Consent totals for the dashboard.
+ *
+ * `overview.active` counts consents the product will actually honour — status
+ * active AND expiry not passed, the same judgement `/consents/check` makes.
+ * `lapsed_not_yet_marked` is the gap: rows still reading active that validation
+ * would already refuse.
+ *
+ * Do not derive these in the browser from a list. The list is paginated, expiry
+ * is evaluated server-side against the clock, and a figure computed here would
+ * drift from the one the validation endpoint enforces.
+ */
+export function consentOverview() {
+  return apiFetch("/consents/overview");
+}

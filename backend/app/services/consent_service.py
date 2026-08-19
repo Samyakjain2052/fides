@@ -21,7 +21,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Conflict, NotFound
@@ -326,6 +326,135 @@ async def for_principal(
         .order_by(Purpose.name)
     )
     return list(rows.all())
+
+
+async def overview(session: AsyncSession, *, tenant_id: uuid.UUID) -> dict[str, Any]:
+    """Consent totals for the dashboard, counted rather than sampled.
+
+    These tiles were the last sample data on the admin dashboard while the consent
+    module itself was live — disclosed with a SAMPLE chip, so not a lie, but the
+    only figures on that page a DPO could not act on.
+
+    **Expiry is evaluated against the clock here, exactly as `check` does.** A
+    consent whose `expires_at` has passed is counted as expired even though its row
+    still says `active`, because that is what `check` will tell a caller and these
+    two must not disagree. A dashboard reporting more active consents than the
+    validation endpoint would honour is worse than no dashboard.
+
+    One query per figure, each on an indexed predicate. Cheap enough for a screen
+    somebody opens every morning.
+    """
+    now = datetime.now(UTC)
+    month_ago = now - timedelta(days=30)
+    base = select(func.count()).select_from(Consent).where(Consent.tenant_id == tenant_id)
+
+    # Genuinely active: status says so AND the clock agrees.
+    live = base.where(
+        Consent.status == "active",
+        or_(Consent.expires_at.is_(None), Consent.expires_at > now),
+    )
+    # Marked active but already lapsed. Worth its own number: it is the gap between
+    # what the table says and what the product will permit, and a large one usually
+    # means nobody is renewing.
+    lapsed = base.where(
+        Consent.status == "active",
+        Consent.expires_at.isnot(None),
+        Consent.expires_at <= now,
+    )
+    return {
+        "active": (await session.scalar(live)) or 0,
+        "lapsed_not_yet_marked": (await session.scalar(lapsed)) or 0,
+        "withdrawn_30d": (await session.scalar(
+            base.where(
+                Consent.status == "withdrawn",
+                Consent.withdrawn_at.isnot(None),
+                Consent.withdrawn_at >= month_ago,
+            )
+        )) or 0,
+        "granted_30d": (await session.scalar(
+            base.where(Consent.given_at >= month_ago)
+        )) or 0,
+        "expiring_30d": (await session.scalar(
+            base.where(
+                Consent.status == "active",
+                Consent.expires_at.isnot(None),
+                Consent.expires_at > now,
+                Consent.expires_at <= now + timedelta(days=30),
+            )
+        )) or 0,
+        "expiring_7d": (await session.scalar(
+            base.where(
+                Consent.status == "active",
+                Consent.expires_at.isnot(None),
+                Consent.expires_at > now,
+                Consent.expires_at <= now + timedelta(days=7),
+            )
+        )) or 0,
+        "total": (await session.scalar(base)) or 0,
+    }
+
+
+async def status_split(
+    session: AsyncSession, *, tenant_id: uuid.UUID
+) -> list[dict[str, Any]]:
+    """The donut's data, by effective status.
+
+    Grouped in Python over three counts rather than `GROUP BY status`, because the
+    stored status is not the effective one — a row reading `active` past its expiry
+    belongs in `expired`. A GROUP BY would have been shorter and wrong.
+
+    Returns only non-zero slices: a chart that renders a shape for an empty set is
+    the fabrication this codebase has already had to remove twice.
+    """
+    counts = await overview(session, tenant_id=tenant_id)
+    expired_marked = (await session.scalar(
+        select(func.count()).select_from(Consent).where(
+            Consent.tenant_id == tenant_id, Consent.status == "expired"
+        )
+    )) or 0
+    withdrawn_all = (await session.scalar(
+        select(func.count()).select_from(Consent).where(
+            Consent.tenant_id == tenant_id, Consent.status == "withdrawn"
+        )
+    )) or 0
+
+    slices = [
+        {"label": "Active", "value": counts["active"]},
+        {"label": "Withdrawn", "value": withdrawn_all},
+        {"label": "Expired", "value": expired_marked + counts["lapsed_not_yet_marked"]},
+    ]
+    return [s for s in slices if s["value"] > 0]
+
+
+async def expiring_soon(
+    session: AsyncSession, *, tenant_id: uuid.UUID, days: int = 7, limit: int = 20
+) -> list[dict[str, Any]]:
+    """Consents lapsing inside `days`, soonest first — the actionable list."""
+    now = datetime.now(UTC)
+    rows = await session.execute(
+        select(Consent, Purpose, DataPrincipal)
+        .join(Purpose, Purpose.id == Consent.purpose_id)
+        .join(DataPrincipal, DataPrincipal.id == Consent.principal_id)
+        .where(
+            Consent.tenant_id == tenant_id,
+            Consent.status == "active",
+            Consent.expires_at.isnot(None),
+            Consent.expires_at > now,
+            Consent.expires_at <= now + timedelta(days=days),
+        )
+        .order_by(Consent.expires_at)
+        .limit(limit)
+    )
+    return [
+        {
+            "principal_ref": principal.external_id,
+            "principal_email": principal.email,
+            "purpose_key": purpose.key,
+            "purpose_name": purpose.name,
+            "expires_at": consent.expires_at,
+        }
+        for consent, purpose, principal in rows.all()
+    ]
 
 
 async def check(

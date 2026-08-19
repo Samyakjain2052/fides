@@ -6,17 +6,15 @@
 // ============================================================================
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getAdminDashboard } from "../../api";
 import { CATEGORY_LABEL, listGrievances, officer as fetchOfficer } from "../../api/grievances";
 import { listBreaches } from "../../api/breaches";
 import { queueRows } from "../../api/dsar";
 import { jobs as fetchJobs } from "../../api/users";
+import { consentOverview } from "../../api/consent";
 import StatCard from "../../components/common/StatCard";
 import StatusBadge from "../../components/common/StatusBadge";
 import SLACountdown from "../../components/common/SLACountdown";
 import { BarChart, DonutChart } from "../../components/common/Charts";
-import { SampleTag } from "../../components/common/PreviewBanner";
-import { isPreview } from "../../config/modules";
 
 const DAY = 864e5;
 
@@ -30,7 +28,6 @@ function EmptyChart({ children }) {
 }
 
 export default function AdminDashboard() {
-  const [data, setData] = useState(null);
   // Grievances are live now, so they are read from the API rather than taken
   // from the dashboard mock. A real module showing sample numbers on the one
   // screen a DPO opens every morning is the exact failure the honesty layer
@@ -53,9 +50,11 @@ export default function AdminDashboard() {
   // implies they are automatic. That inversion is why it is shown here and not on
   // a settings page somebody visits twice a year.
   const [jobs, setJobs] = useState(null);
+  // The last sample figures on this page. Counted server-side against the clock,
+  // so they agree with what /consents/check will actually permit.
+  const [consent, setConsent] = useState(null);
 
   useEffect(() => {
-    getAdminDashboard().then(setData);
     listGrievances({ overdueOnly: true })
       .then(setGrievances)
       .catch(() => setGrievances(null));
@@ -67,11 +66,15 @@ export default function AdminDashboard() {
     // Requires TENANT_MANAGE, so a non-admin simply sees nothing here rather than
     // an error for a permission they are not meant to have.
     fetchJobs().then(setJobs).catch(() => setJobs(null));
+    consentOverview().then(setConsent).catch(() => setConsent(null));
   }, []);
 
-  if (!data) return <p className="text-sm text-muted">Loading compliance summary…</p>;
-
-  const { stats, attention, charts } = data;
+  // Every source is independent now, so the page renders as each arrives rather
+  // than blocking on the slowest. A tile with no answer yet shows an em dash — it
+  // does not show a zero, because a zero is a measurement and "not loaded" is not.
+  if (!consent && !dsar && !grievances) {
+    return <p className="text-sm text-muted">Loading compliance summary…</p>;
+  }
   const gCounts = grievances?.counts;
   const overdueGrievances = grievances?.items ?? [];
 
@@ -86,6 +89,7 @@ export default function AdminDashboard() {
     const left = new Date(r.deadline_at) - Date.now();
     return left > 0 && left < 5 * DAY;
   });
+  const expiringSoon = consent?.expiring_soon ?? [];
   const dsarByType = Object.entries(
     dsarRows.reduce((acc, r) => ({ ...acc, [r.type]: (acc[r.type] || 0) + 1 }), {}),
   ).map(([label, value]) => ({ label, value }));
@@ -110,10 +114,10 @@ export default function AdminDashboard() {
           </span>
           <p className="min-w-0 flex-1 text-sm text-ink">
             <strong className="font-semibold">
-              Data request and grievance figures are real.
+              Every figure on this page is read from live data.
             </strong>{" "}
-            The consent tiles and the consent chart on this page are still sample
-            data.{" "}
+            Consent totals evaluate expiry against the clock, so they agree with
+            what consent validation will actually permit.{" "}
             <Link to="/roadmap" className="text-teal underline">
               See what is live today
             </Link>
@@ -193,8 +197,22 @@ export default function AdminDashboard() {
       )}
       {/* ---------------------------------------------------------- stats -- */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-        <StatCard label="Total active consents" value={stats.active_consents} tone="success" sample />
-        <StatCard label="Withdrawn this month" value={stats.withdrawn_this_month} tone="neutral" sample />
+        <StatCard
+          label="Active consents"
+          value={consent ? consent.overview.active : "—"}
+          tone="success"
+          to="/admin/consent-validation"
+          hint={
+            consent?.overview.lapsed_not_yet_marked
+              ? `${consent.overview.lapsed_not_yet_marked} more have lapsed but are still marked active`
+              : "Status active, and not past their expiry"
+          }
+        />
+        <StatCard
+          label="Withdrawn in 30 days"
+          value={consent ? consent.overview.withdrawn_30d : "—"}
+          tone="neutral"
+        />
         <StatCard
           label="Open data requests"
           value={dsar ? openDsar.length : "—"}
@@ -216,10 +234,9 @@ export default function AdminDashboard() {
         />
         <StatCard
           label="Open grievances"
-          value={gCounts ? gCounts.open : stats.open_grievances}
+          value={gCounts ? gCounts.open : "—"}
           tone={gCounts?.overdue ? "danger" : "warning"}
           to="/admin/grievances"
-          sample={!gCounts}
           badge={
             gCounts?.overdue ? (
               <span className="rounded-full bg-danger px-2 py-0.5 text-[10px] font-bold text-white">
@@ -228,7 +245,16 @@ export default function AdminDashboard() {
             ) : null
           }
         />
-        <StatCard label="Expiring in 30 days" value={stats.expiring_30} tone="warning" sample />
+        <StatCard
+          label="Expiring in 30 days"
+          value={consent ? consent.overview.expiring_30d : "—"}
+          tone={consent?.overview.expiring_7d ? "warning" : "neutral"}
+          hint={
+            consent?.overview.expiring_7d
+              ? `${consent.overview.expiring_7d} inside 7 days`
+              : undefined
+          }
+        />
       </div>
 
       {/* --------------------------------------------------------- charts -- */}
@@ -249,14 +275,14 @@ export default function AdminDashboard() {
         </section>
 
         <section className="card p-5">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="font-semibold text-ink">Consent status distribution</h2>
-            {isPreview("consent") && <SampleTag />}
-          </div>
-          <p className="text-xs text-muted">All consent records</p>
+          <h2 className="font-semibold text-ink">Consent status distribution</h2>
+          <p className="text-xs text-muted">
+            By effective status — a consent past its expiry counts as expired even
+            if its row still says active.
+          </p>
           <div className="mt-4">
-            {charts.status_split.length ? (
-              <DonutChart data={charts.status_split} />
+            {consent?.status_split?.length ? (
+              <DonutChart data={consent.status_split} />
             ) : (
               <EmptyChart>No consent records yet.</EmptyChart>
             )}
@@ -360,17 +386,21 @@ export default function AdminDashboard() {
           {/* Consents lapsing this week */}
           <div className="px-5 py-4">
             <p className="text-sm font-medium text-ink">
-              Consents expiring in the next 7 days ({attention.consents_expiring_7.length})
+              Consents expiring in the next 7 days ({expiringSoon.length})
             </p>
-            {attention.consents_expiring_7.length === 0 ? (
+            {expiringSoon.length === 0 ? (
               <p className="mt-1 text-sm text-muted">None expiring this week.</p>
             ) : (
               <ul className="mt-2 space-y-2">
-                {attention.consents_expiring_7.map((c) => (
-                  <li key={c.id}
+                {/* Field names are the API's, not the old mock's — `c.purpose`
+                    and `c.user_id` would both have rendered blank. */}
+                {expiringSoon.map((c) => (
+                  <li key={`${c.principal_ref}-${c.purpose_key}`}
                       className="flex flex-wrap items-center gap-3 rounded-lg border border-warning/40 bg-warning/5 px-3 py-2 text-sm">
-                    <span className="text-ink">{c.purpose}</span>
-                    <span className="text-muted">{c.user_id}</span>
+                    <span className="text-ink">{c.purpose_name}</span>
+                    <span className="text-muted">
+                      {c.principal_email || c.principal_ref}
+                    </span>
                     <span className="ml-auto text-muted">
                       expires {new Date(c.expires_at).toLocaleDateString()}
                     </span>
