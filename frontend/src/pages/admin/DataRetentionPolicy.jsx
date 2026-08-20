@@ -19,6 +19,27 @@ import StatusBadge from "../../components/common/StatusBadge";
 
 const DAY = 864e5;
 
+/**
+ * A retention period in words.
+ *
+ * `Math.round(days / 365) + " yr"` rendered a 180-day policy as "0 yr" and a
+ * 395-day one as "1 yr", which reads as a rounding error rather than a period.
+ * Months below two years, years above, and never a zero.
+ */
+function humanPeriod(days) {
+  if (days < 31) return `${days} days`;
+  const months = Math.round(days / 30.44);
+  if (days < 730) return `${months} mo`;
+  const years = days / 365.25;
+  const rounded = Math.round(years);
+  // One decimal only where it changes the answer: 8 yr, not 8.0 yr. Testing
+  // `years % 1` instead compares the fractional part against the threshold, so
+  // 2920 days (7.995 years) failed it from above and printed "8.0 yr".
+  return Math.abs(years - rounded) >= 0.1
+    ? `${years.toFixed(1)} yr`
+    : `${rounded} yr`;
+}
+
 export default function DataRetentionPolicy() {
   const { notify } = useApp();
   const [policies, setPolicies] = useState([]);
@@ -129,15 +150,31 @@ export default function DataRetentionPolicy() {
     }
   };
 
-  // Next purge = last purge + retention period, shown as a simple calendar list.
+  // Next purge = last run + retention period.
+  //
+  // Two bugs lived in this block. It read `p.last_purge`, which the API does not
+  // return — the field is `last_run_at`, and `last_purge` is a leftover from the
+  // mock. `new Date(undefined)` is an Invalid Date, so `next` was NaN, the row
+  // printed "Invalid Date", and `NaN > 0` being false sent it down the else
+  // branch and labelled it **"due now"**. Every policy that had never been run
+  // therefore announced a deletion was due immediately, on the one screen whose
+  // subject is destroying people's data.
+  //
+  // A policy that has never run has no next date to compute, so it is not given
+  // one. `next: null` is carried through and the row says so.
   const schedule = useMemo(
     () =>
       policies
         .map((p) => {
-          const next = new Date(new Date(p.last_purge).getTime() + p.retention_days * DAY);
-          return { ...p, next };
+          const last = p.last_run_at ? new Date(p.last_run_at) : null;
+          const valid = last && !Number.isNaN(last.getTime());
+          return {
+            ...p,
+            next: valid ? new Date(last.getTime() + p.retention_days * DAY) : null,
+          };
         })
-        .sort((a, b) => a.next - b.next),
+        // Never-run policies sort last rather than pretending to be imminent.
+        .sort((a, b) => (a.next?.getTime() ?? Infinity) - (b.next?.getTime() ?? Infinity)),
     [policies]
   );
 
@@ -289,12 +326,18 @@ export default function DataRetentionPolicy() {
                     <div>
                       <dt className="text-xs text-muted">Retention period</dt>
                       <dd className="text-ink">
-                        {p.retention_days} days ({Math.round(p.retention_days / 365)} yr)
+                        {p.retention_days} days ({humanPeriod(p.retention_days)})
                       </dd>
                     </div>
                     <div>
                       <dt className="text-xs text-muted">Last purge</dt>
-                      <dd className="text-ink">{p.last_purge}</dd>
+                      {/* `last_purge` here too — it rendered as an empty cell,
+                          which at least did not lie about a date. */}
+                      <dd className="text-ink">
+                        {p.last_run_at
+                          ? new Date(p.last_run_at).toLocaleDateString()
+                          : "never run"}
+                      </dd>
                     </div>
                     <div>
                       <dt className="text-xs text-muted">Notify before</dt>
@@ -338,13 +381,28 @@ export default function DataRetentionPolicy() {
         </div>
         <ul className="divide-y divide-line">
           {schedule.map((p) => {
-            const days = Math.ceil((p.next - Date.now()) / DAY);
+            const days =
+              p.next === null ? null : Math.ceil((p.next - Date.now()) / DAY);
             return (
               <li key={p.id} className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
                 <span className="w-40 font-medium text-ink">{p.category}</span>
-                <span className="text-muted">{p.next.toLocaleDateString()}</span>
-                <span className={days < 30 ? "font-medium text-warning" : "text-muted"}>
-                  {days > 0 ? `in ${days} days` : "due now"}
+                <span className="text-muted">
+                  {p.next ? p.next.toLocaleDateString() : "—"}
+                </span>
+                <span
+                  className={
+                    days !== null && days < 30
+                      ? "font-medium text-warning"
+                      : "text-muted"
+                  }
+                >
+                  {/* "never run" and "due now" are opposite claims, and the old
+                      code collapsed the first into the second. */}
+                  {days === null
+                    ? "never run — no purge scheduled"
+                    : days > 0
+                      ? `in ${days} days`
+                      : "due now"}
                 </span>
                 {!p.auto_delete && <span className="tag">needs a manual run</span>}
                 {p.exemption && (

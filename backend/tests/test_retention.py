@@ -734,3 +734,91 @@ async def test_an_unknown_field_is_refused_rather_than_dropped(
         )
         assert resp.status_code == 422, resp.text
         assert "data_category" in resp.text
+
+
+# --------------------------------------------------------------------------- #
+# Duplicate policy names.
+#
+# `uq_retention_policies_tenant_name` used to surface as an unhandled
+# IntegrityError, so the API answered a duplicate name with a 500 and "Something
+# went wrong" — no indication of which field, on a form whose only problem was
+# one text input. Found by a seeding script on its second run.
+# --------------------------------------------------------------------------- #
+
+async def test_a_duplicate_policy_name_is_refused_not_a_server_error(
+    app_session_factory, tenant_a
+):
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        await _policy(s, tenant_a, name="Marketing contact data")
+        with pytest.raises(Conflict) as caught:
+            await _policy(s, tenant_a, name="Marketing contact data")
+        # The name has to be in the message. That is the actionable part.
+        assert "Marketing contact data" in str(caught.value)
+
+
+async def test_the_session_survives_a_refused_duplicate(app_session_factory, tenant_a):
+    """The point of the savepoint, asserted directly.
+
+    Without one, the failed INSERT poisons the transaction and the *next*
+    unrelated write fails too — so a user who mistyped a name would find the
+    whole request broken rather than one field rejected.
+    """
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        await _policy(s, tenant_a, name="KYC records")
+        with pytest.raises(Conflict):
+            await _policy(s, tenant_a, name="KYC records")
+
+        # Same session, still usable.
+        survivor = await _policy(s, tenant_a, name="Support recordings")
+        assert survivor.id is not None
+        total = await s.scalar(
+            select(func.count()).select_from(RetentionPolicy).where(
+                RetentionPolicy.tenant_id == tenant_a["id"]
+            )
+        )
+        assert total == 2
+
+
+async def test_two_tenants_may_each_have_a_policy_of_the_same_name(
+    app_session_factory, tenant_a, tenant_b
+):
+    """The constraint is per tenant. If this ever became global, one customer
+    would be able to discover another customer's policy names by collision."""
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        await _policy(s, tenant_a, name="Marketing contact data")
+    async with scoped(app_session_factory, tenant_b["id"]) as s:
+        mine = await _policy(s, tenant_b, name="Marketing contact data")
+        assert mine.id is not None
+
+
+async def test_renaming_onto_another_policys_name_is_refused(
+    app_session_factory, tenant_a
+):
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        await _policy(s, tenant_a, name="Analytics events")
+        second = await _policy(s, tenant_a, name="Call recordings")
+        with pytest.raises(Conflict):
+            await retention_service.update_policy(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                policy_id=second.id, name="Analytics events",
+            )
+
+
+async def test_a_policy_may_be_renamed_to_something_free(
+    app_session_factory, tenant_a
+):
+    """The guard must not block the ordinary case, including renaming a policy to
+    the name it already has."""
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        policy = await _policy(s, tenant_a, name="Call recordings")
+        renamed = await retention_service.update_policy(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+            policy_id=policy.id, name="Support call recordings",
+        )
+        assert renamed.name == "Support call recordings"
+
+        unchanged = await retention_service.update_policy(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+            policy_id=policy.id, name="Support call recordings",
+        )
+        assert unchanged.name == "Support call recordings"

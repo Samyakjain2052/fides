@@ -23,6 +23,7 @@ from typing import Any
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Conflict, NotFound
@@ -481,8 +482,21 @@ async def create_policy(
         exemption_code=exemption_code,
         exemption_reference=(exemption_reference or "").strip() or None,
     )
-    session.add(policy)
-    await session.flush()
+    # A savepoint, so a name collision does not poison the caller's transaction.
+    # `uq_retention_policies_tenant_name` used to surface as a 500 with "Something
+    # went wrong", which tells the person filling in the form nothing about the one
+    # field they need to change.
+    try:
+        async with session.begin_nested():
+            session.add(policy)
+            await session.flush()
+    except IntegrityError as exc:
+        raise Conflict(
+            f"A retention policy called {policy.name!r} already exists. A policy's "
+            "name is what the live run demands back before it destroys anything, "
+            "and what identifies it in a purge receipt, so two cannot share one. "
+            "Rename this one, or edit the existing policy instead."
+        ) from exc
 
     await audit_service.record(
         session, tenant_id=tenant_id, actor=actor,
@@ -583,6 +597,27 @@ async def update_policy(
             "automatically, so more people become eligible for purging without "
             "anybody pressing anything. Preview it first, then confirm."
         )
+
+    # Renaming onto another policy's name hits the same unique constraint that
+    # `create_policy` guards. Checked with a SELECT rather than a savepoint,
+    # because by this point `policy` is already dirty and a failed flush inside a
+    # nested block is a worse thing to reason about than a benign race: if two
+    # requests rename to the same name at once the constraint still refuses one of
+    # them, and that is the only case this misses.
+    new_name = (merged.get("name") or "").strip()
+    if new_name and new_name != policy.name:
+        clash = await session.scalar(
+            select(RetentionPolicy.id).where(
+                RetentionPolicy.tenant_id == tenant_id,
+                RetentionPolicy.name == new_name,
+                RetentionPolicy.id != policy.id,
+            )
+        )
+        if clash is not None:
+            raise Conflict(
+                f"Another retention policy is already called {new_name!r}. Names "
+                "identify a policy in its purge receipts, so two cannot share one."
+            )
 
     before = {f: getattr(policy, f) for f in sorted(EDITABLE_FIELDS)}
     for field, value in merged.items():

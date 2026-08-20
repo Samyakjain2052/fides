@@ -266,10 +266,48 @@ make data        # raw rows from every database   make open       # console + Fi
 make dsar EMAIL=someone@example.com
 make cms         # DataShield CMS with hot reload   make cms-build  # production bundle
 make api         # DataShield backend + its Postgres  make api-test   # backend suite
+make seed NAME="Kaveri Bank"   # a demo workspace with data in it
 ```
 
 `make` is only a shortcut — every target is a plain `docker compose` command, and
 `make` with no arguments lists them.
+
+### Getting something to look at
+
+A freshly registered workspace contains four purposes and nothing else. That is
+correct — it is what a real signup looks like — but every screen shows zero, so
+there is nothing to evaluate and one empty workspace is indistinguishable from
+the next.
+
+```bash
+make seed NAME="Kaveri Bank"      # register a workspace and fill it
+./scripts/seed_demo.py --help     # or drive it directly
+```
+
+It prints the sign-in details when it finishes. You get twelve data principals,
+a consent ledger with withdrawals in it, eight rights requests spread across the
+workflow, five complaints in five different states (one of them overdue and
+escalated), four retention policies, and two breaches — one closed with the Board
+and the affected people notified, one still open inside the 72-hour window.
+
+Two things worth knowing:
+
+* **Everything goes through the HTTP API the browser uses.** No INSERTs, no
+  fixtures. A seeder with database access can show you a product that does not
+  exist; this one can only show you what the API will actually produce, which is
+  why it took several passes to write — the state machines refused the shortcuts.
+* **Timestamps are shifted backwards afterwards, and only timestamps.** The
+  server stamps `submitted_at` from the clock, so filed-today is the only thing
+  the API can create, and nothing would ever be overdue. The audit trail is left
+  alone because it is hash-chained — so it honestly reports the seed run as when
+  each event was recorded, while the business rows read as several weeks of
+  history. Pass `--no-backdate` if you would rather have the discrepancy than the
+  overdue states.
+
+To seed an existing workspace instead of a new one, pass `--workspace`,
+`--email` and `--password`. It refuses to seed a workspace that already has data
+unless you pass `--force`, because requests, complaints and breaches are not
+idempotent and a second run doubles them.
 
 **Adding another database, SaaS tool, or connector?** That is the main way to
 extend this — see **[CONTRIBUTING.md](CONTRIBUTING.md)**, which has the

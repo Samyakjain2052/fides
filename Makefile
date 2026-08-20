@@ -8,11 +8,12 @@
 #   make dsar       run an access DSAR for demo@example.com
 # =============================================================================
 .DEFAULT_GOAL := help
-.PHONY: help up down stop reset build cms cms-build cms-docker api api-test \
+.PHONY: help up down stop reset build cms cms-build cms-docker api api-test seed \
         api-migrate api-revision api-logs api-verify-db azure-verify-db ps logs logs-all provision open dsar \
         dsar-erasure data health test
 
 EMAIL ?= demo@example.com
+NAME  ?= Demo Company
 
 help:  ## show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -51,11 +52,17 @@ api:  ## start the CMS backend (multi-tenant API) + its Postgres
 	@echo "  API      http://localhost:$$(grep -E '^CMS_BACKEND_PORT=' .env | cut -d= -f2 || echo 8100)"
 	@echo "  Swagger  http://localhost:$$(grep -E '^CMS_BACKEND_PORT=' .env | cut -d= -f2 || echo 8100)/docs"
 
+# Runs the `cms-test` service, NOT cms-backend, and the difference is not
+# cosmetic. cms-backend is the `runtime` image and has no pytest in it, so this
+# target used to fail outright; the environment it passed also pointed the suite
+# at `datashield` — the database holding your demo data — and the suite truncates
+# every table between tests. cms-test is the `dev` image and is wired to
+# `datashield_test`.
 api-test:  ## run the backend test suite (RLS isolation, auth, audit chain)
-	docker compose run --rm --no-deps \
-	  -e DS_DATABASE_URL="postgresql+asyncpg://datashield_app:apppassword@cms-db:5432/datashield" \
-	  -e DS_DATABASE_OWNER_URL="postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield" \
-	  cms-backend pytest -q
+	docker compose run --rm cms-test pytest -q
+
+seed:  ## fill a demo workspace with realistic data: make seed NAME="Kaveri Bank"
+	./scripts/seed_demo.py --register "$(NAME)"
 
 api-migrate:  ## apply backend migrations
 	docker compose run --rm --no-deps cms-backend alembic upgrade head
