@@ -1,5 +1,19 @@
 # Deployment plan
 
+> **This document is partly out of date, and §0 below is the stale part.** It was
+> written when the CMS was tenancy, auth and an audit chain behind mock screens.
+> All twelve modules are now live against Postgres, the mock data is deleted, and
+> there are 436 backend tests. §0's "nothing else is real" is no longer true.
+>
+> **§1 is still accurate** — the eight pre-flight blockers, and the record of why
+> each fix was made, including the two that were found by testing in a browser
+> rather than by reading code. That section is the reason a deploy works at all,
+> so it is kept as written.
+>
+> For the current, decided plan — product only, Azure default hostnames, open
+> registration — use **[AZURE_GO_LIVE.md](AZURE_GO_LIVE.md)**, which also records
+> what is already provisioned in the subscription.
+
 How this repo gets onto Azure. [AZURE_DEPLOYMENT.md](AZURE_DEPLOYMENT.md) is the
 *target design* — what maps to what, and why. This is the *execution order*: what
 to do, in what sequence, and what has to be fixed before any of it works.
@@ -13,7 +27,7 @@ This repo contains two products at very different maturities:
 | | State | Deployable? |
 | --- | --- | --- |
 | **DSAR demo** — Fides across app-postgres, app-mongo, app-mysql, Zoho CRM, plus the proof console at `/ui` | **Genuinely works.** One request, four engines, verified end to end by `scripts/acceptance.sh` | **Yes, today** |
-| **DataShield CMS** — the DPDP consent product | Backend Phases 0–2 only: tenancy, RLS, auth, audit chain. Consent, DSAR, grievances, retention and reports are **frontend mock data** (ARCHITECTURE.md §9) | Signup and login are real; nothing else is |
+| **DataShield CMS** — the DPDP consent product | ~~Backend Phases 0–2 only … frontend mock data~~ **Superseded.** Twelve live modules against Postgres: consent, DSAR, grievances, retention, reports, audit, breach, notifications, users. `consent_guardian` is the one remaining preview module | **Yes** — see [AZURE_GO_LIVE.md](AZURE_GO_LIVE.md) |
 
 **So this plan deploys a demo/pilot environment, not a customer-facing SaaS.**
 That is worth being explicit about, because the two need different things: a demo

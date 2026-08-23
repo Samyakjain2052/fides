@@ -79,8 +79,23 @@ api-verify-db:  ## GATE: assert tenant isolation + audit immutability on the tar
 	  -e DS_DATABASE_OWNER_URL="postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield" \
 	  cms-backend python scripts/verify_database.py
 
-azure-verify-db:  ## same gate, against Azure. Reads DS_* from backend/.env
-	cd backend && set -a && . ./.env && set +a && python3 scripts/verify_database.py
+# Reads backend/.env.azure, not backend/.env. The Azure credentials have always
+# lived in .env.azure (0600, gitignored) and there is no backend/.env in this
+# repo — so this target sourced a file that does not exist and failed before it
+# reached the verifier. Fails loudly now if the file is missing, because the
+# alternative is verifying the wrong database and believing the result.
+azure-verify-db:  ## same gate, against Azure. Reads DS_* from backend/.env.azure
+	@test -f backend/.env.azure || { \
+	  echo "backend/.env.azure not found — it holds the Azure DS_* values (0600, gitignored)"; \
+	  exit 1; }
+	@# In a container, like api-test, because asyncpg is not installed on the host
+	@# — nothing in this repo runs Python directly on the host. `-e VAR` with no
+	@# value passes it through from the shell, so the secrets never appear in a
+	@# command line or a compose file.
+	set -a && . ./backend/.env.azure && set +a && \
+	docker compose run --rm --no-deps \
+	  -e DS_DATABASE_URL -e DS_DATABASE_OWNER_URL -e DS_DB_SSL_MODE \
+	  cms-test python scripts/verify_database.py
 
 provision:  ## re-apply fides-config/ to a running Fides (idempotent)
 	docker compose up -d fides-provisioner
