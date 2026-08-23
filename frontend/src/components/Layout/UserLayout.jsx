@@ -3,9 +3,10 @@
 // The language switcher and the notification bell live in the header, so both
 // appear on every user-facing screen as the brief requires.
 // ============================================================================
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
-import { MOCK_ORG } from "../../api";
+import { officer as fetchOfficer } from "../../api/grievances";
 import LanguageSwitcher from "../common/LanguageSwitcher";
 import NotificationBell from "../common/NotificationBell";
 import Toast from "../common/Toast";
@@ -28,7 +29,22 @@ const DEMO = [
 ];
 
 export default function UserLayout() {
-  const { user, signOut, t } = useApp();
+  const { user, workspace, signOut, t } = useApp();
+
+  // The Grievance Officer is a statutory contact under §13, so it is read from
+  // the tenant rather than hardcoded. The previous version printed
+  // "Amit Kumar · dpo@example.com" to every data principal in every workspace —
+  // a fabricated contact for a right the Act requires be exercisable.
+  const [officer, setOfficer] = useState(null);
+  useEffect(() => {
+    let live = true;
+    fetchOfficer()
+      .then((o) => live && setOfficer(o))
+      .catch(() => live && setOfficer(null));
+    return () => {
+      live = false;
+    };
+  }, []);
   const navigate = useNavigate();
   const activeModule = moduleForPath(useLocation().pathname);
 
@@ -70,9 +86,9 @@ export default function UserLayout() {
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-surface px-5 py-3">
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-ink">
-              {t("Welcome")}, {user?.name?.split(" ")[0] || "there"}
+              {t("Welcome")}, {user?.full_name?.split(" ")[0] || "there"}
             </p>
-            <p className="truncate text-xs text-muted">{MOCK_ORG.name}</p>
+            <p className="truncate text-xs text-muted">{workspace?.name || ""}</p>
           </div>
           <div className="flex items-center gap-2">
             <NavLink to="/roadmap" className="btn-ghost text-sm">What's live</NavLink>
@@ -118,8 +134,13 @@ export default function UserLayout() {
 
         <footer className="border-t border-line bg-surface px-5 py-3 text-xs text-muted">
           <div className="flex flex-wrap items-center justify-between gap-2">
+            {/* Says so plainly when none is published, rather than inventing
+                one. An organisation without a published officer is a compliance
+                gap the person is entitled to see. */}
             <span>
-              Grievance Officer: {MOCK_ORG.grievanceOfficer} · {MOCK_ORG.grievanceEmail}
+              {officer?.published
+                ? `Grievance Officer: ${officer.name} · ${officer.email}`
+                : "No Grievance Officer has been published for this organisation."}
             </span>
             <NavLink to="/cookie-consent" className="text-teal underline">
               Cookie Settings

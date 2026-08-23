@@ -1065,7 +1065,11 @@ async def test_a_grievance_officer_can_reach_the_queue(client, officer_login):
 @pytest.mark.parametrize(
     "path",
     [
-        "/v1/consents",
+        # `/v1/consents` is covered separately below. It is not a blanket refusal
+        # any more: every role holds the `self:*` capabilities, because a person
+        # does not stop being a data subject by being employed, so an officer may
+        # read their OWN consents. What they must not do is read anybody else's,
+        # which is a statement about scoping rather than about a status code.
         "/v1/dsar",
         "/v1/audit",
         "/v1/admin/users",
@@ -1085,6 +1089,46 @@ async def test_a_grievance_officer_is_refused_everything_else(
     """
     r = await client.get(path, headers=officer_login["headers"])
     assert r.status_code == 403, f"{path} returned {r.status_code}: {r.text[:200]}"
+
+
+async def test_a_grievance_officer_cannot_read_anybody_elses_consents(
+    client, officer_login, app_session_factory, tenant_a
+):
+    """The property the blanket 403 used to stand in for.
+
+    An officer is hired to handle complaints. Reading the workspace's consent
+    ledger is not part of that, and this asserts it against a real other person
+    rather than against a bare path that now requires a parameter.
+    """
+    from app.models.consent import DataPrincipal
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        stranger = DataPrincipal(
+            tenant_id=tenant_a["id"], external_id="not-the-officer",
+            email="stranger@example.com",
+        )
+        s.add(stranger)
+        await s.flush()
+        pid = str(stranger.id)
+        await s.commit()
+
+    for path in (f"/v1/consents?principal_id={pid}",
+                 f"/v1/consents/history?principal_id={pid}",
+                 "/v1/principals"):
+        r = await client.get(path, headers=officer_login["headers"])
+        assert r.status_code == 403, f"{path} returned {r.status_code}: {r.text[:200]}"
+
+
+async def test_a_grievance_officer_may_read_their_own_consents(client, officer_login):
+    """The other half. Staff are data subjects of their employer, and denying an
+    officer their own record would be the same gap `_SELF` was added to close."""
+    me = await client.get("/v1/principals/me", headers=officer_login["headers"])
+    assert me.status_code == 200, me.text
+    r = await client.get(
+        f"/v1/consents?principal_id={me.json()['id']}",
+        headers=officer_login["headers"],
+    )
+    assert r.status_code == 200, r.text
 
 
 async def test_a_grievance_officer_cannot_change_the_published_officer(

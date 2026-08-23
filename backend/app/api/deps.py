@@ -160,6 +160,41 @@ def require(*capabilities: Capability):
     return _guard
 
 
+def require_any(*capabilities: Capability):
+    """Route guard for "staff may do this for anyone, a person may do it for
+    themselves".
+
+    A handful of reads serve two callers with the same shape: a DPO looking at
+    somebody's consents, and that somebody looking at their own. Expressing that
+    with `require()` is impossible — it demands every capability — and the
+    consequence was live: the Preference Centre and Consent History are the two
+    screens built for a Data Principal, and both answered a Data Principal with
+    403, because they were gated on `consent:read`, which is staff-only.
+
+    Nothing noticed for a long time because the screens were reading mock arrays,
+    so they rendered invented numbers instead of the error. Deleting the mocks is
+    what surfaced it.
+
+    **A route using this MUST scope its own result.** Passing the guard only
+    establishes that the caller may ask; it does not establish which rows they may
+    see. Every call site here pairs it with an explicit own-principal check, and a
+    new one that forgets would be a cross-tenant-shaped bug inside a tenant.
+    """
+
+    async def _guard(
+        current: Annotated[CurrentUser, Depends(get_current_user)],
+    ) -> CurrentUser:
+        if not any(role_can(current.user.role, c) for c in capabilities):
+            raise PermissionDenied(
+                "Your role does not permit this action.",
+                required=[c.value for c in capabilities],
+                role=current.user.role,
+            )
+        return current
+
+    return _guard
+
+
 # --------------------------------------------------------------------------
 # Machine callers
 # --------------------------------------------------------------------------

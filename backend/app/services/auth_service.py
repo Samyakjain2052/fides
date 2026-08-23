@@ -57,6 +57,10 @@ class TokenPair:
     refresh_token: str        # returned to be set as an HttpOnly cookie, never stored
     refresh_expires_at: datetime
     user: User
+    # Carried so every path that issues a session can report which organisation
+    # it belongs to. Resolved in `_issue_tokens` rather than at each call site,
+    # so login, refresh and registration cannot drift apart on it.
+    tenant: Tenant
 
 
 async def authenticate(
@@ -300,12 +304,17 @@ async def _issue_tokens(
     )
     await session.flush()
 
+    tenant = (
+        await session.execute(select(Tenant).where(Tenant.id == user.tenant_id))
+    ).scalar_one()
+
     return TokenPair(
         access_token=access,
         access_expires_at=access_exp,
         refresh_token=raw_refresh,
         refresh_expires_at=refresh_exp,
         user=user,
+        tenant=tenant,
     )
 
 

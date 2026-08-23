@@ -32,6 +32,7 @@ from app.api.deps import CurrentPublishableKey, client_ip, require_allowed_origi
 from app.core.errors import NotFound
 from app.core.permissions import Scope
 from app.models.consent import DataPrincipal, Purpose
+from app.models.tenant import Tenant
 from app.services import consent_service, public_api_service, publishable_key_service
 
 router = APIRouter(prefix="/public/v1/banner", tags=["public API — banner"])
@@ -239,6 +240,34 @@ async def collect_from_banner(
 
     await _log(caller, request, endpoint, 201, started, body, ip_hash)
     return out_body
+
+
+@router.get(
+    "/organisation",
+    summary="Who is asking for consent",
+)
+async def banner_organisation(
+    caller: Annotated[
+        CurrentPublishableKey,
+        Depends(require_allowed_origin(Scope.CONSENT_COLLECT, origin_required=False)),
+    ],
+) -> dict[str, Any]:
+    """The name to put on the banner.
+
+    A consent banner has to say who is asking — "would like to use your data" with
+    no subject is not a request anybody can meaningfully agree to. Until this
+    existed the screen had no way to find out, and printed a hardcoded
+    "Example Fintech Pvt. Ltd." to every visitor of every customer.
+
+    Discloses nothing the caller does not already have: a publishable key is
+    issued to one tenant, is embedded in that tenant's own pages, and identifies
+    them to anyone who looks at the bundle. The name is the least sensitive thing
+    reachable with it.
+    """
+    tenant = await caller.session.get(Tenant, caller.tenant_id)
+    if tenant is None:            # pragma: no cover — the key proves it exists
+        raise NotFound("Unknown organisation.")
+    return {"name": tenant.name}
 
 
 @router.get(

@@ -143,6 +143,10 @@ async def _make_tenant(factory, slug: str, name: str):
             info = {
                 "id": tenant.id,
                 "slug": slug,
+                # The display name, exposed because it is now part of what the
+                # API returns: the session reports which organisation it belongs
+                # to, and the banner reports who is asking for consent.
+                "name": tenant.name,
                 "admin_id": admin.id,
                 "admin_email": admin.email,
                 "password": "correct-horse-battery-staple",

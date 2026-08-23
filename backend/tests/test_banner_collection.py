@@ -276,3 +276,39 @@ async def test_the_response_carries_everything_the_confirmation_needs(
     assert body["collection_method"] == "publishable_key"
     assert body["strongly_bound"] is False
     assert body["expires_at"], "retention drives the renewal date the banner shows"
+
+
+# --------------------------------------------------------------------------- #
+# Who is asking.
+#
+# The banner had no way to find this out, so it printed a hardcoded
+# "Example Fintech Pvt. Ltd." to every visitor of every customer. A consent
+# request with the wrong organisation on it is not consent to anything.
+# --------------------------------------------------------------------------- #
+
+async def test_the_banner_learns_whose_it_is(client, workspace, tenant_a):
+    resp = await client.get("/public/v1/banner/organisation", headers=_h(workspace))
+    assert resp.status_code == 200
+    assert resp.json()["name"] == tenant_a["name"]
+
+
+async def test_the_organisation_needs_the_key(client):
+    """Not open to the world. It is scoped by the publishable key like every
+    other route on this router, so it cannot be used to enumerate customers."""
+    resp = await client.get("/public/v1/banner/organisation")
+    assert resp.status_code in (401, 403)
+
+
+async def test_the_organisation_endpoint_writes_nothing(
+    client, app_session_factory, tenant_a, workspace
+):
+    """A GET on a public router with a browser-embedded credential. If rendering
+    the banner could create rows, the endpoint would be a free write primitive."""
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        before = len((await s.execute(select(DataPrincipal))).scalars().all())
+
+    await client.get("/public/v1/banner/organisation", headers=_h(workspace))
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        after = len((await s.execute(select(DataPrincipal))).scalars().all())
+    assert before == after

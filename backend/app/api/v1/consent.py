@@ -15,9 +15,9 @@ from sqlalchemy import select
 
 from pydantic import BaseModel
 
-from app.api.deps import CurrentUser, require
-from app.core.errors import NotFound
-from app.core.permissions import Capability
+from app.api.deps import CurrentUser, require, require_any
+from app.core.errors import NotFound, PermissionDenied
+from app.core.permissions import Capability, role_can
 from app.models.audit import AuditAction
 from app.models.consent import Consent, DataPrincipal, Notice, Purpose
 from app.schemas.consent import (
@@ -41,12 +41,79 @@ router = APIRouter(tags=["consent"])
 
 
 # --------------------------------------------------------------------------- #
+# Self-service access
+# --------------------------------------------------------------------------- #
+
+async def _self_principal(current: CurrentUser) -> DataPrincipal:
+    """The signed-in user as a Data Principal of their own workspace.
+
+    Same convention and same `user:<id>` key as the DSAR routes, deliberately:
+    two different external_ids for one person would give them two consent
+    ledgers, and each screen would show half of their own history.
+    """
+    external_id = f"user:{current.user.id}"
+    principal = await current.session.scalar(
+        select(DataPrincipal).where(DataPrincipal.external_id == external_id)
+    )
+    if principal is None:
+        principal = DataPrincipal(
+            tenant_id=current.tenant_id,
+            external_id=external_id,
+            email=current.user.email,
+        )
+        current.session.add(principal)
+        await current.session.flush()
+    return principal
+
+
+async def _authorise_principal(current: CurrentUser, principal_id: uuid.UUID) -> None:
+    """Staff may read anyone in their tenant; everybody else, only themselves.
+
+    This is the scoping half of `require_any`, and it must not be omitted. Without
+    it, granting a Data Principal access to these routes would let them read every
+    other person's consent ledger by changing one query parameter — a worse bug
+    than the 403 it replaces.
+    """
+    if role_can(current.user.role, Capability.CONSENT_READ):
+        return
+    mine = await _self_principal(current)
+    if principal_id != mine.id:
+        raise PermissionDenied(
+            "You can only read your own consent record.",
+            required=[Capability.CONSENT_READ.value],
+            role=current.user.role,
+        )
+
+
+@router.get(
+    "/principals/me", response_model=PrincipalOut,
+    summary="My own Data Principal record",
+)
+async def my_principal(
+    current: Annotated[CurrentUser, Depends(require(Capability.SELF_READ))],
+) -> DataPrincipal:
+    """Created on first read.
+
+    Exists so the user-facing screens stop calling `POST /principals`, which is a
+    staff route requiring `consent:read`. That call is why the Preference Centre
+    failed for the only role it was built for.
+    """
+    return await _self_principal(current)
+
+
+# --------------------------------------------------------------------------- #
 # Purposes
 # --------------------------------------------------------------------------- #
 
 @router.get("/purposes", response_model=list[PurposeOut], summary="List purposes")
 async def list_purposes(
-    current: Annotated[CurrentUser, Depends(require(Capability.CONSENT_READ))],
+    # A person needs the purpose list to see what they have agreed to. It is
+    # tenant configuration, not anybody's personal data, and the publishable-key
+    # banner already serves it to anonymous visitors.
+    current: Annotated[
+        CurrentUser,
+        Depends(require_any(Capability.CONSENT_READ, Capability.SELF_READ)),
+    ],
     include_inactive: bool = False,
 ) -> list[Purpose]:
     return await notice_service.list_purposes(
@@ -80,7 +147,10 @@ async def create_purpose(
 
 @router.get("/notices", response_model=list[NoticeOut], summary="List notices")
 async def list_notices(
-    current: Annotated[CurrentUser, Depends(require(Capability.CONSENT_READ))],
+    current: Annotated[
+        CurrentUser,
+        Depends(require_any(Capability.CONSENT_READ, Capability.SELF_READ)),
+    ],
     purpose_id: uuid.UUID | None = None,
     published_only: bool = False,
 ) -> list[Notice]:
@@ -219,8 +289,12 @@ async def create_principal(
 )
 async def list_consents(
     principal_id: uuid.UUID,
-    current: Annotated[CurrentUser, Depends(require(Capability.CONSENT_READ))],
+    current: Annotated[
+        CurrentUser,
+        Depends(require_any(Capability.CONSENT_READ, Capability.SELF_READ)),
+    ],
 ) -> list[ConsentDetail]:
+    await _authorise_principal(current, principal_id)
     rows = await consent_service.for_principal(
         current.session, current.tenant_id, principal_id
     )
@@ -334,7 +408,10 @@ async def check_consent(
 )
 async def consent_history(
     principal_id: uuid.UUID,
-    current: Annotated[CurrentUser, Depends(require(Capability.CONSENT_READ))],
+    current: Annotated[
+        CurrentUser,
+        Depends(require_any(Capability.CONSENT_READ, Capability.SELF_READ)),
+    ],
 ) -> list[ConsentHistoryEntry]:
     """Not a history table — a query over `audit_events`.
 
@@ -342,6 +419,7 @@ async def consent_history(
     history a customer shows a regulator is the same evidence the integrity
     check verifies.
     """
+    await _authorise_principal(current, principal_id)
     events = await consent_service.history(
         current.session, current.tenant_id, principal_id
     )

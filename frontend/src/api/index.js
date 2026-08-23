@@ -1,68 +1,54 @@
 // ============================================================================
-// All mock data and API functions.
-// Replace each function with real fetch() calls when the backend is ready.
+// Shared vocabulary, and the last few stubs that are still stubs.
 //
-// Everything below is in-memory and mutable, so a change made on one screen is
-// visible on the next one for the rest of the session (a page reload resets it).
-// Every mutation also appends an audit-log entry, because the brief requires the
-// audit trail to reflect every state change.
+// This file used to be the mock backend: ~500 lines holding an in-memory user,
+// organisation, consent ledger, DSAR queue and audit log, plus the functions
+// that read and mutated them. Every one of those has been replaced by a real
+// endpoint and now lives in a sibling module — auth.js, consent.js, dsar.js,
+// grievances.js, breaches.js, retention.js, reports.js, audit.js,
+// notifications.js, users.js, banner.js.
+//
+// What was deleted, and where the last of it was still rendering:
+//
+//   MOCK_ORG           the user-facing header printed "Example Fintech Pvt.
+//                      Ltd." and the footer named "Amit Kumar · dpo@example.com"
+//                      as the Grievance Officer — to every person, in every
+//                      workspace. §13 requires that contact be real and
+//                      published; an invented one is a right nobody can
+//                      exercise. Now read from the session and
+//                      /v1/grievances/officer, and it says so plainly when no
+//                      officer has been published.
+//   MOCK_USER          the greeting called everybody Priya.
+//   MOCK_NOTICES       labelled the activity feed on the user dashboard.
+//   MOCK_CONSENTS,
+//   MOCK_AUDIT_LOGS,
+//   getUserDashboard,  the user dashboard's four cards and its timeline were
+//   getAdminDashboard  computed from those arrays.
+//   appendAuditLog,
+//   verifyLogIntegrity,
+//   fakeHash           a mock audit chain with invented hashes. The real one is
+//                      HMAC-chained server-side and verifiable at
+//                      /v1/audit/verify.
+//   GRIEVANCE_CATEGORIES  a second, different list from the server's five.
+//
+// WHAT IS LEFT, AND WHY EACH ONE IS STILL HERE
+//
+// The identity-verification calls below are placeholders, and they are the
+// honest kind: `consent_guardian` is declared `preview` in config/modules.js and
+// the DSAR module's caveat states the identity check is simulated. They are kept
+// rather than deleted because deleting them would take the screens with them,
+// and a screen that says "this step is not implemented" is more useful than no
+// screen. They must not be described as anything else.
+//
+// `sendResetLink` is in the same category: there is no password-reset flow on the
+// server yet, so it resolves without sending anything.
 // ============================================================================
-
-// ---------------------------------------------------------------------------
-// OPTIONAL BRIDGE TO THE REAL DSAR BACKEND IN THIS REPO
-//
-// Default is `false` — mock data, exactly as the brief specifies. Set it to
-// `true` and the three DSAR functions below talk to the FastAPI gateway
-// (Fides + Postgres + Mongo) that lives in this repo instead of returning mock
-// rows. Vite proxies /gateway to it, so there is no CORS to configure.
-// See ../../vite.config.js and the repo README.
-// ---------------------------------------------------------------------------
-export const USE_REAL_DSAR_BACKEND = true;
-// `GATEWAY` lived here. Removed: every gateway call goes through src/api/dsar.js
-// and the nginx /gateway/ proxy now, so nothing needed the base path.
 
 const delay = (ms = 220) => new Promise((r) => setTimeout(r, ms));
-const clone = (v) => JSON.parse(JSON.stringify(v));
-const nowIso = () => new Date().toISOString();
 
-// ============================================================================
-// MOCK DATA
-// ============================================================================
-
-export const MOCK_USER = {
-  id: "u001",
-  name: "Priya Sharma",
-  email: "priya@example.com",
-  language: "en",
-};
-
-// The Data Principal these screens act as.
-//
-// This used to be MOCK_USER everywhere, including on the DSAR path that now
-// really executes — so a buyer who signed up as themselves would have fired an
-// access request against priya@example.com and been shown her requests as their
-// own. Wrong data to the wrong person, from a product selling privacy.
-//
-// AppContext sets this from the real session. The fallback keeps the preview
-// modules working for a signed-out visitor on the standalone consent surfaces.
-let subject = { ...MOCK_USER };
-
-export function setSubjectIdentity(user) {
-  subject = user
-    ? { id: user.id, name: user.name, email: user.email, language: user.language || "en" }
-    : { ...MOCK_USER };
-}
-
-export function subjectIdentity() {
-  return { ...subject };
-}
-
-export const MOCK_ORG = {
-  id: "org001",
-  name: "Example Fintech Pvt. Ltd.",
-  grievanceOfficer: "Amit Kumar",
-  grievanceEmail: "dpo@example.com",
-};
+// ---------------------------------------------------------------------------
+// Vocabulary shared across screens.
+// ---------------------------------------------------------------------------
 
 // The Eighth Schedule languages, English first.
 export const LANGUAGES = [
@@ -72,99 +58,18 @@ export const LANGUAGES = [
   "Konkani", "Manipuri", "Bodo", "Sanskrit",
 ];
 
-export const MOCK_NOTICES = [
-  {
-    id: "n1", purpose: "Account Creation", category: "Identity Data",
-    retention_days: 1825, mandatory: true,
-    content: "We collect your name, email, and phone to create your account.",
-    data_collected: "Name, Email, Phone",
-    user_rights: "You may access, correct or erase this data anytime.",
-    withdrawal_policy: "Account will be deactivated upon withdrawal.",
-  },
-  {
-    id: "n2", purpose: "Marketing Communications", category: "Contact Data",
-    retention_days: 730, mandatory: false,
-    content: "We use your email to send product updates and offers.",
-    data_collected: "Email address",
-    user_rights: "You may withdraw consent anytime.",
-    withdrawal_policy: "You will stop receiving marketing emails within 24 hours.",
-  },
-  {
-    id: "n3", purpose: "Analytics", category: "Usage Data",
-    retention_days: 365, mandatory: false,
-    content: "We use anonymized usage data to improve our product.",
-    data_collected: "Usage patterns, device info",
-    user_rights: "You may withdraw at any time.",
-    withdrawal_policy: "Analytics tracking will stop immediately.",
-  },
-  {
-    id: "n4", purpose: "KYC Verification", category: "Sensitive Identity Data",
-    retention_days: 2555, mandatory: true,
-    content: "As required by RBI, we collect Aadhaar and PAN for identity verification.",
-    data_collected: "Aadhaar number, PAN card",
-    user_rights: "Required by law. Limited withdrawal rights.",
-    withdrawal_policy: "May affect your ability to use financial services.",
-  },
+export const ROLES = [
+  { id: "data_principal", label: "Data Principal", home: "/user/dashboard" },
+  { id: "admin", label: "Admin / DPO", home: "/admin/dashboard" },
+  { id: "auditor", label: "Auditor", home: "/admin/audit" },
+  { id: "grievance_officer", label: "Grievance Officer", home: "/admin/grievances" },
 ];
-
-let consents = [
-  { id: "c1", user_id: "u001", notice_id: "n1", purpose: "Account Creation", status: "active", given_at: "2026-01-15T10:00:00Z", expires_at: "2031-01-15T10:00:00Z", language: "en", version: "1.0", method: "checkbox" },
-  { id: "c2", user_id: "u001", notice_id: "n2", purpose: "Marketing Communications", status: "withdrawn", given_at: "2026-01-15T10:01:00Z", withdrawn_at: "2026-05-01T09:00:00Z", language: "en", version: "1.0", method: "checkbox" },
-  { id: "c3", user_id: "u001", notice_id: "n3", purpose: "Analytics", status: "active", given_at: "2026-01-15T10:02:00Z", expires_at: "2027-01-15T10:02:00Z", language: "en", version: "1.0", method: "checkbox" },
-  { id: "c4", user_id: "u001", notice_id: "n4", purpose: "KYC Verification", status: "active", given_at: "2026-01-15T10:03:00Z", expires_at: "2033-01-15T10:03:00Z", language: "en", version: "1.0", method: "checkbox" },
-];
-export const MOCK_CONSENTS = clone(consents);
-
-// Starts EMPTY, unlike every other fixture here.
-//
-// DSAR is the one module marked "live", and requests submitted from these
-// screens really execute against the Fides engine. Seeding it with three
-// invented requests would have put fabricated rows in the same list as real
-// ones, and made the dashboard's "open requests" count — which is presented as
-// a real figure — a mix of the two. An empty queue is the honest starting state.
-let dsarRequests = [];
-
-// The localStorage stopgap that lived here is GONE.
-//
-// It existed because the DSAR gateway had no list-by-identity endpoint, so the
-// browser had to remember the request ids it created. That made a submitted
-// request invisible to the DPO, invisible on another device, and lost if the
-// person cleared their browser — while the erasure it triggered had genuinely
-// happened. The record now lives in PostgreSQL: see src/api/dsar.js.
-
-// The mock grievance rows lived here. Removed with the module: both dashboards
-// now read grievance figures from /v1/grievances.
-
-let auditLogs = [
-  { id: "a1", log_id: "LOG-001", user_id: "u001", purpose_id: "n2", action_type: "withdraw", timestamp: "2026-05-01T09:00:00Z", consent_status: "withdrawn", initiator: "user", source_ip: "192.168.1.1", audit_hash: "sha256:abc123def456..." },
-  { id: "a2", log_id: "LOG-002", user_id: "u001", purpose_id: "n1", action_type: "grant", timestamp: "2026-01-15T10:00:00Z", consent_status: "active", initiator: "user", source_ip: "192.168.1.1", audit_hash: "sha256:xyz789ghi012..." },
-  { id: "a3", log_id: "LOG-003", user_id: "u002", purpose_id: "n4", action_type: "validate", timestamp: "2026-07-20T14:00:00Z", consent_status: "active", initiator: "system", source_ip: "10.0.0.1", audit_hash: "sha256:mno345pqr678..." },
-];
-export const MOCK_AUDIT_LOGS = clone(auditLogs);
-
-// The mock users, roles table and audit-log reader lived here. Removed with the
-// module: users, invitations and sessions are real at /v1/admin, and the
-// capability matrix is now GENERATED from the code that enforces it rather than
-// restated. The old ROLE_PERMISSIONS table was a hand-maintained copy that could
-// disagree with the enforcement — which is worse than showing nothing, because it
-// tells an administrator their workspace is configured one way while it behaves
-// another. See src/api/users.js.
-// The retention mocks lived here and are gone. Retention is live: the screen
-// uses src/api/retention.js against /v1/retention, including the real purge
-// executor. `MOCK_RETENTION_POLICIES` was evaluated at module load and outlived
-// the array it cloned — see the note in this file's header about what that cost.
-// --- supporting mock data the screens need ----------------------------------
 
 export const COOKIE_CATEGORIES = [
   { id: "essential", name: "Essential Cookies", locked: true, description: "Required for the site to work — login, security, and session handling. These cannot be switched off." },
   { id: "performance", name: "Performance Cookies", locked: false, description: "Help us measure page speed and errors so we can fix problems." },
   { id: "analytics", name: "Analytics Cookies", locked: false, description: "Anonymised usage statistics that tell us which features people use." },
   { id: "marketing", name: "Marketing Cookies", locked: false, description: "Used to show you relevant offers on other websites." },
-];
-
-export const GRIEVANCE_CATEGORIES = [
-  "Consent Violation", "Data Breach", "Processing Error",
-  "Unauthorized Data Sharing", "Delayed DSAR Response", "Other",
 ];
 
 export const ERASURE_REASONS = [
@@ -175,98 +80,35 @@ export const ERASURE_REASONS = [
   "Other",
 ];
 
-export const CORRECTABLE_FIELDS = ["Full name", "Email address", "Phone", "Postal address", "Date of birth"];
-
-// The notification mock data that used to live here is gone. Templates and the
-// delivery log are real: see src/api/notifications.js and the /v1/notifications
-// routes. The removed `fiduciary` rows carried invented webhook HTTP codes,
-// acknowledgements and escalations for a processor-alerting system that does not
-// exist in this product.
-// The mock breach rows and their read/write helpers lived here. Removed with the
-// module: the register is real, at /v1/breaches. `saveBreach` accepted an
-// arbitrary patch, so any field could be set to anything — including a status of
-// "reported_to_dpb" with neither notification actually performed, which is the
-// exact half-compliance the real schema refuses with a CHECK constraint.
-// The mock consent-validation log lived here. The real one is the audit
-// chain: every console check writes a `consent.validated` entry, and a second
-// list that could disagree with the chain would be worse than none.
-// The mock list of previously-generated reports lived here. Removed with the
-// module: reports are streamed and never stored, so there is nothing to list.
-// One of these rows carried `signed: true`, which the screen rendered as "carries
-// a digital signature for the regulator" — a claim nothing in the product
-// supported. See src/api/reports.js.
-
-// Chart series for the admin dashboard.
-// Removed: a hardcoded [24, 9, 14] rendered under the heading "Last 30 days".
-// It was not derived from anything — it was three numbers that looked like a
-// measurement. On a compliance dashboard that is the most damaging artifact in
-// the product, so the chart now derives from real requests and renders an
-// honest empty state when there are none.
-
-// Removed with the same reasoning: a six-month "given vs withdrawn" trend
-// climbing 320 -> 548 is a claim about a history that never happened, and a
-// trend line is a stronger claim than a single number because it implies
-// sustained real usage.
-
-// ============================================================================
-// AUDIT TRAIL — every mutation lands here
-// ============================================================================
-let logSeq = auditLogs.length;
-
-function fakeHash(seed) {
-  // Presentation-only stand-in for a real signed hash chain.
-  let h = 0;
-  const s = String(seed) + nowIso();
-  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return "sha256:" + h.toString(16).padStart(8, "0").repeat(4).slice(0, 40) + "...";
-}
-
-export function appendAuditLog(entry) {
-  logSeq += 1;
-  const row = {
-    id: "a" + logSeq,
-    log_id: "LOG-" + String(logSeq).padStart(3, "0"),
-    timestamp: nowIso(),
-    initiator: "user",
-    source_ip: "192.168.1.1",
-    consent_status: "-",
-    purpose_id: "-",
-    user_id: subject.id,
-    ...entry,
-    audit_hash: fakeHash(entry.action_type),
-  };
-  auditLogs = [row, ...auditLogs];
-  return row;
-}
-
-export async function verifyLogIntegrity() {
-  await delay(600);
-  return { ok: true, checked: auditLogs.length, broken: [], verified_at: nowIso() };
-}
-
-// ============================================================================
-// AUTH
-// ============================================================================
-export const ROLES = [
-  { id: "data_principal", label: "Data Principal", home: "/user/dashboard" },
-  { id: "admin", label: "Admin / DPO", home: "/admin/dashboard" },
-  { id: "auditor", label: "Auditor", home: "/admin/audit" },
-  { id: "grievance_officer", label: "Grievance Officer", home: "/admin/grievances" },
+export const CORRECTABLE_FIELDS = [
+  "Full name", "Email address", "Phone", "Postal address", "Date of birth",
 ];
 
-// The mock `login` lived here. Removed: authentication is real (src/api/auth.js)
-// and nothing imported this. It also referenced the mock user array that went with
-// the users module, so it had become dead code that would have thrown.
+// ---------------------------------------------------------------------------
+// Stubs. Each one is reachable only from a screen that declares it.
+// ---------------------------------------------------------------------------
+
+/**
+ * No password reset exists on the server, so this sends nothing.
+ *
+ * It validates the field and resolves, which is also what a real implementation
+ * would look like from here — a reset endpoint must not reveal whether an
+ * address is registered. The difference is that nothing arrives.
+ */
 export async function sendResetLink(email) {
   await delay(500);
   if (!email) throw new Error("Enter your registered email address.");
   return { sent: true, email };
 }
 
-// Identity verification — UI only, per the brief.
+/** Simulated. Accepts any six digits — see the DSAR module's caveat. */
 export async function sendOtp(destination) {
   await delay(500);
-  return { sent: true, destination, hint: "Any 6 digits are accepted in this mock." };
+  return {
+    sent: true,
+    destination,
+    hint: "Any 6 digits are accepted — this step is simulated.",
+  };
 }
 
 export async function verifyOtp(code) {
@@ -275,223 +117,26 @@ export async function verifyOtp(code) {
   return { verified: true, method: "otp" };
 }
 
+/** No DigiLocker integration exists. Returns success without calling anything. */
 export async function verifyDigiLocker() {
   await delay(800);
-  return { verified: true, method: "digilocker", note: "Placeholder response — no real DigiLocker call." };
+  return {
+    verified: true,
+    method: "digilocker",
+    note: "Placeholder response — no real DigiLocker call was made.",
+  };
 }
 
-// ============================================================================
-// NOTICES & CONSENT
-// ============================================================================
-export async function getNotices() {
-  await delay();
-  return clone(MOCK_NOTICES);
-}
-
-export async function getConsents(userId = subject.id) {
-  await delay();
-  return clone(consents.filter((c) => c.user_id === userId));
-}
-
-export async function updateConsent(consentId, nextStatus) {
-  await delay(300);
-  const row = consents.find((c) => c.id === consentId);
-  if (!row) throw new Error("Consent not found.");
-  row.status = nextStatus;
-  if (nextStatus === "withdrawn") row.withdrawn_at = nowIso();
-  if (nextStatus === "active") {
-    row.given_at = nowIso();
-    delete row.withdrawn_at;
-  }
-  const log = appendAuditLog({
-    action_type: nextStatus === "withdrawn" ? "withdraw" : "grant",
-    purpose_id: row.notice_id,
-    consent_status: row.status,
-    user_id: row.user_id,
-  });
-  return { consent: clone(row), audit: log };
-}
-
-// Saving the consent banner: one consent row per purpose.
-export async function saveConsentChoices(choices, { language = "English", method = "checkbox" } = {}) {
-  await delay(400);
-  const audits = [];
-  Object.entries(choices).forEach(([noticeId, granted]) => {
-    const notice = MOCK_NOTICES.find((n) => n.id === noticeId);
-    if (!notice) return;
-    let row = consents.find((c) => c.notice_id === noticeId && c.user_id === subject.id);
-    const status = granted ? "active" : "withdrawn";
-    if (!row) {
-      row = {
-        id: "c" + (consents.length + 1),
-        user_id: subject.id,
-        notice_id: noticeId,
-        purpose: notice.purpose,
-        status,
-        given_at: nowIso(),
-        expires_at: new Date(Date.now() + notice.retention_days * 864e5).toISOString(),
-        language,
-        version: "1.0",
-        method,
-      };
-      consents.push(row);
-    } else {
-      row.status = status;
-      row.language = language;
-      row.method = method;
-      if (granted) row.given_at = nowIso();
-      else row.withdrawn_at = nowIso();
-    }
-    audits.push(
-      appendAuditLog({
-        action_type: granted ? "grant" : "withdraw",
-        purpose_id: noticeId,
-        consent_status: status,
-      })
-    );
-  });
-  return { saved: true, audits };
-}
-
-export async function saveCookiePreferences(prefs) {
-  await delay(300);
-  const audit = appendAuditLog({ action_type: "cookie_preferences", purpose_id: "cookies", consent_status: "recorded" });
-  return { saved: true, prefs, audit, renews_at: new Date(Date.now() + 365 * 864e5).toISOString() };
-}
-
+/**
+ * Guardian consent, §9 — the `consent_guardian` module, declared `preview`.
+ *
+ * Records nothing. Verifying that an adult is who they say they are, and that
+ * they are this child's guardian, is the entire problem, and a publishable key
+ * in a browser cannot do it. Shipping this as though it worked would be the most
+ * consequential false claim in the product.
+ */
 export async function submitGuardianConsent({ guardianEmail, childName }) {
   await delay(600);
-  const audit = appendAuditLog({ action_type: "guardian_consent_requested", purpose_id: "-", consent_status: "pending" });
-  return { sent: true, guardianEmail, childName, audit };
-}
-
-// Consent history: derived from the audit trail, which is the real source.
-export async function getConsentHistory(userId = subject.id) {
-  await delay();
-  const consentActions = ["grant", "withdraw", "update", "renew"];
-  return clone(auditLogs)
-    .filter((l) => l.user_id === userId && consentActions.includes(l.action_type))
-    .map((l) => {
-      const notice = MOCK_NOTICES.find((n) => n.id === l.purpose_id);
-      const consent = consents.find((c) => c.notice_id === l.purpose_id);
-      return {
-        ...l,
-        purpose: notice?.purpose || l.purpose_id,
-        method: consent?.method || "checkbox",
-        version: consent?.version || "1.0",
-      };
-    });
-}
-
-// ============================================================================
-// DSAR
-// ============================================================================
-const DSAR_SLA_DAYS = 30;
-
-export function deadlineFor(submittedAt) {
-  return new Date(new Date(submittedAt).getTime() + DSAR_SLA_DAYS * 864e5).toISOString();
-}
-
-// `submitDSAR` and `updateDSAR` lived here. Both were dead — DSARPortal and the
-// admin queue use src/api/dsar.js against /v1/dsar — and both still appended to
-// the `notifications` array that went with the notifications module, so calling
-// either would have thrown a ReferenceError. Landmines rather than code.
-export async function prepareDataExport(id) {
-  await delay(900);
-  const row = dsarRequests.find((r) => r.id === id);
-  if (row) row.export_url = "#mock-export-" + row.reference;
-  appendAuditLog({ action_type: "dsar_export_prepared", user_id: row?.user_id, initiator: "Data Fiduciary" });
-  return { ready: true, url: row?.export_url };
-}
-
-// ============================================================================
-// GRIEVANCES — moved to src/api/grievances.js against /v1/grievances.
-//
-// The mocks that were here are gone. Worth noting what they did, because the
-// same shapes recur: `submitGrievance` enforced a 50-character minimum that
-// existed nowhere else, `updateGrievance` accepted an arbitrary patch (so any
-// field could be set to anything, including `status: 'resolved'` with no notes),
-// and it wrote a fake delivery row to the notification mock. It also still
-// assigned to a `notifications` array that had already been deleted — dead code
-// that would have thrown the moment anything called it.
-//
-// `GRIEVANCE_ESCALATION_DAYS = 10` is gone too. The threshold is per tenant
-// (`grievance_escalation_days`) and comes from the API; a constant here was
-// wrong for every customer who chose a different one, and wrong silently.
-// ============================================================================
-
-// ============================================================================
-// ADMIN: users, retention, notifications, reports, breaches
-// ============================================================================
-// ============================================================================
-// DASHBOARD AGGREGATES
-// ============================================================================
-const DAY = 864e5;
-
-export async function getUserDashboard(userId = subject.id) {
-  await delay();
-  const mine = consents.filter((c) => c.user_id === userId);
-  const soon = mine.filter(
-    (c) => c.status === "active" && c.expires_at && new Date(c.expires_at) - Date.now() < 30 * DAY
-  );
-  const myDsar = dsarRequests.filter((r) => r.user_id === userId);
-  const recent = clone(auditLogs).filter((l) => l.user_id === userId).slice(0, 5);
-  return {
-    active_consents: mine.filter((c) => c.status === "active").length,
-    pending_dsar: myDsar.filter((r) => r.status !== "completed" && r.status !== "rejected").length,
-    expiring_soon: soon.length,
-    recent_activity: recent,
-  };
-}
-
-export async function getAdminDashboard() {
-  await delay();
-  const monthAgo = new Date(Date.now() - 30 * DAY).toISOString();
-  const overdue = dsarRequests.filter(
-    (r) => r.status !== "completed" && r.status !== "rejected" && r.deadline_at < nowIso()
-  );
-  const dueSoon = dsarRequests.filter((r) => {
-    if (r.status === "completed" || r.status === "rejected") return false;
-    const left = new Date(r.deadline_at) - Date.now();
-    return left > 0 && left < 5 * DAY;
-  });
-  const expiring7 = consents.filter(
-    (c) => c.status === "active" && c.expires_at && new Date(c.expires_at) - Date.now() < 7 * DAY
-  );
-  const expiring30 = consents.filter(
-    (c) => c.status === "active" && c.expires_at && new Date(c.expires_at) - Date.now() < 30 * DAY
-  );
-  return {
-    stats: {
-      active_consents: consents.filter((c) => c.status === "active").length,
-      withdrawn_this_month: consents.filter((c) => c.withdrawn_at && c.withdrawn_at > monthAgo).length,
-      open_dsar: dsarRequests.filter((r) => r.status !== "completed" && r.status !== "rejected").length,
-      overdue_dsar: overdue.length,
-      // Grievances are live: the dashboard reads them from the API directly.
-      // Leaving a mock count here would give the screen something plausible to
-      // fall back to, which is exactly how a sample number ends up presented as
-      // real when a request fails.
-      expiring_30: expiring30.length,
-    },
-    attention: {
-      dsar_due_soon: clone([...overdue, ...dueSoon]),
-      consents_expiring_7: clone(expiring7),
-    },
-    charts: {
-      // Derived from the requests that actually exist. Empty is a legitimate
-      // answer and the dashboard renders it as one, rather than filling the
-      // space with numbers nobody measured.
-      dsar_by_type: ["access", "correct", "erase"]
-        .map((type) => ({
-          label: type[0].toUpperCase() + type.slice(1),
-          value: dsarRequests.filter((r) => r.type === type).length,
-        }))
-        .filter((d) => d.value > 0),
-      status_split: [
-        { label: "Active", value: consents.filter((c) => c.status === "active").length, tone: "success" },
-        { label: "Withdrawn", value: consents.filter((c) => c.status === "withdrawn").length, tone: "danger" },
-        { label: "Expired", value: consents.filter((c) => c.status === "expired").length, tone: "warning" },
-      ].filter((d) => d.value > 0),
-    },
-  };
+  if (!guardianEmail) throw new Error("Enter the guardian's email address.");
+  return { requested: true, guardianEmail, childName, recorded: false };
 }

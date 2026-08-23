@@ -20,13 +20,18 @@ import { apiFetch } from "./auth";
 /** The Data Principal representing the signed-in user. Created on first use. */
 export async function ensureSelfPrincipal(user) {
   if (!user?.id) throw new Error("Not signed in.");
-  return apiFetch("/principals", {
-    method: "POST",
-    body: {
-      external_id: `user:${user.id}`,
-      email: user.email,
-    },
-  });
+  // `GET /principals/me`, not `POST /principals`.
+  //
+  // The POST is a staff route requiring `consent:read`, which a Data Principal
+  // does not hold — so this threw 403 for the only role the Preference Centre
+  // and Consent History exist to serve. It went unnoticed because those screens
+  // were reading mock arrays at the time and rendered invented numbers rather
+  // than the error.
+  //
+  // The server derives the key from the session instead of trusting one sent
+  // from here, which also means a caller can no longer name a different
+  // `external_id` than their own.
+  return apiFetch("/principals/me");
 }
 
 export function listPurposes() {

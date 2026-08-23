@@ -80,7 +80,7 @@ export default function AdminLayout() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-surface px-5 py-3">
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-ink">{user?.name}</p>
+            <p className="truncate text-sm font-semibold text-ink">{user?.full_name}</p>
             <p className="truncate text-xs text-muted">{roleLabel} · {user?.email}</p>
           </div>
           <div className="flex items-center gap-2">

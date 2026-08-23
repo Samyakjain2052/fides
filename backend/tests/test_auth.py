@@ -175,3 +175,70 @@ async def test_failed_logins_never_record_the_password(app_session_factory, tena
     assert rows, "a failed login must be recorded"
     blob = str([r.payload for r in rows])
     assert "hunter2" not in blob, "the attempted password leaked into the audit trail"
+
+
+# --------------------------------------------------------------------------- #
+# The session says which organisation it belongs to.
+#
+# Nothing carried this before: `UserOut` had a `tenant_id` and the login form
+# knew the slug that was typed, but the organisation's display name existed only
+# server-side. So the user-facing header showed a hardcoded
+# "Example Fintech Pvt. Ltd." to every customer, and the footer named an invented
+# Grievance Officer — a §13 statutory contact nobody could actually reach.
+# --------------------------------------------------------------------------- #
+
+async def test_authenticate_returns_the_tenant(app_session_factory, tenant_a):
+    async with app_session_factory() as session:
+        async with session.begin():
+            pair = await auth_service.authenticate(
+                session, tenant_slug=tenant_a["slug"],
+                email=tenant_a["admin_email"], password=tenant_a["password"],
+            )
+    assert pair.tenant.id == tenant_a["id"]
+    assert pair.tenant.slug == tenant_a["slug"]
+    # The display name, which is the part the UI could not otherwise obtain.
+    assert pair.tenant.name
+
+
+async def test_refresh_keeps_reporting_the_same_tenant(app_session_factory, tenant_a):
+    """A rotated session must not lose track of whose workspace it is.
+
+    The header re-renders from whatever the refresh returns, so dropping the
+    tenant here would blank the organisation name on every token rotation —
+    intermittently, and only after the access token expired.
+    """
+    async with app_session_factory() as session:
+        async with session.begin():
+            first = await auth_service.authenticate(
+                session, tenant_slug=tenant_a["slug"],
+                email=tenant_a["admin_email"], password=tenant_a["password"],
+            )
+            raw = first.refresh_token
+
+    async with app_session_factory() as session:
+        async with session.begin():
+            second = await auth_service.refresh(session, raw_token=raw)
+
+    assert second.tenant.id == first.tenant.id
+    assert second.tenant.name == first.tenant.name
+
+
+async def test_two_tenants_report_their_own_name(
+    app_session_factory, tenant_a, tenant_b
+):
+    """The whole point. If this ever returned one name for both, the product
+    would be telling one customer's users they are somewhere else."""
+    async with app_session_factory() as session:
+        async with session.begin():
+            a = await auth_service.authenticate(
+                session, tenant_slug=tenant_a["slug"],
+                email=tenant_a["admin_email"], password=tenant_a["password"],
+            )
+    async with app_session_factory() as session:
+        async with session.begin():
+            b = await auth_service.authenticate(
+                session, tenant_slug=tenant_b["slug"],
+                email=tenant_b["admin_email"], password=tenant_b["password"],
+            )
+    assert a.tenant.id != b.tenant.id
+    assert a.tenant.name != b.tenant.name

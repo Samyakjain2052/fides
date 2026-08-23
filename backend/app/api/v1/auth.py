@@ -15,7 +15,15 @@ from app.core.config import get_settings
 from app.core.errors import AuthenticationError
 from app.core.permissions import capabilities_for
 from app.db.session import get_session_factory, set_tenant_context
-from app.schemas.auth import LoginRequest, RegisterRequest, SlugCheck, TokenResponse, UserOut
+from app.models.tenant import Tenant
+from app.schemas.auth import (
+    LoginRequest,
+    RegisterRequest,
+    SlugCheck,
+    TokenResponse,
+    UserOut,
+    WorkspaceOut,
+)
 from app.services import auth_service, invitation_service, registration_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -109,6 +117,7 @@ async def register(
         access_token=pair.access_token,
         expires_at=pair.access_expires_at,
         user=UserOut.model_validate(reg.admin),
+        workspace=WorkspaceOut.model_validate(reg.tenant),
         capabilities=sorted(c.value for c in capabilities_for(reg.admin.role)),
     )
 
@@ -138,6 +147,7 @@ async def login(
         access_token=pair.access_token,
         expires_at=pair.access_expires_at,
         user=UserOut.model_validate(pair.user),
+        workspace=WorkspaceOut.model_validate(pair.tenant),
         capabilities=sorted(c.value for c in capabilities_for(pair.user.role)),
     )
 
@@ -165,6 +175,7 @@ async def refresh(
         access_token=pair.access_token,
         expires_at=pair.access_expires_at,
         user=UserOut.model_validate(pair.user),
+        workspace=WorkspaceOut.model_validate(pair.tenant),
         capabilities=sorted(c.value for c in capabilities_for(pair.user.role)),
     )
 
@@ -195,10 +206,14 @@ async def me(current: CurrentUserDep) -> TokenResponse:
     token, expires = create_access_token(
         user_id=current.user.id, tenant_id=current.tenant_id, role=current.user.role
     )
+    # The only route here that has a tenant id but no Tenant, because it issues a
+    # token from the existing session rather than going through `_issue_tokens`.
+    tenant = await current.session.get(Tenant, current.tenant_id)
     return TokenResponse(
         access_token=token,
         expires_at=expires,
         user=UserOut.model_validate(current.user),
+        workspace=WorkspaceOut.model_validate(tenant),
         capabilities=sorted(c.value for c in capabilities_for(current.user.role)),
     )
 
@@ -270,5 +285,6 @@ async def accept_invitation(
         access_token=pair.access_token,
         expires_at=pair.access_expires_at,
         user=out,
+        workspace=WorkspaceOut.model_validate(pair.tenant),
         capabilities=caps,
     )

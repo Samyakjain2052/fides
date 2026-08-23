@@ -4,7 +4,7 @@
 // useState + useContext only — no Redux, per the brief.
 // ============================================================================
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { LANGUAGES, ROLES, setSubjectIdentity } from "../api";
+import { LANGUAGES, ROLES } from "../api";
 import { clearSession, logout as apiLogout, restoreSession } from "../api/auth";
 
 const AppContext = createContext(null);
@@ -52,6 +52,11 @@ export function AppProvider({ children }) {
   // session now comes from the server: an HttpOnly refresh cookie the page
   // cannot read, exchanged for a short-lived access token held in memory.
   const [user, setUser] = useState(null);
+  // The organisation the session belongs to, from the auth response. Held here
+  // rather than read per-screen because the header and the footer both need it
+  // on every route. Before this existed, both rendered a hardcoded
+  // "Example Fintech Pvt. Ltd." to every customer.
+  const [workspace, setWorkspace] = useState(null);
   const [capabilities, setCapabilities] = useState([]);
   // null = still checking. The router waits for this so a signed-in user is not
   // flashed the login screen on every reload.
@@ -69,15 +74,14 @@ export function AppProvider({ children }) {
       .then((session) => {
         if (cancelled) return;
         if (session) {
-          // Set the API layer's identity BEFORE the routed screens mount.
-          //
-          // This was a useEffect on [user]. React runs child effects before
-          // parent effects, so the DSAR status screen queried its requests
-          // while the API layer still held the placeholder identity, found
-          // none, and reported "you haven't submitted any requests" — for a
-          // request that had genuinely executed against Fides.
-          setSubjectIdentity(session.user);
+          // `setSubjectIdentity(session.user)` stood here. It pushed the
+          // signed-in user into a module-level `subject` in api/index.js, whose
+          // only purpose was to give the mock functions a default user id —
+          // originally MOCK_USER, which is how the DSAR screens once queried
+          // Priya's requests and showed them as yours. Those functions are gone,
+          // nothing reads `subject`, and the call was a no-op.
           setUser(session.user);
+          setWorkspace(session.workspace || null);
           setCapabilities(session.capabilities || []);
         }
       })
@@ -112,19 +116,20 @@ export function AppProvider({ children }) {
   const value = useMemo(
     () => ({
       user,
+      workspace,
       authReady,
       capabilities,
       /** Adopt a session returned by login or register. */
       signIn: (session) => {
-        setSubjectIdentity(session.user);
         setUser(session.user);
+        setWorkspace(session.workspace || null);
         setCapabilities(session.capabilities || []);
       },
       signOut: async () => {
         await apiLogout();   // revokes the whole refresh-token family server-side
         clearSession();
-        setSubjectIdentity(null);
         setUser(null);
+        setWorkspace(null);
         setCapabilities([]);
       },
       /** Server-granted capability check. The server re-checks on every request. */
@@ -141,7 +146,7 @@ export function AppProvider({ children }) {
       toast,
       notify: (message, tone = "success") => setToast({ message, tone }),
     }),
-    [user, authReady, capabilities, language, t, toast]
+    [user, workspace, authReady, capabilities, language, t, toast]
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

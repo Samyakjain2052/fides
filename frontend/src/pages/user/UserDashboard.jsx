@@ -1,10 +1,28 @@
 // ============================================================================
 // User Dashboard (/user/dashboard)
 // 4 quick-status cards, a recent-activity timeline, 3 quick actions.
+//
+// Every figure on this screen is now read from the API. It used to call
+// `getUserDashboard()`, which filtered three module-level mock arrays, and
+// labelled the activity timeline by looking purposes up in `MOCK_NOTICES` — so a
+// person was shown invented counts about their own privacy, and the greeting
+// called them Priya regardless of who they were.
+//
+// It also had no entry in `PATH_MODULES`, so the honesty layer gave it no
+// preview banner: the one screen with nothing real on it was the one screen not
+// declaring itself. The fix is to make it real rather than to label it, since
+// every endpoint it needs already existed and is already live elsewhere.
+//
+// The four sources, all of which other live screens use:
+//   preferenceCentre     consents, and how close each is to expiry
+//   myRows (dsar)        the person's own rights requests
+//   myGrievances         their complaints
+//   consentHistoryRows   the activity feed, straight off the audit chain
 // ============================================================================
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getUserDashboard, MOCK_NOTICES } from "../../api";
+import { consentHistoryRows, preferenceCentre } from "../../api/consent";
+import { myRows as myDsarRows } from "../../api/dsar";
 import { myGrievances } from "../../api/grievances";
 import { useApp } from "../../context/AppContext";
 import StatCard from "../../components/common/StatCard";
@@ -25,17 +43,59 @@ const ACTION_LABEL = {
 };
 
 export default function UserDashboard() {
-  const { t } = useApp();
+  const { t, user } = useApp();
   const [data, setData] = useState(null);
-  // Real, from /v1/grievances/mine. The rest of this screen is still sample
-  // data, but a live module must not be represented by a mock number — that is
-  // the one inconsistency the honesty layer exists to catch.
   const [grievances, setGrievances] = useState([]);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    getUserDashboard().then(setData);
-    myGrievances().then(setGrievances).catch(() => setGrievances([]));
-  }, []);
+    if (!user) return;
+    let live = true;
+
+    // Settled, not all-or-nothing. A dashboard is a summary of four independent
+    // things; one endpoint failing should cost that card, not the page.
+    Promise.allSettled([
+      preferenceCentre(user),
+      myDsarRows(),
+      consentHistoryRows(user),
+      myGrievances(),
+    ]).then(([prefs, dsar, history, griev]) => {
+      if (!live) return;
+
+      const rows = prefs.status === "fulfilled" ? prefs.value.rows : [];
+      const active = rows.filter((r) => r.consent?.status === "active");
+      const requests = dsar.status === "fulfilled" ? dsar.value : [];
+
+      setData({
+        active_consents: active.length,
+        pending_dsar: requests.filter(
+          (r) => !["completed", "rejected", "cancelled"].includes(r.status),
+        ).length,
+        // Counted off `daysToExpiry`, which preferenceCentre derives from the
+        // consent's own expiry — not from a guess about the retention period.
+        // Negative means already lapsed, so it is excluded: that is not
+        // "expiring soon", and the Preference Centre reports it separately.
+        expiring_soon: active.filter(
+          (r) => r.daysToExpiry !== null && r.daysToExpiry >= 0 && r.daysToExpiry <= 30,
+        ).length,
+        recent_activity:
+          history.status === "fulfilled" ? history.value.rows.slice(0, 5) : [],
+      });
+      setGrievances(griev.status === "fulfilled" ? griev.value : []);
+
+      const failed = [prefs, dsar, history, griev].filter((r) => r.status === "rejected");
+      if (failed.length) {
+        setError(
+          `${failed.length} of 4 sections could not be loaded. What you see below ` +
+          "is incomplete rather than zero.",
+        );
+      }
+    });
+
+    return () => {
+      live = false;
+    };
+  }, [user]);
 
   if (!data) {
     return <p className="text-sm text-muted">Loading your summary…</p>;
@@ -48,11 +108,22 @@ export default function UserDashboard() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold text-ink">{t("Welcome")}, Priya</h1>
+        <h1 className="text-xl font-semibold text-ink">
+          {t("Welcome")}, {user?.full_name?.split(" ")[0] || "there"}
+        </h1>
         <p className="text-sm text-muted">
           Everything we hold about you, and every choice you&apos;ve made, in one place.
         </p>
       </div>
+
+      {/* Said out loud rather than left to look like a zero. A privacy dashboard
+          reporting "0 active consents" because a request failed is worse than one
+          admitting it could not load. */}
+      {error && (
+        <div className="rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-ink">
+          {error}
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
@@ -95,10 +166,9 @@ export default function UserDashboard() {
               <li className="text-sm text-muted">Nothing recorded yet.</li>
             )}
             {data.recent_activity.map((entry, i, arr) => {
-              const notice = MOCK_NOTICES.find((n) => n.id === entry.purpose_id);
               const isWithdraw = entry.action_type === "withdraw";
               return (
-                <li key={entry.id} className="flex gap-3">
+                <li key={entry.log_id} className="flex gap-3">
                   <div className="flex flex-col items-center">
                     <span
                       className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${
@@ -111,7 +181,9 @@ export default function UserDashboard() {
                   <div className="pb-5">
                     <p className="text-sm text-ink">
                       {ACTION_LABEL[entry.action_type] || entry.action_type}
-                      {notice && <span className="text-muted"> — {notice.purpose}</span>}
+                      {entry.purpose && (
+                        <span className="text-muted"> — {entry.purpose}</span>
+                      )}
                     </p>
                     <p className="text-xs text-muted">
                       {new Date(entry.timestamp).toLocaleString()} · by {entry.initiator}

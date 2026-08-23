@@ -145,6 +145,18 @@ export function bannerPurposes() {
 }
 
 /**
+ * The organisation asking for consent.
+ *
+ * A banner has to name who is asking — "would like to use your data" with no
+ * subject is not something anyone can meaningfully agree to. This page runs
+ * signed-out on a publishable key, so it cannot read the name from a session;
+ * the server returns it for the tenant the key belongs to.
+ */
+export function bannerOrganisation() {
+  return call("/organisation");
+}
+
+/**
  * Record one purpose's consent.
  *
  * There is no `granted: false`. Declining means *not collecting* consent, not

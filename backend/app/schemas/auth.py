@@ -61,6 +61,22 @@ class UserOut(BaseModel):
     last_login_at: datetime | None = None
 
 
+class WorkspaceOut(BaseModel):
+    """Who the signed-in person is working for.
+
+    Added because nothing in the API carried it. `UserOut` has a `tenant_id` and
+    the login form knows the slug that was typed, but the organisation's actual
+    name existed only on the server — so the user-facing header displayed a
+    hardcoded "Example Fintech Pvt. Ltd." to everybody, in every workspace.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    slug: str
+    name: str
+
+
 class TokenResponse(BaseModel):
     """The refresh token is deliberately absent.
 
@@ -72,6 +88,7 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_at: datetime
     user: UserOut
+    workspace: WorkspaceOut
     capabilities: list[str] = Field(
         default_factory=list,
         description="What this role may do. The UI uses it to render; the server "

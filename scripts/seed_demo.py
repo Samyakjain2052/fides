@@ -307,7 +307,53 @@ def publish_notices(api: Api, purposes: list[dict]) -> dict[str, str]:
     return out
 
 
-def create_principals(api: Api) -> list[dict]:
+LOGIN_COUNT = 4
+
+
+def create_logins(api: Api) -> dict[str, str]:
+    """Real accounts for the first few of the cast. Returns email -> user id.
+
+    Runs BEFORE the principals are created, and the order is the whole point.
+    The app resolves a signed-in person's own principal record by
+    `external_id = f"user:{user.id}"` — see `ensureSelfPrincipal` in
+    src/api/consent.js. Creating principals first, keyed `demo-001`, produced two
+    records for the same human: the seeded one holding all their consents, and
+    the one their login actually resolves to, holding nothing.
+
+    The effect was invisible from the admin side and total from theirs: sign in
+    as Ananya and the Preference Centre showed no consents, the history was
+    empty, and the dashboard said "Nothing recorded yet" — for a person with
+    three consents and two complaints in the database.
+    """
+    out: dict[str, str] = {}
+    for name, email, _phone in PEOPLE[:LOGIN_COUNT]:
+        status, row = api.call("POST", "/v1/admin/users", {
+            "email": email,
+            "full_name": name,
+            "role": "data_principal",
+            "password": DEMO_PASSWORD,
+        }, allow=(409, 422))
+        if status in (200, 201) and isinstance(row, dict) and "id" in row:
+            out[email] = row["id"]
+        elif status == 409:
+            # Already there from an earlier run; find the id so the principal
+            # still gets keyed correctly.
+            users = api.get("/v1/admin/users")
+            items = users.get("items", []) if isinstance(users, dict) else (users or [])
+            match = next((u for u in items if u.get("email") == email), None)
+            if match:
+                out[email] = match["id"]
+    ok(f"{len(out)} data-principal logins (password: {DEMO_PASSWORD})")
+    return out
+
+
+def create_principals(api: Api, user_ids: dict[str, str]) -> list[dict]:
+    """One principal record per person, keyed so their own login finds it.
+
+    Anybody with a login gets `user:<id>`, which is what the app looks for.
+    Everybody else gets `demo-NNN` — they are people the organisation holds data
+    about who have never signed in, which is the normal case.
+    """
     rows: list[dict] = []
     listing = api.get("/v1/principals")
     items = listing.get("items", []) if isinstance(listing, dict) else (listing or [])
@@ -315,11 +361,13 @@ def create_principals(api: Api) -> list[dict]:
                 if isinstance(p, dict) and p.get("external_id")}
 
     for i, (name, email, phone) in enumerate(PEOPLE):
-        ext = f"demo-{i + 1:03d}"
+        uid = user_ids.get(email)
+        ext = f"user:{uid}" if uid else f"demo-{i + 1:03d}"
+
         if ext in existing:
-            row = dict(existing[ext], _name=name, _email=email)
-            rows.append(row)
+            rows.append(dict(existing[ext], _name=name, _email=email))
             continue
+
         body = {"external_id": ext, "email": email, "phone": phone}
         if i == MINOR_INDEX:
             body |= {"is_minor": True, "guardian_email": GUARDIAN_EMAIL}
@@ -327,10 +375,13 @@ def create_principals(api: Api) -> list[dict]:
         if isinstance(row, dict) and "id" in row:
             row["_name"] = name
             row["_email"] = email
+            row["_has_login"] = bool(uid)
             rows.append(row)
         else:
             warn(f"principal {ext} not created ({json.dumps(row)[:120]})")
-    ok(f"{len(rows)} data principals")
+
+    with_logins = sum(1 for r in rows if r.get("_has_login"))
+    ok(f"{len(rows)} data principals ({with_logins} of them can sign in)")
     return rows
 
 
@@ -388,28 +439,6 @@ def record_consents(
 
     ok(f"{granted} consents granted, {withdrawn} later withdrawn")
     return granted
-
-
-def create_logins(api: Api, principals: list[dict], count: int = 4) -> list[dict]:
-    """Real user accounts for some of the cast.
-
-    Needed because a complaint filed by an admin on someone's behalf is a
-    different record from one the person filed themselves, and the difference is
-    visible in the product. Some of the data below should be the second kind.
-    """
-    out = []
-    for person in principals[:count]:
-        body = {
-            "email": person["_email"],
-            "full_name": person["_name"],
-            "role": "data_principal",
-            "password": DEMO_PASSWORD,
-        }
-        status, row = api.call("POST", "/v1/admin/users", body, allow=(409, 422))
-        if status in (200, 201, 409):
-            out.append(person)
-    ok(f"{len(out)} data-principal logins (password: {DEMO_PASSWORD})")
-    return out
 
 
 def create_dsars(api: Api, workspace: str, principals: list[dict],
@@ -872,11 +901,13 @@ def main() -> None:
     ok(f"{len(purposes)} purposes on record")
 
     notices = publish_notices(api, purposes)
-    principals = create_principals(api)
+    user_ids = create_logins(api)
+    principals = create_principals(api, user_ids)
     if not principals:
         die("no data principals were created; nothing downstream can be seeded")
     record_consents(api, principals, purposes, notices)
-    with_logins = create_logins(api, principals)
+    # The people who can sign in, so their own screens show their own data.
+    with_logins = [p for p in principals if p.get("_has_login")]
     dsars = create_dsars(api, slug, principals, with_logins)
     create_grievances(api, slug, with_logins, dsars)
     create_retention(api)

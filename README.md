@@ -309,6 +309,30 @@ To seed an existing workspace instead of a new one, pass `--workspace`,
 unless you pass `--force`, because requests, complaints and breaches are not
 idempotent and a second run doubles them.
 
+### Clearing it out
+
+```bash
+./scripts/wipe_workspaces.sh          # lists what would go, then asks
+```
+
+Takes the database back to what `alembic upgrade head` leaves behind: schema and
+migration history stay, every workspace and everything in it goes. It asks you to
+type the number of workspaces rather than `y`, so you have to have read the list.
+
+It uses `TRUNCATE`, and the reason is worth knowing. `DELETE FROM tenants` does
+not work: every table cascades from `tenants` except `audit_events`, which is
+`ON DELETE RESTRICT` and carries a `BEFORE DELETE OR UPDATE` trigger — the
+evidence trail refuses to be rewritten or removed, which is the point of it.
+`TRUNCATE` gets past that because it does not fire row-level triggers.
+
+So the script deliberately defeats the append-only guarantee, and two things keep
+that from being alarming: it needs the **owner** role, and `datashield_app` — the
+role the API runs as — holds only `SELECT` and `INSERT` on `audit_events`, so
+nothing reachable from the application can do it; and it is all-or-nothing, so it
+cannot remove *some* entries, which is what tampering would look like. There is
+deliberately no partial version: dropping one tenant's audit rows would leave a
+chain with a hole in it, and `POST /v1/audit/verify` would start failing, correctly.
+
 **Adding another database, SaaS tool, or connector?** That is the main way to
 extend this — see **[CONTRIBUTING.md](CONTRIBUTING.md)**, which has the
 step-by-step, the checklist, and the silent-failure gotchas.

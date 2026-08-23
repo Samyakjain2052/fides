@@ -20,12 +20,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  bannerOrganisation,
   bannerPurposes,
   collectConsent,
   newIdempotencyKey,
   principalRef,
 } from "../../api/banner";
-import { MOCK_ORG, submitGuardianConsent, verifyOtp } from "../../api";
+import { submitGuardianConsent, verifyOtp } from "../../api";
 import { useApp } from "../../context/AppContext";
 import ConsentCard from "../../components/common/ConsentCard";
 import LanguageSwitcher from "../../components/common/LanguageSwitcher";
@@ -34,6 +35,7 @@ import { previewLock } from "../../config/modules";
 export default function ConsentBanner() {
   const { t, language, notify, user } = useApp();
   const [purposes, setPurposes] = useState([]);
+  const [orgName, setOrgName] = useState("");
   const [choices, setChoices] = useState({});
   const [receipts, setReceipts] = useState([]);
   const [saved, setSaved] = useState(false);
@@ -52,6 +54,13 @@ export default function ConsentBanner() {
     try {
       const rows = await bannerPurposes();
       setPurposes(rows);
+      // Fetched alongside, and allowed to fail on its own. Not knowing the
+      // organisation's name is a reason to word the heading generically, not a
+      // reason to refuse to show the banner — and certainly not a reason to
+      // print somebody else's name, which is what the hardcoded value did.
+      bannerOrganisation()
+        .then((o) => setOrgName(o?.name || ""))
+        .catch(() => setOrgName(""));
       // Every purpose starts OFF. This is the requirement, and the reason the
       // initial state is built from the response rather than defaulted anywhere.
       setChoices(Object.fromEntries(rows.map((r) => [r.key, false])));
@@ -117,7 +126,7 @@ export default function ConsentBanner() {
   };
 
   if (isMinor) {
-    return <GuardianConsentFlow onBack={() => setIsMinor(false)} />;
+    return <GuardianConsentFlow orgName={orgName} onBack={() => setIsMinor(false)} />;
   }
 
   if (loading) {
@@ -145,7 +154,8 @@ export default function ConsentBanner() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-lg font-semibold text-ink">
-              {MOCK_ORG.name} would like to use your data for the following purposes
+              {orgName || "This organisation"} would like to use your data for the
+              following purposes
             </h1>
             <p className="mt-1 text-sm text-muted">
               Nothing here is switched on until you switch it on. You can change any
@@ -276,7 +286,10 @@ export default function ConsentBanner() {
 // Guardian Consent Flow (sub-page of the banner)
 // guardian email → verify → guardian actively consents → OTP to guardian
 // ---------------------------------------------------------------------------
-function GuardianConsentFlow({ onBack }) {
+// `orgName` is passed down rather than re-fetched: this is the same banner
+// session, and asking the server twice for one string on a screen that is
+// already declared preview would be noise.
+function GuardianConsentFlow({ onBack, orgName }) {
   const { notify } = useApp();
   const [step, setStep] = useState(1);
   const [guardianEmail, setGuardianEmail] = useState("");
@@ -366,7 +379,8 @@ function GuardianConsentFlow({ onBack }) {
           <div className="rounded-lg border border-line bg-canvas p-4 text-sm">
             <p className="text-muted">To: {guardianEmail || "guardian@example.com"}</p>
             <p className="mt-2 text-ink">
-              {childName || "Your child"} has asked to use {MOCK_ORG.name}. As their guardian, you
+              {childName || "Your child"} has asked to use{" "}
+              {orgName || "this service"}. As their guardian, you
               must actively consent before any optional processing begins.
             </p>
           </div>
