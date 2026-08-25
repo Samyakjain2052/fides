@@ -536,12 +536,12 @@ services:
     environment:
       BACKEND_URL: http://cms-backend:8100
       GATEWAY_URL: http://fastapi-gateway:8000
-      # nginx caches an upstream's IP at startup, so recreating the backend used
-      # to 502 the whole site until nginx itself restarted. The template now
-      # proxies through a variable, which needs an explicit resolver. 127.0.0.11
-      # is Docker's embedded DNS; Azure Container Apps and Kubernetes each
-      # publish their own, hence the override.
-      DNS_RESOLVER: ${DNS_RESOLVER:-127.0.0.11}
+      # No DNS_RESOLVER here any more. nginx caches an upstream's IP at startup,
+      # so recreating the backend used to 502 the site until nginx restarted; the
+      # template proxies through a variable, which needs an explicit resolver.
+      # That resolver is now derived from /etc/resolv.conf by the image itself,
+      # which is right in compose, Container Apps and Kubernetes alike — the old
+      # hardcoded 127.0.0.11 was Docker-only and would have broken on Azure.
     ports:
       # 8080 inside the container. The host port defaults to 8090 because Fides
       # already owns 8080 locally; in Azure this is the app's only ingress.

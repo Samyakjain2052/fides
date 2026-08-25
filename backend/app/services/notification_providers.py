@@ -90,9 +90,64 @@ class AzureCommunicationEmailProvider:
     Inert without credentials: rather than throwing at import or startup, it
     reports a non-retryable failure per message so the reason lands on the row a
     DPO is looking at instead of in a log nobody reads.
+
+    SIGNING
+    -------
+    Signed with the resource's shared key rather than via
+    `azure-communication-email`, which pulls a large dependency tree for one HTTP
+    call. The scheme is Azure's standard HMAC one, and it is worth writing down
+    because every part of it is load-bearing:
+
+        StringToSign = VERB + "\n" + path?query + "\n" +
+                       x-ms-date + ";" + host + ";" + x-ms-content-sha256
+        Authorization: HMAC-SHA256 SignedHeaders=<those three>&Signature=<sig>
+
+    The key is base64 and must be decoded before use; signing the base64 text
+    itself produces a valid-looking signature that is always rejected. The body
+    hash covers the exact bytes sent, so the body is serialised once and both
+    hashed and posted — re-serialising could reorder keys and invalidate it.
     """
 
     name = "azure_acs"
+
+    # The API version the request shape below was written against. Pinned rather
+    # than tracking latest: a silently newer version can change required fields.
+    API_VERSION = "2023-03-31"
+
+    @staticmethod
+    def _sign(
+        *, method: str, url: str, body: bytes, access_key: str, date: str
+    ) -> dict[str, str]:
+        """Build the three headers ACS authenticates on."""
+        import base64
+        import hashlib
+        import hmac
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        path_and_query = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        host = parsed.netloc
+
+        content_hash = base64.b64encode(hashlib.sha256(body).digest()).decode()
+        string_to_sign = (
+            f"{method.upper()}\n{path_and_query}\n{date};{host};{content_hash}"
+        )
+        signature = base64.b64encode(
+            hmac.new(
+                base64.b64decode(access_key),
+                string_to_sign.encode("utf-8"),
+                hashlib.sha256,
+            ).digest()
+        ).decode()
+
+        return {
+            "x-ms-date": date,
+            "x-ms-content-sha256": content_hash,
+            "Authorization": (
+                "HMAC-SHA256 SignedHeaders=x-ms-date;host;x-ms-content-sha256"
+                f"&Signature={signature}"
+            ),
+        }
 
     async def send(self, *, to: str, subject: str, body: str, channel: str) -> SendResult:
         if channel != "email":
@@ -115,19 +170,64 @@ class AzureCommunicationEmailProvider:
                 retryable=False,
             )
 
-        # NOTE: ACS uses HMAC request signing. Implemented here rather than
-        # pulling in the azure-communication-email SDK, which brings a large
-        # dependency tree for one call. TODO(acs): sign with the shared key —
-        # this raises a clear, non-retryable error until that is done, instead of
-        # silently appearing to send.
+        import json
+        from email.utils import formatdate
+
+        url = (
+            f"{endpoint.rstrip('/')}/emails:send"
+            f"?api-version={self.API_VERSION}"
+        )
+        payload = {
+            "senderAddress": sender,
+            "recipients": {"to": [{"address": to}]},
+            "content": {"subject": subject, "plainText": body},
+        }
+        # Serialised ONCE. The signature covers these exact bytes, so hashing one
+        # serialisation and posting another would fail authentication in a way
+        # that looks like a wrong key.
+        raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+        # RFC 1123 in GMT, which is what ACS expects. `formatdate(usegmt=True)`
+        # produces it; a local-timezone stamp is rejected as clock skew.
+        headers = {
+            "Content-Type": "application/json",
+            **self._sign(
+                method="POST", url=url, body=raw, access_key=key,
+                date=formatdate(timeval=None, localtime=False, usegmt=True),
+            ),
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(url, content=raw, headers=headers)
+        except Exception as exc:  # noqa: BLE001
+            # Transport failure. Might be gone in a second.
+            return SendResult(
+                ok=False, error=f"{type(exc).__name__}: {exc}", retryable=True
+            )
+
+        if resp.status_code in (200, 202):
+            # ACS is asynchronous: 202 means accepted for delivery, and the
+            # operation id is how a bounce is traced later. Recorded as the
+            # provider message id so the delivery log can be reconciled against
+            # the ACS side.
+            op_id = resp.headers.get("operation-location", "")
+            message_id = (
+                resp.headers.get("x-ms-request-id")
+                or (op_id.rsplit("/", 1)[-1].split("?")[0] if op_id else None)
+                or f"acs-{uuid.uuid4().hex[:16]}"
+            )
+            return SendResult(ok=True, provider_message_id=message_id)
+
+        # 401/403 is a credential or clock problem; 400 is a malformed request or
+        # an unverified sender domain. None of those improve by trying again, and
+        # retrying a 401 every minute is how a queue turns into a log flood.
+        retryable = resp.status_code not in (400, 401, 403, 404)
+        detail = resp.text[:300].replace("\n", " ")
         return SendResult(
             ok=False,
-            error=(
-                "The Azure ACS provider is not finished: request signing is not "
-                "implemented. Configure a provider that is, or complete "
-                "TODO(acs) in notification_providers.py."
-            ),
-            retryable=False,
+            error=f"ACS returned {resp.status_code}: {detail}",
+            retryable=retryable,
         )
 
 

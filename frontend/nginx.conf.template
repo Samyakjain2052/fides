@@ -54,7 +54,15 @@ server {
     #
     # ipv6=off because the compose network is v4-only and nginx would otherwise
     # spend every lookup waiting on an AAAA query that always fails.
-    resolver ${DNS_RESOLVER} valid=10s ipv6=off;
+    #
+    # `NGINX_LOCAL_RESOLVERS` is derived from /etc/resolv.conf by the base image's
+    # own 15-local-resolvers.envsh, which is sourced before templates are
+    # substituted. It replaced a hand-rolled `DNS_RESOLVER` defaulting to
+    # 127.0.0.11 — Docker's embedded DNS, which does not exist in Container Apps
+    # or Kubernetes, so nginx there would resolve nothing and every proxied
+    # request would fail. Reading the resolver the platform actually gave us is
+    # correct in all three, and needs no per-environment override.
+    resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
     resolver_timeout 3s;
 
     # Uploads are capped here too, not only in the app. The edge is the only

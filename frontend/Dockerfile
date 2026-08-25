@@ -51,7 +51,11 @@ COPY --from=build /app/dist /usr/share/nginx/html
 # Defaults match the compose service names; Container Apps overrides them with
 # the internal FQDNs of the backend and gateway apps.
 ENV BACKEND_URL=http://cms-backend:8100 \
-    GATEWAY_URL=http://fastapi-gateway:8000
+    GATEWAY_URL=http://fastapi-gateway:8000 \
+    # Makes the base image export NGINX_LOCAL_RESOLVERS from /etc/resolv.conf
+    # before it substitutes the template. Off by default upstream; the template's
+    # `resolver` directive requires it.
+    NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
 
 # nginx:alpine ships an unprivileged `nginx` user. Port 8080 (not 80) so binding
 # needs no capability: this is the one container exposed to the internet, and it
