@@ -1,5 +1,12 @@
 # Azure go-live runbook
 
+> **DEPLOYED.** The product is live at
+> `https://cms-frontend.salmonriver-3b8dcd32.centralindia.azurecontainerapps.io`
+>
+> What is actually running, and what the plan below got wrong, is recorded in
+> **[the deployment record](#deployment-record)** at the end. Read that before
+> following the steps — three of them changed on contact with Azure.
+
 The concrete plan for getting **the DataShield product** onto a URL, for the shape
 that was actually chosen. [AZURE_DEPLOYMENT.md](AZURE_DEPLOYMENT.md) is the
 architecture and the reasoning behind the service mapping; this is the ordered
@@ -361,3 +368,78 @@ module — verifiable parental consent under §9 needs a real identity check, an
 publishable key in a browser cannot perform one. No PDF export, no grievance
 attachments, SMS unimplemented, and the audit chain is verifiable but not
 externally anchored.
+
+
+---
+
+# Deployment record
+
+What was built, and the four things the plan above did not anticipate.
+
+## Running
+
+| | |
+| --- | --- |
+| **URL** | `https://cms-frontend.salmonriver-3b8dcd32.centralindia.azurecontainerapps.io` |
+| `cms-frontend` | nginx, external ingress, the only public surface |
+| `cms-backend` | internal ingress only, min 1 / max 3 |
+| `cms-scheduler` | min-replicas 1, `python -m app.worker`, three jobs succeeding |
+| `datashield-pg-5b8c16` | PostgreSQL 16, **public access Disabled**, reached over a private endpoint |
+| `cae-datashield` | Container Apps environment, VNet-joined |
+| `kv-ds-c20b5d2c` | 5 secrets, read via user-assigned identity |
+| `acrdatashieldc20b5d2c` | both images, tagged by commit |
+| ACS `dpdpa` | email domain linked and verified; provider reports `sends_real_messages: true` |
+
+Verified: 34 isolation, self-service, audit-chain and auth tests against Azure
+Postgres; all 25 tenant-scoped tables RLS-forced; a real email delivered; a
+workspace seeded through the public URL; and the refresh cookie surviving three
+consecutive `/auth/refresh` calls with `path=/api/v1/auth`, `HttpOnly`, `Secure`,
+`SameSite=Strict`.
+
+## What the plan got wrong
+
+**1. Container Apps could not reach Postgres, and allow-listing IPs did not fix
+it.** The plan assumed the firewall was a one-line step. The environment's
+reported `outboundIpAddresses` were added and connections still timed out —
+consumption-environment egress comes from a pool that is not fully enumerated by
+that field. Chasing individual addresses would have produced something that broke
+silently later. The environment was rebuilt VNet-joined with a private endpoint
+and private DNS zone for Postgres, and public access is now off entirely. A
+Container Apps environment cannot be VNet-joined after creation, so this meant
+deleting and recreating it and both apps.
+
+**Consequence worth knowing:** no laptop can reach that database any more,
+including for `make azure-verify-db` and `alembic upgrade head`. Migrations and
+verification now need to run *inside* the VNet — as a Container Apps job, which is
+the pattern the plan already specified for migrations and should now be treated as
+the only way in.
+
+**2. nginx sent the wrong `Host` header.** Container Apps routes internal ingress
+by Host, so `proxy_set_header Host $host` handed the backend's endpoint the
+*frontend's* hostname; the platform found no app by that name and returned its own
+"Container App - Unavailable" page. Every `/api/` call 404'd with HTML. Invisible
+locally, because uvicorn does not care what Host says. Fixed to `$proxy_host` in
+all three proxy blocks, with the original preserved in `X-Forwarded-Host`.
+
+**3. Proxying to internal https needed SNI.** Internal ingress redirects http to
+https and puts the internal FQDN in `Location`, which a browser cannot resolve. So
+the frontend proxies to https — and that returned 502, because nginx does not send
+SNI by default and the platform routes on it. `proxy_ssl_server_name on` fixed it.
+
+**4. `DNS_RESOLVER` was solved by the base image.** The plan proposed reading
+`/etc/resolv.conf` in a custom entrypoint. Unnecessary: nginx already ships
+`15-local-resolvers.envsh`, which does exactly that and is sourced before template
+substitution. It only needed `NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1`.
+
+## Still true, and still open
+
+`consent_guardian` is the one preview module. No PDF export, no grievance
+attachments, SMS unimplemented, and the audit chain is verifiable but not
+externally anchored. There is no CI pipeline — both images were built with
+`az acr build` by hand, and migrations were applied from a laptop while public
+access was still on. The DSAR engine is not deployed, so a rights request is
+filed, tracked and worked by staff but not executed across datastores.
+
+Registration is open, so anyone with the URL can create a workspace. The rate
+limiter is per-replica and says of itself that it is not a security boundary, and
+there is no WAF in this shape.
