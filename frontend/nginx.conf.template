@@ -97,7 +97,18 @@ server {
         proxy_pass         $cms_backend;
         proxy_http_version 1.1;
 
-        proxy_set_header   Host              $host;
+        # `$proxy_host`, NOT `$host`. Azure Container Apps routes internal
+        # ingress by Host header, so sending the FRONTEND's hostname to the
+        # backend's endpoint makes the platform look for an app by that name,
+        # fail, and return its own "Container App - Unavailable" page — a 404
+        # that looks like a routing bug in this file rather than a header
+        # problem. Locally it never showed up, because uvicorn does not care
+        # what Host says.
+        #
+        # The original host is preserved in X-Forwarded-Host for anything that
+        # needs to know what the client actually asked for.
+        proxy_set_header   Host              $proxy_host;
+        proxy_set_header   X-Forwarded-Host  $host;
         proxy_set_header   X-Real-IP         $remote_addr;
         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
         # The backend marks its cookie Secure. Without this it cannot tell that
@@ -122,7 +133,9 @@ server {
         proxy_pass         $cms_backend_public$request_uri;
         proxy_http_version 1.1;
 
-        proxy_set_header   Host              $host;
+        # $proxy_host, not $host — see the /api/ block above.
+        proxy_set_header   Host              $proxy_host;
+        proxy_set_header   X-Forwarded-Host  $host;
         proxy_set_header   X-Real-IP         $remote_addr;
         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto $scheme;
@@ -140,7 +153,9 @@ server {
         proxy_pass         $dsar_gateway;
         proxy_http_version 1.1;
 
-        proxy_set_header   Host              $host;
+        # $proxy_host, not $host — see the /api/ block above.
+        proxy_set_header   Host              $proxy_host;
+        proxy_set_header   X-Forwarded-Host  $host;
         proxy_set_header   X-Real-IP         $remote_addr;
         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto $scheme;
