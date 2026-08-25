@@ -65,6 +65,19 @@ server {
     resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
     resolver_timeout 3s;
 
+    # SNI on proxied TLS connections, and off by default in nginx.
+    #
+    # Needed because the upstreams below may be https. Azure Container Apps
+    # routes internal ingress on SNI, so without this the handshake reaches the
+    # platform with no server name, cannot be routed, and nginx reports 502 —
+    # which reads as "the backend is down" rather than "the TLS hello was
+    # incomplete". `proxy_ssl_name` follows the proxy_pass host so it stays
+    # correct if BACKEND_URL changes.
+    #
+    # Harmless when the upstream is plain http, as it is under docker compose.
+    proxy_ssl_server_name on;
+    proxy_ssl_name        $proxy_host;
+
     # Uploads are capped here too, not only in the app. The edge is the only
     # place a limit cannot be bypassed by calling the API directly.
     client_max_body_size 10m;
