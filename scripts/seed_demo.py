@@ -146,28 +146,34 @@ class Api:
 #
 # Names and emails only. Everything else about these people — their consents,
 # their complaints, their requests — is produced by the API below.
+#
+# Addresses are under `example.com`, which RFC 2606 reserves precisely so it
+# cannot be delivered to. This used to be `example.in`, which is NOT reserved —
+# only example.com/.net/.org and the .example TLD are — and that stopped being
+# harmless the moment a deployed environment had a real email provider: seeding
+# it sent nine actual messages to a domain somebody else may own.
 # --------------------------------------------------------------------------- #
 
 PEOPLE = [
-    ("Ananya Iyer",        "ananya.iyer@example.in",      "+919812345001"),
-    ("Rohit Deshpande",    "rohit.deshpande@example.in",  "+919812345002"),
-    ("Fatima Sheikh",      "fatima.sheikh@example.in",    "+919812345003"),
-    ("Karthik Nair",       "karthik.nair@example.in",     "+919812345004"),
-    ("Meera Bhattacharya", "meera.b@example.in",          "+919812345005"),
-    ("Devansh Patel",      "devansh.patel@example.in",    "+919812345006"),
-    ("Sneha Raghavan",     "sneha.raghavan@example.in",   "+919812345007"),
-    ("Imran Qureshi",      "imran.qureshi@example.in",    "+919812345008"),
-    ("Tanvi Kulkarni",     "tanvi.kulkarni@example.in",   "+919812345009"),
-    ("Joseph Mathew",      "joseph.mathew@example.in",    "+919812345010"),
-    ("Priya Venkatesan",   "priya.v@example.in",          "+919812345011"),
+    ("Ananya Iyer",        "ananya.iyer@example.com",      "+919812345001"),
+    ("Rohit Deshpande",    "rohit.deshpande@example.com",  "+919812345002"),
+    ("Fatima Sheikh",      "fatima.sheikh@example.com",    "+919812345003"),
+    ("Karthik Nair",       "karthik.nair@example.com",     "+919812345004"),
+    ("Meera Bhattacharya", "meera.b@example.com",          "+919812345005"),
+    ("Devansh Patel",      "devansh.patel@example.com",    "+919812345006"),
+    ("Sneha Raghavan",     "sneha.raghavan@example.com",   "+919812345007"),
+    ("Imran Qureshi",      "imran.qureshi@example.com",    "+919812345008"),
+    ("Tanvi Kulkarni",     "tanvi.kulkarni@example.com",   "+919812345009"),
+    ("Joseph Mathew",      "joseph.mathew@example.com",    "+919812345010"),
+    ("Priya Venkatesan",   "priya.v@example.com",          "+919812345011"),
     # A minor, with a guardian on record. §9 consent is not implemented — this
     # record exists so the flag is visible somewhere real, not to imply the
     # guardian was verified. He was not.
-    ("Aarav Menon",        "aarav.menon@example.in",      "+919812345012"),
+    ("Aarav Menon",        "aarav.menon@example.com",      "+919812345012"),
 ]
 
 MINOR_INDEX = 11
-GUARDIAN_EMAIL = "lakshmi.menon@example.in"
+GUARDIAN_EMAIL = "lakshmi.menon@example.com"
 
 
 # --------------------------------------------------------------------------- #
@@ -244,7 +250,7 @@ def login(api: Api, workspace: str, email: str, password: str) -> dict:
 def register(api: Api, company: str) -> tuple[str, str, str]:
     """Create a workspace and return (slug, admin_email, password)."""
     slug = "".join(c for c in company.lower().replace(" ", "-") if c.isalnum() or c == "-")[:24]
-    email = f"dpo@{slug}.example.in"
+    email = f"dpo@{slug}.example.com"
     password = "Demo!Workspace2026"
     status, payload = api.call(
         "POST", "/v1/auth/register",
@@ -803,14 +809,36 @@ FROM ordered o WHERE o.id = c.id;
 """
 
 
-def backdate(tenant_id: str) -> bool:
+def is_local(base_url: str) -> bool:
+    """Whether `--base-url` points at the local compose stack."""
+    from urllib.parse import urlparse
+    host = (urlparse(base_url).hostname or "").lower()
+    return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+def backdate(tenant_id: str, base_url: str) -> bool:
     """Shift timestamps only. Never inserts, never invents a value.
 
     Runs through `docker compose exec` as the owner role, because the app role
     is intentionally not allowed to rewrite history — which is the correct
     setting and the reason this is a separate, opt-out pass rather than part of
     the seed.
+
+    REFUSES TO RUN AGAINST A REMOTE TARGET, and that guard is not paranoia — it
+    is a bug this had. `docker compose exec cms-db` always reaches the *local*
+    database, whatever `--base-url` says. Seeding a deployed environment
+    therefore sent these UPDATEs to the wrong server, matched nothing (the
+    tenant id belongs to the remote one), and still reported
+    "timestamps backdated" — so the summary claimed a data set with an overdue
+    complaint in it while the target had everything dated today.
     """
+    if not is_local(base_url):
+        warn(f"backdate pass SKIPPED — {base_url} is not the local stack, and "
+             f"this pass can only reach the local database")
+        print("    Everything is dated today, so nothing is overdue and no")
+        print("    deadline is close. To age a deployed environment, run the")
+        print("    UPDATEs in BACKDATE_SQL against it directly as the owner role.")
+        return False
     sql = BACKDATE_SQL.format(tenant_id=tenant_id)
     proc = subprocess.run(
         ["docker", "compose", "exec", "-T", "cms-db",
@@ -917,7 +945,7 @@ def main() -> None:
         warn("skipped the backdate pass — everything is dated today, so nothing "
              "is overdue and no deadline is close")
     elif tenant_id:
-        backdate(str(tenant_id))
+        backdate(str(tenant_id), args.base_url)
 
     # After the shift, not before: escalation is judged against the dates the
     # backdate pass has just written.
@@ -926,7 +954,12 @@ def main() -> None:
 
     print()
     bold("Sign in")
-    print(f"  {args.base_url.replace(':8100', ':8090')}/login")
+    # Strip a trailing /api: the browser entry point is the site root, while
+    # --base-url points at the API mounted beneath it.
+    browser = args.base_url.replace(":8100", ":8090")
+    if browser.rstrip("/").endswith("/api"):
+        browser = browser.rstrip("/")[: -len("/api")]
+    print(f"  {browser.rstrip('/')}/login")
     print(f"  workspace : {slug}")
     print(f"  admin     : {email} / {password}")
     print(f"  a person  : {principals[0]['_email']} / {DEMO_PASSWORD}"
