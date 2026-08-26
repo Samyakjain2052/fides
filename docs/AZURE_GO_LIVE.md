@@ -443,3 +443,31 @@ filed, tracked and worked by staff but not executed across datastores.
 Registration is open, so anyone with the URL can create a workspace. The rate
 limiter is per-replica and says of itself that it is not a security boundary, and
 there is no WAF in this shape.
+
+
+## A deploy verification trap, learned the hard way
+
+`az containerapp update` reports **Succeeded** when the control-plane operation
+succeeds — not when the new revision is serving. In single-revision mode, if the
+new revision never becomes ready, Container Apps keeps the previous one serving
+traffic and the app stays up on the old code.
+
+That happened here twice, and hid two things at once. Setting
+`DS_CORS_ORIGINS=https://...` as a bare string crash-looped every new revision,
+because the field is `list[str]` and pydantic-settings needs JSON
+(`["https://..."]`). "Succeeded" was printed, the app was probed and answered
+200 — from the old revision — so the misconfiguration went unnoticed, and the
+next image rollout appeared to do nothing because its revision could not start
+either.
+
+**So a deploy is not verified by the app answering.** After every update, check
+that exactly one revision is active, that its image is the tag you just pushed,
+and that its health is `Healthy`:
+
+```bash
+az containerapp revision list -g rg-datashield -n <app> \
+  --query "[?properties.active].{rev:name, image:properties.template.containers[0].image, health:properties.healthState}" -o table
+```
+
+Two active revisions, or an active one on the old tag, means the rollout did not
+take — whatever the update command said.
