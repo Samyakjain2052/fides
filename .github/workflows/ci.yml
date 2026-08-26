@@ -53,8 +53,16 @@ jobs:
       # cms-backend serves, because the suite truncates every table between
       # tests. Both databases and both roles are created by the two initdb
       # scripts mounted on cms-db.
+      #
+      # NO trailing command. `docker compose run <service> <cmd>` REPLACES the
+      # service's command, and this service's command is
+      # `sh -c "alembic upgrade head && pytest -q"`. Passing `pytest -q` here
+      # dropped the migration, so all 448 tests failed with
+      # `relation "audit_events" does not exist` — on a laptop it would have
+      # passed, because the test database was already at head from a previous
+      # run. A fresh CI database has no such history.
       - name: Run the suite
-        run: docker compose run --rm cms-test pytest -q
+        run: docker compose run --rm cms-test
 
       - name: Database logs on failure
         if: failure()
