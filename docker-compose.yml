@@ -362,6 +362,13 @@ services:
       # Creates the two roles the migration expects: an owner for migrations and
       # a restricted app role that RLS actually applies to.
       - ./backend/scripts_bootstrap.sql:/docker-entrypoint-initdb.d/00_roles.sql:ro
+      # The test suite's own database. Its file always said it runs from
+      # initdb.d, but the mount was never added — so it only existed on machines
+      # where somebody had run it by hand. On a fresh clone `make api-test`
+      # failed at connection time, which is also the first thing CI hit.
+      # Lexical order matters: this must follow 00_roles.sql, whose roles it
+      # grants to.
+      - ./backend/scripts_bootstrap_test_db.sql:/docker-entrypoint-initdb.d/01_test_db.sql:ro
     ports:
       - "${CMS_DB_HOST_PORT:-6543}:5432"
     healthcheck:

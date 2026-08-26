@@ -1,0 +1,84 @@
+# =============================================================================
+# CI — runs on every push and every pull request.
+#
+# Deliberately holds NO credentials and touches NO cloud resource. This repo is
+# public, so anybody can open a pull request and cause this file to run; if it
+# could reach Azure, a fork could reach Azure. Deployment lives in deploy.yml,
+# which only triggers on pushes to `main` and authenticates with OIDC that a fork
+# cannot obtain.
+#
+# The two jobs mirror the two gates that already exist locally, rather than
+# inventing CI-only checks:
+#   * `docker compose run --rm cms-test` — the same path `make api-test` uses, so
+#     CI and a laptop cannot disagree about what passing means.
+#   * `npm run build` — which chains eslint and check-preview-locks.mjs before
+#     vite. Three bugs have shipped past a green `vite build` in this repo
+#     because nothing verified that identifiers existed, hence the lint gate.
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  # A second push to the same branch cancels the first. Not for main, where
+  # every commit's result is worth having.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # Throwaway values, generated per run. The suite needs them because
+      # Settings refuses secrets under 32 characters and refuses anything
+      # starting with "changeme"/"secret"/"example"/"test-secret" — a guard
+      # against shipping the example config, which also means CI cannot use a
+      # convenient placeholder. Generating them is the honest way round it.
+      - name: Generate throwaway secrets
+        run: |
+          echo "DS_JWT_SECRET=$(openssl rand -base64 48 | tr -d '\n')" >> "$GITHUB_ENV"
+          echo "DS_AUDIT_HMAC_KEY=$(openssl rand -base64 48 | tr -d '\n')" >> "$GITHUB_ENV"
+
+      # `cms-test` points at `datashield_test`, a different database from the one
+      # cms-backend serves, because the suite truncates every table between
+      # tests. Both databases and both roles are created by the two initdb
+      # scripts mounted on cms-db.
+      - name: Run the suite
+        run: docker compose run --rm cms-test pytest -q
+
+      - name: Database logs on failure
+        if: failure()
+        run: docker compose logs cms-db --tail 60
+
+  frontend:
+    name: Frontend lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+        working-directory: frontend
+
+      # `build` is `eslint && check-preview-locks && vite build`. The preview-lock
+      # check fails if a module marked `preview` has a mutating control that is
+      # not disabled — the guarantee that the UI never claims something works
+      # when it does not.
+      - run: npm run build
+        working-directory: frontend

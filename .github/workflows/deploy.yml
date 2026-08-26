@@ -1,0 +1,202 @@
+# =============================================================================
+# Deploy to Azure — pushes to `main`, or run by hand.
+#
+# AUTHENTICATION
+# No secret ever reaches this public repo. Azure trusts a short-lived OIDC token
+# minted by GitHub for this repository, exchanged via a federated credential on
+# the `id-github-deploy` user-assigned identity. There is no client secret to
+# leak, rotate, or find in a log. A fork cannot obtain that token: the federated
+# credential's subject pins `repo:<owner>/<repo>:environment:production`, and the
+# `environment:` key below is what makes GitHub mint a token with that subject.
+#
+# The three values in `secrets` are identifiers, not credentials — they grant
+# nothing without the federated trust. They are secrets rather than variables
+# only to keep the subscription id out of public logs.
+#
+# WHAT THIS IDENTITY CAN DO
+# Contributor on the registry and on the three container apps, and nothing else.
+# Not on the resource group. It cannot read Key Vault, cannot touch Postgres,
+# cannot change the network. A compromised workflow can deploy a bad image — it
+# cannot exfiltrate the database.
+#
+# ORDER
+# Migrations run before the apps are updated, as their own Container Apps job.
+# Two reasons, and the second is new since the database went private:
+#   1. Two replicas racing `alembic upgrade head` is a corrupted migration state,
+#      and a failed migration should stop the deploy rather than crash-loop a
+#      container that is already serving.
+#   2. Postgres has public access DISABLED and is reachable only over a private
+#      endpoint. No runner can reach it. Inside the VNet is the only way in.
+# =============================================================================
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Never two deploys at once. The second would race the first's revision
+  # rollout and the winner would be whichever finished last.
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # required to request the OIDC token
+  contents: read
+
+env:
+  RG: rg-datashield
+  ACR: acrdatashieldc20b5d2c
+  ENVIRONMENT: cae-datashield
+  SITE: https://cms-frontend.salmonriver-3b8dcd32.centralindia.azurecontainerapps.io
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Gives the OIDC token the `environment:production` subject the federated
+    # credential expects, and gives you somewhere to add required reviewers if
+    # you ever want a human between main and production.
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the tag
+        id: tag
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Built by ACR, not by the runner. The registry builds for linux/amd64
+      # regardless of what the runner is, there is no docker login to manage, and
+      # the layer cache lives next to where the image is pulled from.
+      - name: Build the backend image
+        run: |
+          az acr build -r "$ACR" --platform linux/amd64 \
+            -t "datashield-backend:${{ steps.tag.outputs.sha }}" \
+            --target runtime ./backend
+
+      - name: Build the frontend image
+        run: |
+          az acr build -r "$ACR" --platform linux/amd64 \
+            -t "datashield-frontend:${{ steps.tag.outputs.sha }}" \
+            --build-arg "VITE_BUILD_SHA=${{ steps.tag.outputs.sha }}" ./frontend
+
+      # --- migrations, before anything serves the new code -------------------
+      - name: Point the migration job at this build
+        run: |
+          az containerapp job update -g "$RG" -n cms-migrate \
+            --image "$ACR.azurecr.io/datashield-backend:${{ steps.tag.outputs.sha }}" \
+            -o none
+
+      - name: Run migrations and wait
+        run: |
+          EXEC=$(az containerapp job start -g "$RG" -n cms-migrate --query name -o tsv)
+          echo "execution: $EXEC"
+          for _ in $(seq 1 60); do
+            STATUS=$(az containerapp job execution show -g "$RG" -n cms-migrate \
+                       --job-execution-name "$EXEC" --query properties.status -o tsv)
+            case "$STATUS" in
+              Succeeded) echo "migrations applied"; exit 0 ;;
+              Failed|Degraded)
+                echo "::error::migration job $STATUS"
+                az containerapp job logs show -g "$RG" -n cms-migrate \
+                  --execution "$EXEC" --container cms-migrate --tail 80 || true
+                exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "::error::migration job did not finish in 10 minutes"
+          exit 1
+
+      # --- roll the three apps ----------------------------------------------
+      - name: Update the apps
+        run: |
+          for app in cms-backend cms-scheduler; do
+            az containerapp update -g "$RG" -n "$app" \
+              --image "$ACR.azurecr.io/datashield-backend:${{ steps.tag.outputs.sha }}" -o none
+          done
+          az containerapp update -g "$RG" -n cms-frontend \
+            --image "$ACR.azurecr.io/datashield-frontend:${{ steps.tag.outputs.sha }}" -o none
+
+      # THE STEP THAT EARNS ITS KEEP.
+      #
+      # `az containerapp update` reports success when the control-plane call
+      # succeeds — NOT when the new revision serves traffic. In single-revision
+      # mode a crash-looping new revision leaves the previous one serving, so the
+      # site answers 200 on old code and the deploy looks finished.
+      #
+      # That happened here: DS_CORS_ORIGINS was set as a bare string when the
+      # field is list[str], every new revision crash-looped, the app was probed,
+      # it returned 200 from the old revision, and the misconfiguration went
+      # unnoticed until a later fix appeared not to deploy.
+      #
+      # So the gate is: exactly one active revision, on the tag just pushed,
+      # reporting Healthy.
+      - name: Verify the rollout actually took
+        run: |
+          FAILED=0
+          for app in cms-backend cms-scheduler cms-frontend; do
+            case "$app" in
+              cms-frontend) WANT="$ACR.azurecr.io/datashield-frontend:${{ steps.tag.outputs.sha }}" ;;
+              *)            WANT="$ACR.azurecr.io/datashield-backend:${{ steps.tag.outputs.sha }}" ;;
+            esac
+
+            OK=0
+            for _ in $(seq 1 30); do
+              ROWS=$(az containerapp revision list -g "$RG" -n "$app" \
+                       --query "[?properties.active].{image:properties.template.containers[0].image, health:properties.healthState}" -o tsv)
+              COUNT=$(printf '%s\n' "$ROWS" | grep -c . || true)
+              if [ "$COUNT" = "1" ] && printf '%s' "$ROWS" | grep -q "$WANT" \
+                 && printf '%s' "$ROWS" | grep -q "Healthy"; then
+                echo "$app: serving ${{ steps.tag.outputs.sha }}, healthy"
+                OK=1; break
+              fi
+              sleep 10
+            done
+
+            if [ "$OK" != "1" ]; then
+              echo "::error::$app did not converge on ${{ steps.tag.outputs.sha }}"
+              az containerapp revision list -g "$RG" -n "$app" \
+                --query "[?properties.active].{rev:name, image:properties.template.containers[0].image, health:properties.healthState}" -o table
+              az containerapp logs show -g "$RG" -n "$app" --tail 60 --type console || true
+              FAILED=1
+            fi
+          done
+          exit "$FAILED"
+
+      # Public surface, from outside. /api/health proves the whole chain:
+      # nginx -> internal ingress -> backend -> Postgres over the private
+      # endpoint. A static-file 200 on /healthz would not.
+      - name: Smoke test
+        run: |
+          for path in /healthz /login /api/health; do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$SITE$path")
+            echo "  $path -> $CODE"
+            [ "$CODE" = "200" ] || { echo "::error::$path returned $CODE"; exit 1; }
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Deploy ${{ steps.tag.outputs.sha }}"
+            echo ""
+            echo "| App | Active revision | Image | Health |"
+            echo "| --- | --- | --- | --- |"
+            for app in cms-backend cms-scheduler cms-frontend; do
+              az containerapp revision list -g "$RG" -n "$app" \
+                --query "[?properties.active].[name, properties.template.containers[0].image, properties.healthState]" -o tsv \
+              | while IFS=$'\t' read -r rev image health; do
+                  echo "| $app | \`$rev\` | \`${image##*/}\` | $health |"
+                done
+            done
+            echo ""
+            echo "[$SITE]($SITE)"
+          } >> "$GITHUB_STEP_SUMMARY"
