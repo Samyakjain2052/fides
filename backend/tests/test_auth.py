@@ -49,7 +49,25 @@ async def test_wrong_password_is_indistinguishable_from_unknown_email(
     assert messages[0] == messages[1], f"login leaks which emails exist: {messages}"
 
 
-async def test_unknown_tenant_also_gives_the_same_error(app_session_factory, tenant_a):
+async def test_unknown_tenant_names_the_workspace_not_the_password(
+    app_session_factory, tenant_a
+):
+    """DELIBERATELY CHANGED. This asserted the opposite until a user reported
+    "authentication is not working" and spent their time changing a password that
+    was already correct.
+
+    The old behaviour returned the credential message for an unknown workspace,
+    to avoid confirming which companies are customers. It bought nothing:
+    `GET /auth/workspace-available` answers exactly that question to anybody,
+    unauthenticated, and its own docstring explains why that is the right call —
+    "a form that only reveals it on submit is hostile, and the same information
+    is obtainable by attempting to register anyway".
+
+    So the secret was already public through the front door, while the login form
+    paid for it by misdirecting every mistyped workspace at the password. What
+    must still be hidden is whether an email exists *within* a known workspace,
+    and the test above pins that.
+    """
     async with app_session_factory() as session:
         with pytest.raises(AuthenticationError) as exc:
             async with session.begin():
@@ -57,7 +75,9 @@ async def test_unknown_tenant_also_gives_the_same_error(app_session_factory, ten
                     session, tenant_slug="no-such-tenant",
                     email=tenant_a["admin_email"], password=tenant_a["password"],
                 )
-    assert "incorrect" in str(exc.value).lower()
+    message = str(exc.value)
+    assert "no-such-tenant" in message
+    assert "workspace" in message.lower()
 
 
 async def test_refresh_rotates_and_consumes_the_old_token(app_session_factory, tenant_a):
@@ -242,3 +262,121 @@ async def test_two_tenants_report_their_own_name(
             )
     assert a.tenant.id != b.tenant.id
     assert a.tenant.name != b.tenant.name
+
+
+# --------------------------------------------------------------------------- #
+# Signing in with the workspace as a human types it.
+#
+# Reported as "authentication is not working — I create an org, then re-login and
+# it says wrong password". It was not the password. The email was lowercased on
+# the way in and the workspace slug was not, so "Acme Fintech", "Acme-Fintech",
+# and a slug pasted with a trailing space all missed the tenant lookup — and the
+# response said "Email or password is incorrect", which sent people off changing
+# a password that was already right.
+# --------------------------------------------------------------------------- #
+
+async def test_the_workspace_is_matched_case_insensitively(
+    app_session_factory, tenant_a
+):
+    async with app_session_factory() as session:
+        async with session.begin():
+            pair = await auth_service.authenticate(
+                session, tenant_slug=tenant_a["slug"].upper(),
+                email=tenant_a["admin_email"], password=tenant_a["password"],
+            )
+    assert pair.user.email == tenant_a["admin_email"]
+
+
+async def test_surrounding_whitespace_in_the_workspace_is_ignored(
+    app_session_factory, tenant_a
+):
+    """Copy-paste picks up a trailing space and the user cannot see it."""
+    async with app_session_factory() as session:
+        async with session.begin():
+            pair = await auth_service.authenticate(
+                session, tenant_slug=f"  {tenant_a['slug']}  ",
+                email=tenant_a["admin_email"], password=tenant_a["password"],
+            )
+    assert pair.tenant.slug == tenant_a["slug"]
+
+
+async def test_the_company_name_resolves_to_its_slug(app_session_factory, tenant_a):
+    """`Tenant A` was registered and became `tenant-a`. Typing the name it was
+    registered under has to work, because that is what people remember."""
+    async with app_session_factory() as session:
+        async with session.begin():
+            pair = await auth_service.authenticate(
+                session, tenant_slug=tenant_a["name"],
+                email=tenant_a["admin_email"], password=tenant_a["password"],
+            )
+    assert pair.tenant.slug == tenant_a["slug"]
+
+
+async def test_an_unknown_workspace_says_so_instead_of_blaming_the_password(
+    app_session_factory, tenant_a
+):
+    """The actual complaint. A wrong workspace must not be reported as a
+    credential problem.
+
+    Safe to disclose: `GET /auth/workspace-available` already tells anybody,
+    unauthenticated and by design, whether a workspace exists.
+    """
+    with pytest.raises(AuthenticationError) as caught:
+        async with app_session_factory() as session:
+            async with session.begin():
+                await auth_service.authenticate(
+                    session, tenant_slug="no-such-workspace-anywhere",
+                    email=tenant_a["admin_email"], password=tenant_a["password"],
+                )
+    message = str(caught.value)
+    assert "workspace" in message.lower()
+    assert "password" not in message.lower().split("workspace id")[0]
+
+
+async def test_a_wrong_password_is_still_generic(app_session_factory, tenant_a):
+    """The other half must NOT have loosened. Once the workspace is known, the
+    response must not reveal whether the email exists inside it."""
+    with pytest.raises(AuthenticationError) as caught:
+        async with app_session_factory() as session:
+            async with session.begin():
+                await auth_service.authenticate(
+                    session, tenant_slug=tenant_a["slug"],
+                    email=tenant_a["admin_email"], password="definitely-not-it-1234",
+                )
+    assert "Email or password is incorrect" in str(caught.value)
+
+
+async def test_a_slug_slugify_would_not_preserve_can_still_sign_in(
+    app_session_factory, unique_slug
+):
+    """The regression guard.
+
+    `SLUG_RE` accepts `acme--corp` and `x-`; `slugify` collapses repeated hyphens
+    and strips trailing ones. Normalising the typed value unconditionally would
+    have made any workspace registered with such a slug impossible to sign in to
+    — worse than the bug being fixed. The exact input is tried first for exactly
+    this reason.
+    """
+    from app.services import tenant_service
+
+    awkward = "aa--bb"          # valid per SLUG_RE, not a slugify fixed point
+    from app.services.registration_service import slugify
+    assert slugify(awkward) != awkward, "this test needs a non-canonical slug"
+
+    async with app_session_factory() as session:
+        async with session.begin():
+            await tenant_service.create_tenant(
+                session, slug=awkward, name="Awkward Ltd",
+                admin_email="admin@awkward.example.com",
+                admin_password="correct-horse-battery-staple",
+                admin_name="Awkward Admin",
+            )
+
+    async with app_session_factory() as session:
+        async with session.begin():
+            pair = await auth_service.authenticate(
+                session, tenant_slug=awkward,
+                email="admin@awkward.example.com",
+                password="correct-horse-battery-staple",
+            )
+    assert pair.tenant.slug == awkward

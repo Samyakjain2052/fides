@@ -78,15 +78,58 @@ async def authenticate(
     is resolved. Every subsequent query is explicitly filtered by that tenant id,
     and the tenant context is set before the audit write.
     """
-    tenant = (
-        await session.execute(select(Tenant).where(Tenant.slug == tenant_slug, Tenant.is_active))
-    ).scalar_one_or_none()
+    # Normalised through the SAME function that produced the slug at signup.
+    #
+    # The email below is lowercased; the workspace was not, and the asymmetry was
+    # the whole bug. Someone who signed up as "Acme Fintech" got the slug
+    # "acme-fintech", then typed "Acme Fintech" — or "Acme-Fintech", or pasted it
+    # with a trailing space — and was told **"Email or password is incorrect."**
+    # They then changed their password, repeatedly, because that is what the
+    # message told them to do.
+    #
+    # The exact input is tried FIRST, and the slugified form only as a fallback.
+    #
+    # Slugifying unconditionally would have been a worse bug than the one being
+    # fixed. `SLUG_RE` accepts slugs that `slugify` does not preserve — it allows
+    # `acme--corp` and `x-`, while slugify collapses repeated hyphens and strips
+    # trailing ones. A workspace registered with either would have become
+    # impossible to sign in to at all.
+    from app.services.registration_service import slugify
+
+    typed = (tenant_slug or "").strip().lower()
+    candidates = [typed]
+    loose = slugify(typed)
+    if loose and loose != typed:
+        candidates.append(loose)
+
+    found = (
+        await session.execute(
+            select(Tenant).where(Tenant.slug.in_(candidates), Tenant.is_active)
+        )
+    ).scalars().all()
+
+    # Exact wins, so a real slug is never shadowed by another tenant that merely
+    # slugifies to the same thing.
+    tenant = next((t for t in found if t.slug == typed), None) or (
+        found[0] if found else None
+    )
 
     if tenant is None:
-        # Still spend time hashing, so a bad tenant slug is not faster than a bad
-        # password. A timing difference here leaks which companies are customers.
+        # Still spend time hashing, so this branch is not measurably faster than a
+        # wrong password.
         hash_password(password)
-        raise AuthenticationError(_GENERIC_FAILURE)
+        # Names the workspace, unlike the credential failure below.
+        #
+        # This reveals that a workspace does not exist — which `GET
+        # /auth/workspace-available` already tells anybody who asks, without
+        # authentication and deliberately: "a form that only reveals it on submit
+        # is hostile". Withholding the same fact here bought no secrecy and cost
+        # every mistyped workspace an accusation about the password.
+        raise AuthenticationError(
+            f"No active workspace called {typed!r}. Check the workspace id from "
+            "your sign-up confirmation — it is your company name in lowercase "
+            "with hyphens, not the company name as you typed it."
+        )
 
     from app.db.session import set_tenant_context
 

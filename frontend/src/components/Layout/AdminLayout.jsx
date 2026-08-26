@@ -37,7 +37,7 @@ export function navFor(role) {
 }
 
 export default function AdminLayout() {
-  const { user, role, roleLabel, signOut } = useApp();
+  const { user, workspace, role, roleLabel, signOut } = useApp();
   const navigate = useNavigate();
   const activeModule = moduleForPath(useLocation().pathname);
   const items = navFor(role);
@@ -82,6 +82,15 @@ export default function AdminLayout() {
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-ink">{user?.full_name}</p>
             <p className="truncate text-xs text-muted">{roleLabel} · {user?.email}</p>
+            {/* The workspace id, not just the display name. It is what the
+                sign-in form asks for, and the only place it was previously
+                obtainable was the URL somebody typed months ago. */}
+            {workspace && (
+              <p className="truncate text-xs text-muted">
+                {workspace.name} · workspace id{" "}
+                <code className="rounded bg-canvas px-1 font-mono">{workspace.slug}</code>
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <NavLink to="/roadmap" className="btn-ghost text-sm">What's live</NavLink>

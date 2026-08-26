@@ -21,7 +21,7 @@ import { useApp } from "../../context/AppContext";
 import LanguageSwitcher from "../../components/common/LanguageSwitcher";
 
 export default function Signup() {
-  const { signIn } = useApp();
+  const { signIn, notify } = useApp();
   const navigate = useNavigate();
 
   const [form, setForm] = useState({
@@ -80,6 +80,18 @@ export default function Signup() {
     try {
       const session = await register(form);
       signIn(session);
+      // Say the workspace id out loud, once, at the only moment the person is
+      // guaranteed to be looking.
+      //
+      // Signup used to go straight to the dashboard, so nobody was ever told
+      // what their workspace id was — it is derived from the company name, not
+      // chosen. They came back later, typed the company name into a field
+      // labelled "Workspace", and the API told them their password was wrong.
+      // That is what this line and the slug in the sidebar are for.
+      const slug = session.workspace?.slug;
+      if (slug) {
+        notify(`Workspace created. Sign in with the workspace id "${slug}".`);
+      }
       navigate("/admin/dashboard");
     } catch (err) {
       setError(err.message);
