@@ -471,3 +471,81 @@ az containerapp revision list -g rg-datashield -n <app> \
 
 Two active revisions, or an active one on the old tag, means the rollout did not
 take — whatever the update command said.
+
+
+---
+
+# CI/CD
+
+`.github/workflows/ci.yml` on every push and pull request;
+`.github/workflows/deploy.yml` on pushes to `main` and on demand.
+
+## No secret in the repo
+
+The repo is public, so nothing that grants access can live in it. Azure trusts a
+short-lived OIDC token GitHub mints for this repository, exchanged through a
+federated credential on the `id-github-deploy` identity. There is no client
+secret. A fork cannot obtain the token: the credential pins the subject, and the
+workflow's `environment: production` is what makes GitHub mint one matching it.
+
+`AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` are stored as
+repository secrets. They are identifiers, not credentials — they grant nothing
+without the federated trust; they are secrets only to keep the subscription id
+out of public logs.
+
+**The subject has numeric ids in it, and that is correct:**
+
+```
+repo:Samyakjain2052@114948120/fides@1316194005:environment:production
+```
+
+`GET /repos/.../actions/oidc/customization/sub` reports `use_default: true` with
+an id-qualified `sub_claim_prefix`. The first attempt used the documented
+name-based subject and failed with `AADSTS700213: No matching federated identity
+record`. Those ids survive a rename, so matching them is more durable than
+matching the names — but a credential written from the documentation will not
+work here. If login ever fails with AADSTS700213, read the subject the workflow
+log prints and match it exactly.
+
+## What the deploy identity can do
+
+Contributor on the registry, the three container apps, and the migration job.
+**Not on the resource group.** It cannot read Key Vault, reach Postgres, or
+change the network. A compromised workflow can deploy a bad image; it cannot
+exfiltrate the database.
+
+Adding a new deployable resource means adding a scope. The first run failed with
+`the containerapps job 'cms-migrate' does not exist` — which is how an
+unauthorised resource looks to a scoped identity, not a missing resource.
+
+## Order, and why migrations come first
+
+Migrations run as a Container Apps job before any app is updated. Not a
+preference: Postgres has public access disabled and is reachable only over a
+private endpoint, so **no GitHub runner can reach it**, and inside the VNet is
+the only way in. A failed migration also stops the deploy rather than
+crash-looping something already serving.
+
+## The step that earns its keep
+
+`Verify the rollout actually took` asserts exactly one active revision, on the
+tag just pushed, reporting `Healthy` — because `az containerapp update` reports
+success when the control-plane call succeeds, not when the new revision serves.
+See the trap section above for how that hid a broken config while the site
+answered 200 from the previous revision. The smoke test then hits `/api/health`,
+which exercises nginx, internal ingress, the backend and the private endpoint in
+one request; `/healthz` alone would only prove nginx serves files.
+
+## Two things that only fail in CI
+
+**`docker compose run <service> <cmd>` replaces the service's command.** CI first
+ran `docker compose run --rm cms-test pytest -q`, which dropped the service's
+own `alembic upgrade head &&` prefix, and all 448 tests failed with
+`relation "audit_events" does not exist`. It passes on a laptop, where the test
+database is already at head from an earlier run. CI passes no command.
+
+**`scripts_bootstrap_test_db.sql` was never mounted.** Its header always said it
+runs from `docker-entrypoint-initdb.d`, but the volume line did not exist, so
+`datashield_test` only existed where somebody had run it by hand. A fresh clone
+could not run the suite at all. Now mounted as `01_test_db.sql`, after
+`00_roles.sql`, whose roles it grants to.
