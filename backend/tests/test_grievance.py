@@ -61,7 +61,7 @@ class _Sends:
     def __init__(self):
         self.sent = []
 
-    async def send(self, *, to, subject, body, channel):
+    async def send(self, *, to, subject, body, channel, html_body=None):
         self.sent.append({"to": to, "subject": subject, "body": body})
         return SendResult(ok=True, provider_message_id=f"cap-{len(self.sent)}")
 
