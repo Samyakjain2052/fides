@@ -64,7 +64,7 @@ class _Sends:
         self.sent: list[dict] = []
         self.fail_after = fail_after
 
-    async def send(self, *, to, subject, body, channel):
+    async def send(self, *, to, subject, body, channel, html_body=None):
         if self.fail_after is not None and len(self.sent) >= self.fail_after:
             return SendResult(ok=False, error="provider rate limit", retryable=True)
         self.sent.append({"to": to, "subject": subject, "body": body})

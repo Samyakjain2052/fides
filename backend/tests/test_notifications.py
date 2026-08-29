@@ -300,7 +300,7 @@ class _Failing:
         self.retryable = retryable
         self.calls = 0
 
-    async def send(self, *, to, subject, body, channel):
+    async def send(self, *, to, subject, body, channel, html_body=None):
         self.calls += 1
         self.bodies = getattr(self, "bodies", [])
         self.bodies.append(body)
