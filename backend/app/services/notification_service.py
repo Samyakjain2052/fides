@@ -17,7 +17,6 @@ Three properties this module exists to guarantee:
 
 from __future__ import annotations
 
-import base64
 import html
 import logging
 import re
@@ -49,6 +48,9 @@ BACKOFF = (timedelta(seconds=30), timedelta(minutes=1), timedelta(minutes=3),
            timedelta(minutes=10))
 
 _PLACEHOLDER = re.compile(r"\{\{\s*(\w+)\s*\}\}")
+# A paragraph that is nothing but a link — see render_html_email()'s handling
+# of these below.
+_BARE_URL = re.compile(r"https?://\S+")
 
 
 class TemplateInvalid(Conflict):
@@ -113,20 +115,36 @@ _BRAND_NAME = "AuditTrace"
 # images from (many strip remote images by default); a `data:` URI has no
 # network dependency at send time or read time. It costs a few hundred bytes per
 # email — a fair trade for a logo that cannot go missing.
-_LOGO_SVG = (
-    '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" '
-    'viewBox="0 0 100 100">'
-    '<defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">'
-    '<stop offset="0%" stop-color="#2E6BE6"/>'
-    '<stop offset="100%" stop-color="#12C2A5"/>'
-    "</linearGradient></defs>"
-    '<path d="M50 6 L93 90 L7 90 Z" fill="url(#g)"/>'
-    '<path d="M33 63 L52 84 L95 33 L84 22 L52 61 L43 49 Z" fill="#12C2A5"/>'
-    "</svg>"
+#
+# This is a raster PNG rather than an inline SVG: Outlook desktop/Windows Mail
+# (still Word-engine rendered) and several other mail clients do not render
+# SVG at all, inline or as a data URI, so a chunk of readers would simply see
+# no logo. A small PNG data URI renders everywhere.
+_LOGO_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAKAAAACgCAYAAACLz2ctAAAEe0lEQVR4nO3d623bMBRAYTvoBN"
+    "ZQzQrNgOkK6VDUCgmIQq3jpyRe8r7O9zMJbAM+uKSchDoeFJ0+3j81nx9/za9vx4OSYU9MbL7M"
+    "g6Ls+iREF8PcMcYuD0x4Mc0dQhR9QMLLYRYMUeSBCC+nWSDEl9YHIL68TgKfYjQFSHw4NUa4a4"
+    "QSHqSW5M0TkPgg2camAIkP0o2sDpD40KOVVQESH7Za28zTAIkPe61pp/lzQKDFwwCZfmj1rKG7"
+    "ARIfpDxq6WaAxAdp95piDwhVVwEy/dDLrbaYgFD1LUCmH3q7bIwJCFX/AmT6YZTz1piAUEWA0A"
+    "+Q5RejLc0xAaGKAKGKAKGKAKHqyAUINDEBoYoAoYoAoYoAoYoAoYoAoYoAoeqH7tOjl/Lz19XX"
+    "pj+/D9YQYILwLr9nKUSW4CTx7fm5EQgwiLIxKisREiBUEWAAZec0szAFCRCqCNC5YmCKtSBAx4"
+    "rz+CoCdKoEiK8iwMTxTQY+kCZAqCJAZ0qg6VcRoCMlWHwVATpRAsZXEWAik7H4KgJMMv0mg/FV"
+    "BGhcCRxfRYCGleDxVQRoVAnym45nCDCwyfj0qwjQoJJg6V0QoDElUXwVARpSkuz7zhGgESXob"
+    "zqeIcBAJmfxVQRoQEm27ztHgMpK4vgqAlRUEl50XCJA5ybH068iQCXZl94FASogvv8IcDDi+4"
+    "4AB+Ki4xoBOjMF2PedI8BBWHpvI8ABiO8+AuyMfd9jBNhR1r9w2YIAjZsCx+fiNg1e7ndxiX2"
+    "f8wC93e/iHPE5X4I93u/C8muyzFyAXu93UXHRESDA7Caj24oUAXq+3wX7vgABttCMkPj2CxOg"
+    "VoQWpq9noQL0GsSUbN8XOsCREbL0BgtQchL0jpD4AgYorVeExBc4QOn9kHSEHveYlpkL0EOEr"
+    "TJfdLgIcHmTrO0JWXoTBbiwEiHxJQ3QQoTWlvBIXASoGSF/4dKXmwAtTMK9uOgIEuDoCNn39e"
+    "cuwFEREt8YLgPsHSEXHeO4DdD6npB93zrH08f758E5axOL+JJMQItvuKXX4kGIAK288RZegzd"
+    "hAqwIwJ9QAWpGSPz7hAtQIwbi2y9kgCOjIL42YQOsiMO+0AH2jpDA24UPsFcoxCcjRYDSwRCf"
+    "nDQBSoVDfLJSBVgRkC3pAmyJkHjlpQwQdqQNcOs0Y/r1kTbALVERX8LbNIyyxOX1fiTepQ9wQ"
+    "Ww6Ui/B0EeAUEWAUEWAUEWAUEWAUEWAUEWAUPUyv74ddV8CsqrtMQGhigChigChigChHyAXIh"
+    "htaY4JCFUECBsBsgxjlPPWmIBQ9S1ApiB6u2yMCQhVVwEyBdHLrbaYgFB1M0CmIKTda+ruBCR"
+    "CSHnU0sMlmAjR6llD7AGh6mmATEHstaadVROQCLHV2mZWL8FEiB6tbNoDEiGkG9l8EUKEkGyj"
+    "6V8yI9xtHe1ahlLTxzBMQ8yN/1fe/DkgEeY1CxxqIHoqAktyDrPgaRpdjuUgxJjmDse4dD0Xh"
+    "hBjmDueHzTsYCJi9GUedGiV6slYRHkwQfNC8gvpg61YOU5e4wAAAABJRU5ErkJggg=="
 )
-_LOGO_DATA_URI = "data:image/svg+xml;base64," + base64.b64encode(
-    _LOGO_SVG.encode("utf-8")
-).decode("ascii")
+_LOGO_DATA_URI = "data:image/png;base64," + _LOGO_PNG_BASE64
 
 
 def render_html_email(*, subject: str, body: str) -> str:
@@ -139,12 +157,46 @@ def render_html_email(*, subject: str, body: str) -> str:
     escape again, because doing so would double-escape every substituted value
     (an "&" a person typed would come back as "&amp;amp;"). `subject` is treated
     the same way — it is what `enqueue()` already rendered and truncated.
+
+    A paragraph that is *only* a URL (every template's `{{accept_url}}` /
+    `{{invite_url}}`-style link is written on its own blank-line-separated line,
+    see DEFAULT_TEMPLATES) is a link a person is meant to click, not a sentence
+    to read — rendered as plain text a long, token-bearing URL wraps across
+    several lines at body size and reads as noise. Those paragraphs become a
+    button instead, with the raw URL kept underneath in small muted text as a
+    fallback for clients that strip links, matching how every real product
+    invitation email (e.g. the reference this design was built from) does it.
     """
     paragraphs = [p for p in re.split(r"\n\s*\n", (body or "").strip()) if p]
-    body_html = "".join(
-        f'<p style="margin:0 0 16px;">{p.replace(chr(10), "<br>")}</p>'
-        for p in paragraphs
-    )
+    parts = []
+    for p in paragraphs:
+        stripped = p.strip()
+        url_match = _BARE_URL.fullmatch(stripped)
+        if url_match:
+            url = url_match.group(0)
+            # `render()` escapes `&`/`<`/`>` in placeholder values but not quotes
+            # (`quote=False`) — safe inside the `<p>` text context it was written
+            # for, but this is now going inside an `href="..."` attribute, where an
+            # unescaped `"` could break out of it. Escape it here, for this context.
+            href = url.replace('"', "&quot;")
+            parts.append(
+                '<table role="presentation" cellpadding="0" cellspacing="0" '
+                'style="margin:4px 0 20px;"><tr><td '
+                'style="background-color:#12B8A6;border-radius:6px;">'
+                f'<a href="{href}" style="display:inline-block;padding:12px 24px;'
+                'font-size:15px;font-weight:600;color:#FFFFFF;'
+                f'text-decoration:none;">Open secure link →</a>'
+                "</td></tr></table>"
+                '<p style="margin:0 0 16px;font-size:12px;color:#8A94A6;">'
+                "Or paste this link into your browser:<br>"
+                f'<a href="{href}" style="color:#12B8A6;word-break:break-all;'
+                f'font-size:12px;">{url}</a></p>'
+            )
+        else:
+            parts.append(
+                f'<p style="margin:0 0 16px;">{p.replace(chr(10), "<br>")}</p>'
+            )
+    body_html = "".join(parts)
     return f"""<!DOCTYPE html>
 <html>
   <body style="margin:0;padding:0;background-color:#F1F3F5;
@@ -161,8 +213,8 @@ def render_html_email(*, subject: str, body: str) -> str:
             <table role="presentation" cellpadding="0" cellspacing="0">
               <tr>
                 <td style="vertical-align:middle;">
-                  <img src="{_LOGO_DATA_URI}" width="28" height="28" alt=""
-                      style="display:block;">
+                  <img src="{_LOGO_DATA_URI}" width="32" height="32" alt=""
+                      style="display:block;border-radius:8px;">
                 </td>
                 <td style="vertical-align:middle;padding-left:10px;">
                   <span style="color:#FFFFFF;font-size:18px;font-weight:600;
