@@ -65,7 +65,7 @@ class _Silent:
 
     name = "silent"
 
-    async def send(self, *, to, subject, body, channel):
+    async def send(self, *, to, subject, body, channel, html_body=None):
         return SendResult(ok=True, provider_message_id="x")
 
 

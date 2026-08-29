@@ -40,7 +40,8 @@ class NotificationProvider(Protocol):
     name: str
 
     async def send(
-        self, *, to: str, subject: str, body: str, channel: str
+        self, *, to: str, subject: str, body: str, channel: str,
+        html_body: str | None = None,
     ) -> SendResult: ...
 
 
@@ -55,7 +56,10 @@ class ConsoleProvider:
 
     name = "console"
 
-    async def send(self, *, to: str, subject: str, body: str, channel: str) -> SendResult:
+    async def send(
+        self, *, to: str, subject: str, body: str, channel: str,
+        html_body: str | None = None,
+    ) -> SendResult:
         logger.info(
             "notification (console provider — NOT sent)",
             extra={
@@ -74,6 +78,7 @@ class ConsoleProvider:
                     # deliberately keeps no bodies, and this provider is refused
                     # in production.
                     "body": body,
+                    "has_html": html_body is not None,
                 }
             },
         )
@@ -94,7 +99,10 @@ class AzureCommunicationEmailProvider:
 
     name = "azure_acs"
 
-    async def send(self, *, to: str, subject: str, body: str, channel: str) -> SendResult:
+    async def send(
+        self, *, to: str, subject: str, body: str, channel: str,
+        html_body: str | None = None,
+    ) -> SendResult:
         if channel != "email":
             return SendResult(
                 ok=False,
@@ -140,7 +148,10 @@ class SmtpProvider:
 
     name = "smtp"
 
-    async def send(self, *, to: str, subject: str, body: str, channel: str) -> SendResult:
+    async def send(
+        self, *, to: str, subject: str, body: str, channel: str,
+        html_body: str | None = None,
+    ) -> SendResult:
         if channel != "email":
             return SendResult(ok=False, error="SMTP sends email only.", retryable=False)
         host = _settings.smtp_host
@@ -160,7 +171,13 @@ class SmtpProvider:
         msg["From"] = sender
         msg["To"] = to
         msg["Subject"] = subject
+        # Plain text first, HTML as the alternative — a multipart/alternative
+        # message. A client that renders HTML shows the branded version; one that
+        # does not (or a person who prefers plain text) still gets the full
+        # message, not a broken one.
         msg.set_content(body)
+        if html_body:
+            msg.add_alternative(html_body, subtype="html")
 
         try:
             # Blocking, and deliberately so: this runs in a worker processing one

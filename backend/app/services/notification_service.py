@@ -100,6 +100,54 @@ def render(template: str, context: dict[str, Any]) -> str:
     return _PLACEHOLDER.sub(_sub, template or "")
 
 
+# One shared shell around every rendered body — a subject and a card is the whole
+# design. Every template, present and future (grievance confirmation, breach
+# notice, an eventual user invitation), goes through this so a person who gets
+# three different emails from the product does not have to guess it is the same
+# sender each time.
+_BRAND_NAME = "DataShield"
+
+
+def render_html_email(*, body: str) -> str:
+    """Wrap an already-rendered body in the shared HTML shell.
+
+    `body` must already have come out of `render()` — its placeholder values are
+    escaped, but the surrounding template text is admin-authored and trusted, the
+    same trust boundary `render()` itself relies on. This function only turns
+    blank-line breaks into paragraphs and single newlines into `<br>`; it does not
+    escape again, because doing so would double-escape every substituted value
+    (an "&" a person typed would come back as "&amp;amp;").
+    """
+    paragraphs = [p for p in re.split(r"\n\s*\n", (body or "").strip()) if p]
+    body_html = "".join(
+        f'<p style="margin:0 0 16px;">{p.replace(chr(10), "<br>")}</p>'
+        for p in paragraphs
+    )
+    return f"""<!DOCTYPE html>
+<html>
+  <body style="margin:0;padding:24px;background:#f4f4f7;
+      font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr><td align="center">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0"
+            style="background:#ffffff;border-radius:8px;max-width:480px;width:100%;">
+          <tr><td style="padding:24px 32px;border-bottom:1px solid #eee;">
+            <span style="font-size:18px;font-weight:600;color:#111;">{_BRAND_NAME}</span>
+          </td></tr>
+          <tr><td style="padding:24px 32px;color:#333;font-size:14px;line-height:1.6;">
+            {body_html}
+          </td></tr>
+          <tr><td style="padding:16px 32px;border-top:1px solid #eee;
+              color:#999;font-size:12px;">
+            This is an automated message. Please do not reply to this email.
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>"""
+
+
 async def upsert_template(
     session: AsyncSession,
     *,
@@ -383,13 +431,18 @@ async def deliver(
     notification.attempts += 1
     notification.provider = provider.name
 
+    plain_body = body if body is not None else (notification.pending_body or "")
     result = await provider.send(
         to=notification.to_address,
         subject=notification.subject_rendered,
         # The stored body is the default. `body` is an override for the rare
         # caller that has just rendered one; a worker claiming a row off the queue
         # has nothing but what the row carries.
-        body=body if body is not None else (notification.pending_body or ""),
+        body=plain_body,
+        # Every channel gets the same shell — one branded design, not a plain-text
+        # message for some templates and a styled one for others. `None` for SMS,
+        # where there is no HTML part.
+        html_body=render_html_email(body=plain_body) if notification.channel == "email" else None,
         channel=notification.channel,
     )
 
