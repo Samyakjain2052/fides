@@ -17,6 +17,7 @@ Three properties this module exists to guarantee:
 
 from __future__ import annotations
 
+import base64
 import html
 import logging
 import re
@@ -105,18 +106,39 @@ def render(template: str, context: dict[str, Any]) -> str:
 # notice, an eventual user invitation), goes through this so a person who gets
 # three different emails from the product does not have to guess it is the same
 # sender each time.
-_BRAND_NAME = "DataShield"
+_BRAND_NAME = "AuditTrace"
+
+# The mark, inline. An `<img src="https://...">` breaks the moment that host is
+# down, renamed, or simply not reachable from wherever a mail client fetches
+# images from (many strip remote images by default); a `data:` URI has no
+# network dependency at send time or read time. It costs a few hundred bytes per
+# email — a fair trade for a logo that cannot go missing.
+_LOGO_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" '
+    'viewBox="0 0 100 100">'
+    '<defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">'
+    '<stop offset="0%" stop-color="#2E6BE6"/>'
+    '<stop offset="100%" stop-color="#12C2A5"/>'
+    "</linearGradient></defs>"
+    '<path d="M50 6 L93 90 L7 90 Z" fill="url(#g)"/>'
+    '<path d="M33 63 L52 84 L95 33 L84 22 L52 61 L43 49 Z" fill="#12C2A5"/>'
+    "</svg>"
+)
+_LOGO_DATA_URI = "data:image/svg+xml;base64," + base64.b64encode(
+    _LOGO_SVG.encode("utf-8")
+).decode("ascii")
 
 
-def render_html_email(*, body: str) -> str:
-    """Wrap an already-rendered body in the shared HTML shell.
+def render_html_email(*, subject: str, body: str) -> str:
+    """Wrap an already-rendered subject and body in the shared HTML shell.
 
     `body` must already have come out of `render()` — its placeholder values are
     escaped, but the surrounding template text is admin-authored and trusted, the
     same trust boundary `render()` itself relies on. This function only turns
     blank-line breaks into paragraphs and single newlines into `<br>`; it does not
     escape again, because doing so would double-escape every substituted value
-    (an "&" a person typed would come back as "&amp;amp;").
+    (an "&" a person typed would come back as "&amp;amp;"). `subject` is treated
+    the same way — it is what `enqueue()` already rendered and truncated.
     """
     paragraphs = [p for p in re.split(r"\n\s*\n", (body or "").strip()) if p]
     body_html = "".join(
@@ -125,21 +147,49 @@ def render_html_email(*, body: str) -> str:
     )
     return f"""<!DOCTYPE html>
 <html>
-  <body style="margin:0;padding:24px;background:#f4f4f7;
-      font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+  <body style="margin:0;padding:0;background-color:#F1F3F5;
+      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,
+      Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+        style="background-color:#F1F3F5;padding:32px 0;">
       <tr><td align="center">
-        <table role="presentation" width="480" cellpadding="0" cellspacing="0"
-            style="background:#ffffff;border-radius:8px;max-width:480px;width:100%;">
-          <tr><td style="padding:24px 32px;border-bottom:1px solid #eee;">
-            <span style="font-size:18px;font-weight:600;color:#111;">{_BRAND_NAME}</span>
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0"
+            style="background-color:#FFFFFF;border-radius:8px;overflow:hidden;
+            max-width:560px;width:100%;box-shadow:0 1px 3px rgba(11,31,58,0.08);">
+          <!-- Header / Logo -->
+          <tr><td style="background-color:#0B1F3A;padding:28px 40px;">
+            <table role="presentation" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="vertical-align:middle;">
+                  <img src="{_LOGO_DATA_URI}" width="28" height="28" alt=""
+                      style="display:block;">
+                </td>
+                <td style="vertical-align:middle;padding-left:10px;">
+                  <span style="color:#FFFFFF;font-size:18px;font-weight:600;
+                      letter-spacing:0.2px;">{_BRAND_NAME}</span>
+                </td>
+              </tr>
+            </table>
           </td></tr>
-          <tr><td style="padding:24px 32px;color:#333;font-size:14px;line-height:1.6;">
-            {body_html}
+          <!-- Body -->
+          <tr><td style="padding:40px;">
+            <p style="margin:0 0 4px 0;font-size:13px;font-weight:600;
+                color:#12B8A6;text-transform:uppercase;letter-spacing:0.6px;">
+              Notification
+            </p>
+            <h1 style="margin:0 0 20px 0;font-size:22px;line-height:1.35;
+                color:#0B1F3A;font-weight:700;">{subject}</h1>
+            <div style="font-size:15px;line-height:1.6;color:#3C4858;">
+              {body_html}
+            </div>
           </td></tr>
-          <tr><td style="padding:16px 32px;border-top:1px solid #eee;
-              color:#999;font-size:12px;">
-            This is an automated message. Please do not reply to this email.
+          <!-- Footer -->
+          <tr><td style="background-color:#F8F9FB;padding:24px 40px;
+              border-top:1px solid #E8EBEF;">
+            <p style="margin:0;font-size:12px;color:#8A94A6;">
+              This is an automated message from {_BRAND_NAME}. Please do not
+              reply to this email.
+            </p>
           </td></tr>
         </table>
       </td></tr>
@@ -442,7 +492,10 @@ async def deliver(
         # Every channel gets the same shell — one branded design, not a plain-text
         # message for some templates and a styled one for others. `None` for SMS,
         # where there is no HTML part.
-        html_body=render_html_email(body=plain_body) if notification.channel == "email" else None,
+        html_body=(
+            render_html_email(subject=notification.subject_rendered, body=plain_body)
+            if notification.channel == "email" else None
+        ),
         channel=notification.channel,
     )
 
