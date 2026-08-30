@@ -351,11 +351,20 @@ async def create_invitation(
         invited_by=current.user.id,
     )
 
-    # Built from the request's own origin so the link works behind the proxy the
-    # console is actually being served through, rather than from a configured
-    # base URL that drifts.
-    base = str(request.base_url).rstrip("/")
-    external = get_settings().external_path_prefix or ""
+    # `public_base_url` first, and the request only as a local-dev fallback.
+    #
+    # This used to be request-derived on the reasoning that it "works behind the
+    # proxy rather than a configured base URL that drifts". That held until the
+    # backend moved to internal ingress, where nginx must send
+    # `Host: $proxy_host` for Container Apps to route at all — so the request
+    # origin became the backend's internal FQDN and every invitation emailed a
+    # link to a host that resolves for nobody.
+    #
+    # It is also the safer default regardless of hosting: an emailed link built
+    # from the Host header lets a caller choose where our email points.
+    settings = get_settings()
+    base = (settings.public_base_url or str(request.base_url)).rstrip("/")
+    external = settings.external_path_prefix or ""
     if external and base.endswith(external):
         base = base[: -len(external)]
     accept_url = f"{base}/accept-invitation?token={token}"

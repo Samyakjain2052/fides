@@ -1063,3 +1063,83 @@ async def test_a_lateral_promotion_still_does_not_end_sessions(
         assert len(await invitation_service.list_sessions(
             s, tenant_id=tenant_a["id"], user_id=target_id
         )) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Where the emailed link points.
+#
+# Reported as a 404 after accepting an invitation: the email contained
+# `cms-backend.internal.<env>.azurecontainerapps.io/accept-invitation?token=…`
+# and the recipient got Azure's "this Container App is stopped or does not
+# exist" page.
+#
+# The link was built from `request.base_url`. That was fine until the backend
+# moved to internal ingress, where nginx has to send `Host: $proxy_host` for
+# Container Apps to route to it at all — so the request's own origin became an
+# address reachable only from inside the environment.
+# --------------------------------------------------------------------------- #
+
+async def test_the_invite_link_uses_the_configured_public_url(monkeypatch):
+    """Not the request's host, which behind internal ingress is unreachable."""
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("DS_PUBLIC_BASE_URL", "https://app.example.com")
+    try:
+        settings = get_settings()
+        assert settings.public_base_url == "https://app.example.com"
+
+        base = (settings.public_base_url or "http://internal-host").rstrip("/")
+        assert base.startswith("https://app.example.com")
+        assert "internal" not in base
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_a_host_header_cannot_choose_where_our_email_points(monkeypatch):
+    """The security half.
+
+    `request.base_url` derives from the Host header, which the caller sets. If
+    that reached an emailed link, somebody could make this product send one of
+    your users a link to a host they chose — a phishing primitive with our
+    return address on it. The configured value must win over any request.
+    """
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("DS_PUBLIC_BASE_URL", "https://app.example.com")
+    try:
+        settings = get_settings()
+        attacker_supplied = "https://evil.example.net/"
+        base = (settings.public_base_url or attacker_supplied).rstrip("/")
+        assert "evil.example.net" not in base
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_prod_refuses_to_boot_without_a_public_base_url(monkeypatch):
+    """Consistent with the console-provider guardrail: a link that looks right
+    and goes nowhere is worse than a service that will not start."""
+    import pytest as _pytest
+    from app.core.config import Settings, get_settings
+
+    get_settings.cache_clear()
+    for k, v in {
+        "DS_ENV": "prod", "DS_DEBUG": "false",
+        "DS_DATABASE_URL": "postgresql+asyncpg://u:p@h:5432/d",
+        "DS_JWT_SECRET": "x" * 40, "DS_AUDIT_HMAC_KEY": "y" * 40,
+        "DS_NOTIFICATION_PROVIDER": "smtp",
+        "DS_NOTIFICATION_FROM_ADDRESS": "no-reply@example.com",
+        "DS_DB_SSL_MODE": "require",
+        # Set explicitly, not left to the ambient compose environment, which
+        # carries DS_COOKIE_SECURE=false and would trip an earlier guardrail —
+        # making this test pass or fail for the wrong reason.
+        "DS_COOKIE_SECURE": "true",
+    }.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("DS_PUBLIC_BASE_URL", raising=False)
+    try:
+        with _pytest.raises(ValueError, match="public_base_url"):
+            Settings()
+    finally:
+        get_settings.cache_clear()

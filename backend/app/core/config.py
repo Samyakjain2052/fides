@@ -91,6 +91,30 @@ class Settings(BaseSettings):
     # Empty when the API is served at the root (running it directly).
     external_path_prefix: str = ""
 
+    # Where a person who receives an email should click.
+    #
+    # Links we email are the one thing that MUST NOT be derived from the incoming
+    # request. Two reasons, and the second is the serious one:
+    #
+    #   1. The request may not arrive on a public address at all. In Container
+    #      Apps the backend runs on internal ingress, and nginx must send
+    #      `Host: $proxy_host` or the platform will not route to it — so
+    #      `request.base_url` is the backend's *internal* FQDN. An invitation
+    #      built from it pointed at
+    #      cms-backend.internal.<env>.azurecontainerapps.io, which resolves for
+    #      nobody, and the recipient got Azure's "this Container App is stopped
+    #      or does not exist" page.
+    #
+    #   2. `request.base_url` ultimately comes from the Host header, which the
+    #      client chooses. Minting a link from it means somebody can make this
+    #      product email one of your users a link to a host they picked. That is
+    #      a phishing primitive with our return address on it, and it is worse
+    #      than a broken link because it works.
+    #
+    # Unset outside prod, where the request origin is the local stack and using
+    # it keeps `docker compose up` working with no configuration.
+    public_base_url: str | None = None
+
     # The DSAR engine's gateway. The backend calls it rather than the browser,
     # so the request row and the engine call are written in one transaction, the
     # gateway can sit behind internal-only ingress, and the frontend talks to one
@@ -170,6 +194,15 @@ class Settings(BaseSettings):
                 )
             if "*" in self.cors_origins:
                 raise ValueError("wildcard CORS origin is not allowed in prod")
+            # Refuse to boot rather than email a link built from a client-supplied
+            # Host header. Same reasoning as the console notification provider
+            # above: a wrong link that looks right is worse than not starting.
+            if not self.public_base_url:
+                raise ValueError(
+                    "public_base_url is required in prod — emailed links must "
+                    "not be derived from the request, which behind internal "
+                    "ingress is not even a reachable address"
+                )
             # Unencrypted database traffic in production is not a warning-level
             # problem: every row on that wire is personal data.
             if self.db_ssl_mode == "disable":
