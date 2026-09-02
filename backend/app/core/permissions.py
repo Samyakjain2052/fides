@@ -50,6 +50,14 @@ class Capability(StrEnum):
     # Tenant administration
     USER_MANAGE = "user:manage"
     APIKEY_MANAGE = "apikey:manage"
+
+    # Connections to a customer's own systems. Its own capability rather than
+    # folding into apikey:manage, because the blast radius is different in kind:
+    # an API key of ours grants access to us, while a connection holds the
+    # customer's live Razorpay key, AWS credential or database password. Admin
+    # only — deliberately not granted to the auditor, whose read-only remit does
+    # not extend to a list of a company's production systems.
+    CONNECTION_MANAGE = "connection:manage"
     TENANT_MANAGE = "tenant:manage"
 
 
@@ -79,6 +87,7 @@ _MATRIX: dict[Role, frozenset[Capability]] = {
         Capability.BREACH_MANAGE, Capability.RETENTION_MANAGE, Capability.NOTIFICATION_MANAGE,
         Capability.AUDIT_READ, Capability.AUDIT_VERIFY, Capability.REPORT_GENERATE,
         Capability.USER_MANAGE, Capability.APIKEY_MANAGE, Capability.TENANT_MANAGE,
+        Capability.CONNECTION_MANAGE,
     }),
     # Read-only by construction: an auditor who could change what they audit is
     # not an auditor.

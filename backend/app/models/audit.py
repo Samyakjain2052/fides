@@ -166,3 +166,13 @@ class AuditAction:
     # integrity
     AUDIT_VERIFIED = "audit.verified"
     AUDIT_INTEGRITY_FAILED = "audit.integrity_failed"
+
+    # Connections to a customer's own systems. Every one of these is recorded
+    # because the payload is a live production credential: who added it, who
+    # tested it, who deleted it, and whether the test passed. The credential
+    # itself never appears in a payload — only its connector, label and the
+    # verification outcome.
+    CONNECTION_CREATED = "connection.created"
+    CONNECTION_UPDATED = "connection.updated"
+    CONNECTION_TESTED = "connection.tested"
+    CONNECTION_DELETED = "connection.deleted"

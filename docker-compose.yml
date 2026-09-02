@@ -404,6 +404,10 @@ services:
       DS_DATABASE_OWNER_URL: postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield
       DS_JWT_SECRET: ${DS_JWT_SECRET}
       DS_AUDIT_HMAC_KEY: ${DS_AUDIT_HMAC_KEY}
+      # AES-256-GCM key for connector credentials. Absent, the
+      # connections feature refuses to store anything rather than
+      # falling back to something weaker.
+      DS_CREDENTIAL_ENCRYPTION_KEY: ${DS_CREDENTIAL_ENCRYPTION_KEY:-}
       # The scheduler sends real notifications, so it needs the same provider
       # settings as the API. With the default console provider it logs instead.
       DS_NOTIFICATION_PROVIDER: ${DS_NOTIFICATION_PROVIDER:-console}
@@ -466,6 +470,13 @@ services:
       DS_DATABASE_OWNER_URL: postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield_test
       DS_JWT_SECRET: ${DS_JWT_SECRET}
       DS_AUDIT_HMAC_KEY: ${DS_AUDIT_HMAC_KEY}
+      # The demo datastores' credentials, so the connector probe tests can
+      # connect to something real instead of asserting against a mock. This is
+      # the difference between a connector that is written and one that is known
+      # to work — and the reason only three are marked `live`.
+      APP_POSTGRES_USER: ${APP_POSTGRES_USER}
+      APP_POSTGRES_PASSWORD: ${APP_POSTGRES_PASSWORD}
+      APP_POSTGRES_DB: ${APP_POSTGRES_DB}
     volumes:
       # Source mounted so a test edit does not need an image rebuild. The venv
       # lives at /opt/venv, outside this mount, so it is not shadowed.
@@ -496,6 +507,10 @@ services:
       DS_DATABASE_OWNER_URL: postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield
       DS_JWT_SECRET: ${DS_JWT_SECRET}
       DS_AUDIT_HMAC_KEY: ${DS_AUDIT_HMAC_KEY}
+      # AES-256-GCM key for connector credentials. Absent, the
+      # connections feature refuses to store anything rather than
+      # falling back to something weaker.
+      DS_CREDENTIAL_ENCRYPTION_KEY: ${DS_CREDENTIAL_ENCRYPTION_KEY:-}
       DS_COOKIE_SECURE: ${DS_COOKIE_SECURE:-false}
       # Notifications. `console` logs instead of sending, which is why it is safe
       # as a default and why the backend refuses it in prod.

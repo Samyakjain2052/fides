@@ -77,6 +77,7 @@ export const MODULE_STATUS = {
   breach: "live",
   notifications: "live",
   users: "live",
+  connections: "live",
 };
 
 export const MODULE_LABELS = {
@@ -93,6 +94,7 @@ export const MODULE_LABELS = {
   breach: "Breach management",
   notifications: "Notifications",
   users: "Users & roles",
+  connections: "Connections",
 };
 
 /**
@@ -172,6 +174,21 @@ export const MODULE_CAVEATS = {
     "Access and erasure run for real against four datastores. Two parts are not: " +
     "correction is sample data (the engine has no correction action yet), and " +
     "the OTP / DigiLocker identity check is simulated, not a real verification.",
+  // "live" describes the FEATURE, not the catalogue, and the distinction is the
+  // whole point of this caveat. Storing credentials, encrypting them, testing a
+  // connection and auditing all of it is real. Connecting to forty named systems
+  // is not — three do, and the screen says so on every card rather than in a
+  // footnote.
+  connections:
+    "Credentials are encrypted with AES-256-GCM before storage, never returned " +
+    "by any endpoint, and shown back only as a last-4 hint. A connection reads " +
+    "'Connected' only after a real probe reached the system \u2014 storing a " +
+    "password never sets it. Three of the forty listed connectors are " +
+    "implemented and verifiable (PostgreSQL, MySQL, MongoDB); the rest are " +
+    "listed with the reason each is not ready, and the server refuses " +
+    "credentials for them rather than holding a secret it cannot use. " +
+    "Connecting a database on a private network also needs network access, " +
+    "which a password does not provide.",
 };
 
 /** What each preview module needs before it can be called live. */
@@ -240,6 +257,7 @@ const PATH_MODULES = [
   ["/admin/reports", "reports"],
   ["/admin/audit", "audit"],
   ["/admin/roles", "users"],
+  ["/admin/connections", "connections"],
   ["/admin/dsar", "dsar_workflow"],
   ["/user/consent-history", "consent"],
   ["/user/preferences", "consent"],

@@ -35,6 +35,7 @@ import ConsentQueue from "./pages/admin/ConsentQueue";
 import GrievanceQueue from "./pages/admin/GrievanceQueue";
 import BreachManagement from "./pages/admin/BreachManagement";
 import AuditLogs from "./pages/admin/AuditLogs";
+import Connections from "./pages/admin/Connections";
 import UserRoleManagement from "./pages/admin/UserRoleManagement";
 import DataRetentionPolicy from "./pages/admin/DataRetentionPolicy";
 import NotificationCenter from "./pages/admin/NotificationCenter";
@@ -145,6 +146,7 @@ export default function App() {
           }
         />
         <Route path="roles" element={<RequireRole allow={["admin"]}><UserRoleManagement /></RequireRole>} />
+        <Route path="connections" element={<RequireRole allow={["admin"]}><Connections /></RequireRole>} />
         <Route path="retention" element={<RequireRole allow={["admin"]}><DataRetentionPolicy /></RequireRole>} />
         <Route path="notifications" element={<RequireRole allow={["admin"]}><NotificationCenter /></RequireRole>} />
         <Route

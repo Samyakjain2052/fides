@@ -5,8 +5,9 @@ from fastapi import APIRouter
 from app.api.v1 import (
     admin,
     audit,
-    breaches,
     auth,
+    breaches,
+    connections,
     consent,
     dsar,
     grievances,
@@ -20,11 +21,10 @@ api_router.include_router(auth.router)
 api_router.include_router(admin.router)
 api_router.include_router(audit.router)
 api_router.include_router(breaches.router)
+api_router.include_router(connections.router)
 api_router.include_router(consent.router)
 api_router.include_router(dsar.router)
 api_router.include_router(grievances.router)
 api_router.include_router(notifications.router)
 api_router.include_router(reports.router)
 api_router.include_router(retention.router)
-
-__all__ = ["api_router"]

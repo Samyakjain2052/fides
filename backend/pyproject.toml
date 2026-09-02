@@ -25,6 +25,18 @@ dependencies = [
   # deployed one.
   "httpx==0.28.1",
   "python-multipart==0.0.20",
+  # AES-256-GCM for connector credentials. Everything else in this codebase
+  # HASHES its secrets, because API keys and passwords only ever need
+  # verifying. Connector credentials are the exception: we have to send a
+  # customer's Razorpay key to Razorpay, so they must be recoverable — a
+  # different problem needing a different primitive.
+  "cryptography==44.0.0",
+  # Connection probes for the database connectors. Sync drivers on purpose,
+  # driven through asyncio.to_thread the way SmtpProvider already does: a
+  # connectivity check runs once, on demand, and an async driver would be a
+  # dependency bought for nothing.
+  "pymysql==1.1.1",
+  "pymongo==4.10.1",
 ]
 
 [project.optional-dependencies]

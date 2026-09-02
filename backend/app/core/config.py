@@ -115,6 +115,19 @@ class Settings(BaseSettings):
     # it keeps `docker compose up` working with no configuration.
     public_base_url: str | None = None
 
+    # AES-256-GCM key for connector credentials — see core/crypto.py.
+    #
+    # Unlike every other secret here, what this protects is RECOVERABLE: a
+    # customer's live Razorpay key, AWS credential or database password, which we
+    # have to be able to send onward. So this key is the entire security boundary
+    # around those values, and a leaked database is only as bad as this key is
+    # safe. It belongs in Key Vault and nowhere else.
+    #
+    # Optional so the rest of the product runs without it; the connector service
+    # refuses to store anything when it is absent, rather than falling back to
+    # something weaker.
+    credential_encryption_key: str | None = None
+
     # The DSAR engine's gateway. The backend calls it rather than the browser,
     # so the request row and the engine call are written in one transaction, the
     # gateway can sit behind internal-only ingress, and the frontend talks to one

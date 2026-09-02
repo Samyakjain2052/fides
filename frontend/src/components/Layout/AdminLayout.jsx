@@ -27,6 +27,7 @@ const NAV = [
   { to: "/admin/breaches", label: "Breach Management", icon: "⚠", roles: ["admin"], module: "breach" },
   { to: "/admin/audit", label: "Audit Logs", icon: "🔒", roles: ["admin", "auditor"], module: "audit" },
   { to: "/admin/roles", label: "Users & Roles", icon: "👥", roles: ["admin"], module: "users" },
+  { to: "/admin/connections", label: "Connections", icon: "⇄", roles: ["admin"], module: "connections" },
   { to: "/admin/retention", label: "Retention Policy", icon: "🗓", roles: ["admin"], module: "retention" },
   { to: "/admin/notifications", label: "Notification Center", icon: "🔔", roles: ["admin"], module: "notifications" },
   { to: "/admin/reports", label: "Reports", icon: "📄", roles: ["admin", "auditor"], module: "reports" },
