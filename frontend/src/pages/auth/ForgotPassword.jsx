@@ -1,11 +1,25 @@
 // ============================================================================
-// Forgot Password (/forgot-password) — email input, send link, confirmation.
+// Forgot Password (/forgot-password)
+//
+// Real, against /v1/auth/forgot-password. It used to call a stub that waited
+// 500ms and returned success without a network call, so this screen showed
+// "check your inbox" and nothing was ever sent.
+//
+// It asks for the WORKSPACE as well as the email, because an address can exist
+// in more than one workspace and the server needs to know which account to reset
+// — the same reason sign-in asks for it.
+//
+// The confirmation is worded to promise nothing. The server answers identically
+// whether or not the address has an account, because "does this person have an
+// account with this company" is itself personal data, so this screen must not
+// assert that an email is on its way.
 // ============================================================================
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { sendResetLink } from "../../api";
+import { requestPasswordReset } from "../../api/auth";
 
 export default function ForgotPassword() {
+  const [workspace, setWorkspace] = useState("");
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
@@ -16,7 +30,7 @@ export default function ForgotPassword() {
     setBusy(true);
     setError("");
     try {
-      await sendResetLink(email);
+      await requestPasswordReset({ workspace, email });
       setSent(true);
     } catch (err) {
       setError(err.message);
@@ -42,8 +56,13 @@ export default function ForgotPassword() {
             </div>
             <h2 className="font-semibold text-ink">Check your inbox</h2>
             <p className="mt-2 text-sm text-muted">
-              If <strong className="text-ink">{email}</strong> is registered with us, a reset link
-              is on its way. The link expires in 30 minutes.
+              If <strong className="text-ink">{email}</strong> has an account in{" "}
+              <strong className="text-ink">{workspace}</strong>, a reset link is on
+              its way. It works once and expires in an hour.
+            </p>
+            <p className="mt-2 text-xs text-muted">
+              We do not confirm whether an address is registered — that would let
+              anybody check who uses this workspace.
             </p>
             <Link to="/login" className="btn-secondary mt-5 w-full">
               Back to sign in
@@ -51,6 +70,23 @@ export default function ForgotPassword() {
           </div>
         ) : (
           <form onSubmit={submit} className="card space-y-4 p-6">
+            <div>
+              <label className="label" htmlFor="reset-workspace">Workspace</label>
+              <input
+                id="reset-workspace"
+                className="input"
+                value={workspace}
+                onChange={(e) => setWorkspace(e.target.value)}
+                placeholder="acme-fintech"
+                autoCapitalize="none"
+                spellCheck="false"
+                required
+              />
+              <p className="mt-1 text-xs text-muted">
+                The same workspace id you use to sign in.
+              </p>
+            </div>
+
             <div>
               <label className="label" htmlFor="reset-email">Registered email</label>
               <input

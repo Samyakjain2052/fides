@@ -22,6 +22,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from app.connectors.hosts import HostNotAllowed, resolve_and_check
+
 logger = logging.getLogger("app.connectors")
 
 #: Kept short on purpose. An admin is watching a spinner, and a probe that hangs
@@ -61,6 +63,11 @@ async def probe_postgresql(config: dict[str, Any]) -> ProbeResult:
     host = (config.get("host") or "").strip()
     if not host:
         return ProbeResult(False, "No host given.")
+
+    try:
+        resolve_and_check(host, 5432)
+    except HostNotAllowed as exc:
+        return ProbeResult(False, str(exc))
 
     ssl_arg: Any = "require" if _truthy(config.get("tls", "true")) else False
 
@@ -119,6 +126,11 @@ async def probe_mysql(config: dict[str, Any]) -> ProbeResult:
     if not host:
         return ProbeResult(False, "No host given.")
 
+    try:
+        resolve_and_check(host, 3306)
+    except HostNotAllowed as exc:
+        return ProbeResult(False, str(exc))
+
     def _run() -> ProbeResult:
         kwargs: dict[str, Any] = {
             "host": host,
@@ -172,22 +184,45 @@ async def probe_mongodb(config: dict[str, Any]) -> ProbeResult:
     if not host:
         return ProbeResult(False, "No host given.")
 
+    # The guard still applies. An SRV cluster name has no port of its own, so
+    # it is checked against the default — what matters is the address family the
+    # name resolves to, not which port we ask about.
+    try:
+        resolve_and_check(host.replace("mongodb+srv://", ""),
+                          _int(config.get("port"), 27017))
+    except HostNotAllowed as exc:
+        return ProbeResult(False, str(exc))
+
     def _run() -> ProbeResult:
         ms = int(TIMEOUT_SECONDS * 1000)
+        srv = _truthy(config.get("srv", "false"))
+
         kwargs: dict[str, Any] = {
-            "host": host,
-            "port": _int(config.get("port"), 27017),
             "serverSelectionTimeoutMS": ms,
             "connectTimeoutMS": ms,
             "socketTimeoutMS": ms,
         }
+
+        if srv:
+            # Atlas, and anything else handed over as mongodb+srv://. The
+            # scheme resolves SRV records to the replica set's members, so a
+            # host and port would reach one node at best. `mongodb+srv` also
+            # implies TLS, and carries no port — passing one is an error.
+            kwargs["host"] = f"mongodb+srv://{host.replace('mongodb+srv://', '')}"
+        else:
+            kwargs["host"] = host
+            kwargs["port"] = _int(config.get("port"), 27017)
+            replica_set = (config.get("replica_set") or "").strip()
+            if replica_set:
+                kwargs["replicaSet"] = replica_set
+            if _truthy(config.get("tls", "true")):
+                kwargs["tls"] = True
+
         user = (config.get("user") or "").strip()
         if user:
             kwargs["username"] = user
             kwargs["password"] = config.get("password") or ""
             kwargs["authSource"] = (config.get("auth_source") or "admin").strip()
-        if _truthy(config.get("tls", "true")):
-            kwargs["tls"] = True
 
         client = MongoClient(**kwargs)
         try:

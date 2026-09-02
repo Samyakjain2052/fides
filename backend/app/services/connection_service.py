@@ -33,7 +33,7 @@ from app.core.crypto import CredentialSealError, mask, open_sealed, seal
 from app.core.errors import Conflict, NotFound
 from app.models.audit import AuditAction
 from app.models.connection import Connection
-from app.services import audit_service
+from app.services import audit_service, notification_service
 from app.services.audit_service import Actor
 
 logger = logging.getLogger("app.connections")
@@ -117,6 +117,9 @@ def _out(row: Connection) -> dict[str, Any]:
         "last_tested_at": row.last_tested_at,
         "last_test_ok": row.last_test_ok,
         "last_test_message": row.last_test_message,
+        "consecutive_failures": row.consecutive_failures,
+        "last_ok_at": row.last_ok_at,
+        "monitor": row.monitor,
         "created_at": row.created_at,
     }
 
@@ -292,6 +295,137 @@ async def update(
     return _out(row)
 
 
+#: Consecutive failures before the DPO is told. One failure is a blip — a
+#: failover, a restart, a DNS hiccup. Three across 45 minutes is a broken
+#: integration.
+ALERT_AFTER_FAILURES = 3
+
+
+async def _record_outcome(
+    session,
+    *,
+    tenant_id: uuid.UUID,
+    actor: Actor,
+    row: Connection,
+    result: probes.ProbeResult,
+) -> None:
+    """Write a probe result onto the row, and notify if a streak crosses over.
+
+    Shared by the manual Test button and the scheduled check, so the two cannot
+    disagree about what a failure means or when somebody gets told.
+    """
+    now = datetime.now(UTC)
+    row.last_tested_at = now
+    row.last_test_ok = result.ok
+    row.last_test_message = result.message
+
+    if result.ok:
+        row.consecutive_failures = 0
+        row.last_ok_at = now
+        # Cleared so the NEXT outage alerts again. Leaving it set would mean a
+        # connection that broke, was fixed, and broke again stayed silent.
+        row.alerted_at = None
+        if row.status != "disabled":
+            row.status = "connected"
+    else:
+        row.consecutive_failures = (row.consecutive_failures or 0) + 1
+        if row.status != "disabled":
+            row.status = "failing"
+
+    await session.flush()
+
+    await audit_service.record(
+        session, tenant_id=tenant_id, actor=actor,
+        action=AuditAction.CONNECTION_TESTED,
+        entity_type="connection", entity_id=row.id,
+        payload={"connector": row.connector_id, "label": row.label,
+                 "ok": result.ok, "message": result.message[:500],
+                 "consecutive_failures": row.consecutive_failures},
+    )
+
+    # Alert once per outage, not once per check. Fifteen-minute reminders about
+    # a connection somebody is already fixing train people to filter the sender.
+    crossed = (
+        not result.ok
+        and row.consecutive_failures >= ALERT_AFTER_FAILURES
+        and row.alerted_at is None
+    )
+    if not crossed:
+        return
+
+    connector = registry.get(row.connector_id)
+    since = (
+        row.last_ok_at.strftime("%d %b %Y at %H:%M UTC")
+        if row.last_ok_at else "never — it has not succeeded since it was added"
+    )
+
+    # To an admin of this workspace, not to a data principal. This is the one
+    # notification in the product whose recipient is the operator rather than
+    # the person whose data it concerns, so the address is resolved here rather
+    # than carried in by a caller who already knows it.
+    from app.models.user import User
+
+    to_address = await session.scalar(
+        select(User.email)
+        .where(User.role == "admin", User.is_active.is_(True))
+        .order_by(User.created_at)
+        .limit(1)
+    )
+
+    try:
+        await notification_service.enqueue(
+            session,
+            tenant_id=tenant_id,
+            key="connection.failing",
+            to_address=to_address,
+            entity_type="connection",
+            entity_id=row.id,
+            context={
+                "connection": row.label,
+                "system": connector.label if connector else row.connector_id,
+                "failures": str(row.consecutive_failures),
+                "since": since,
+                "reason": result.message[:300],
+            },
+        )
+        # Set even when there was no address to send to: `enqueue` records a
+        # suppressed row in that case, and re-attempting it every fifteen
+        # minutes would fill the log without ever reaching anybody.
+        row.alerted_at = now
+        await session.flush()
+    except Exception:  # noqa: BLE001
+        # A failed notification must not undo the recorded health result — that
+        # result is the more important of the two.
+        logger.exception(
+            "could not queue a failing-connection notice",
+            extra={"context": {"connection": str(row.id)}},
+        )
+
+
+async def health_check(
+    session, *, tenant_id: uuid.UUID, actor: Actor, row: Connection
+) -> bool:
+    """Probe one connection on the scheduler's behalf. Returns whether it passed.
+
+    Takes the row rather than an id because the caller has already selected the
+    stale ones, and re-fetching each would be a query per connection for nothing.
+    """
+    try:
+        config = {**row.config_public, **open_sealed(row.config_sealed)}
+    except CredentialSealError as exc:
+        await _record_outcome(
+            session, tenant_id=tenant_id, actor=actor, row=row,
+            result=probes.ProbeResult(False, str(exc)),
+        )
+        return False
+
+    result = await probes.run(row.connector_id, config)
+    await _record_outcome(
+        session, tenant_id=tenant_id, actor=actor, row=row, result=result
+    )
+    return result.ok
+
+
 async def test(
     session, *, tenant_id: uuid.UUID, actor: Actor, connection_id: uuid.UUID
 ) -> dict[str, Any]:
@@ -304,30 +438,12 @@ async def test(
 
     try:
         config = {**row.config_public, **open_sealed(row.config_sealed)}
+        result = await probes.run(row.connector_id, config)
     except CredentialSealError as exc:
-        row.status = "failing"
-        row.last_test_ok = False
-        row.last_test_message = str(exc)
-        row.last_tested_at = datetime.now(UTC)
-        await session.flush()
-        await session.refresh(row)
-        return _out(row)
+        result = probes.ProbeResult(False, str(exc))
 
-    result = await probes.run(row.connector_id, config)
-
-    row.last_tested_at = datetime.now(UTC)
-    row.last_test_ok = result.ok
-    row.last_test_message = result.message
-    if row.status != "disabled":
-        row.status = "connected" if result.ok else "failing"
-    await session.flush()
-
-    await audit_service.record(
-        session, tenant_id=tenant_id, actor=actor,
-        action=AuditAction.CONNECTION_TESTED,
-        entity_type="connection", entity_id=row.id,
-        payload={"connector": row.connector_id, "label": row.label,
-                 "ok": result.ok, "message": result.message[:500]},
+    await _record_outcome(
+        session, tenant_id=tenant_id, actor=actor, row=row, result=result
     )
     await session.refresh(row)
     out = _out(row)

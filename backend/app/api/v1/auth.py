@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Request, Response, status
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.api.deps import CurrentUserDep, UnscopedSession, client_ip
 from app.core import throttle
@@ -24,7 +24,12 @@ from app.schemas.auth import (
     UserOut,
     WorkspaceOut,
 )
-from app.services import auth_service, invitation_service, registration_service
+from app.services import (
+    auth_service,
+    invitation_service,
+    password_reset_service,
+    registration_service,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 _settings = get_settings()
@@ -215,6 +220,104 @@ async def me(current: CurrentUserDep) -> TokenResponse:
         user=UserOut.model_validate(current.user),
         workspace=WorkspaceOut.model_validate(tenant),
         capabilities=sorted(c.value for c in capabilities_for(current.user.role)),
+    )
+
+
+class ForgotPassword(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace: str = Field(..., max_length=63)
+    email: EmailStr
+
+
+class ResetPassword(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(..., min_length=16, max_length=200)
+    password: str = Field(..., min_length=12, max_length=256)
+
+
+@router.post("/forgot-password", status_code=status.HTTP_202_ACCEPTED,
+             summary="Email a password reset link")
+async def forgot_password(
+    payload: ForgotPassword,
+    request: Request,
+    session: UnscopedSession,
+) -> dict[str, str]:
+    """Always 202, whether or not that address has an account.
+
+    The response cannot reveal whether somebody is a user of this workspace. For
+    a DPDP product that membership is itself personal data, and a reset form that
+    answers it is a membership oracle for anybody who can type an address.
+
+    Rate-limited per IP because it sends mail on an unauthenticated request, and
+    an unauthenticated send endpoint is a way to spend somebody's ACS quota and
+    fill a stranger's inbox.
+    """
+    throttle.check(
+        f"forgot-password:{client_ip(request) or 'unknown'}",
+        limit=5, window_seconds=900,
+    )
+
+    base = _settings.public_base_url or str(request.base_url)
+    external = _settings.external_path_prefix or ""
+    base = base.rstrip("/")
+    if external and base.endswith(external):
+        base = base[: -len(external)]
+
+    await password_reset_service.request_reset(
+        session,
+        tenant_slug=payload.workspace,
+        email=str(payload.email),
+        base_url=base,
+        ip=client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    return {
+        "detail": (
+            "If that address has an account in this workspace, a reset link is "
+            "on its way. It expires in an hour."
+        )
+    }
+
+
+@router.post("/reset-password", response_model=TokenResponse,
+             summary="Set a new password from a reset link")
+async def reset_password(
+    payload: ResetPassword,
+    request: Request,
+    response: Response,
+    session: UnscopedSession,
+) -> TokenResponse:
+    """Sets the password, ends every existing session, and signs them in.
+
+    Signing them in immediately is deliberate: they have just proved control of
+    the mailbox and chosen a password, so a login form here would only be a
+    place to mistype it.
+    """
+    throttle.check(
+        f"reset-password:{client_ip(request) or 'unknown'}",
+        limit=10, window_seconds=900,
+    )
+
+    user = await password_reset_service.redeem(
+        session,
+        token=payload.token,
+        new_password=payload.password,
+        ip=client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    pair = await auth_service.issue_session(
+        session, user=user, ip=client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    _set_refresh_cookie(response, pair.refresh_token, pair.refresh_expires_at)
+    return TokenResponse(
+        access_token=pair.access_token,
+        expires_at=pair.access_expires_at,
+        user=UserOut.model_validate(user),
+        workspace=WorkspaceOut.model_validate(pair.tenant),
+        capabilities=sorted(c.value for c in capabilities_for(user.role)),
     )
 
 

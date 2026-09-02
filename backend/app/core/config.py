@@ -128,6 +128,19 @@ class Settings(BaseSettings):
     # something weaker.
     credential_encryption_key: str | None = None
 
+    # Whether a connector may connect to a private / loopback / link-local
+    # address. Defaults to FALSE, which is the safe answer.
+    #
+    # A connection test is a request to a host somebody else chose. In Azure the
+    # containers share a VNet with the private endpoint to our own PostgreSQL
+    # server, so leaving this open let any tenant probe our production database
+    # from inside our network, past the firewall — and 169.254.169.254 is where
+    # the managed-identity token endpoint lives. See connectors/hosts.py.
+    #
+    # Local development sets it TRUE, because the demo datastores live on a
+    # Docker bridge network and are private by definition.
+    connector_allow_private_hosts: bool = False
+
     # The DSAR engine's gateway. The backend calls it rather than the browser,
     # so the request row and the engine call are written in one transaction, the
     # gateway can sit behind internal-only ingress, and the frontend talks to one

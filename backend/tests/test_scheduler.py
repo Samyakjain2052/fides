@@ -390,6 +390,13 @@ def test_there_is_no_job_that_destroys_data():
         "notifications.drain",
         "grievance.escalate",
         "retention.prepurge_warn",
+        # Added deliberately, and it earns its place here by NOT writing to
+        # anybody's data: it opens a connection to a customer's own system,
+        # reads a version string and a table count, and records the outcome on
+        # our side. It cannot delete, mask or modify anything — a connectivity
+        # check that touched customer rows would be doing something other than
+        # checking connectivity.
+        "connections.healthcheck",
     }
     for name in scheduler.JOBS:
         assert "purge" not in name or "warn" in name

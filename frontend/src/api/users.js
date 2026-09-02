@@ -60,6 +60,18 @@ export function deactivateUser(userId) {
   return apiFetch(`/admin/users/${userId}/deactivate`, { method: "POST" });
 }
 
+/**
+ * Restore a revoked account.
+ *
+ * Exists because revoking was one-way: a misclick in a table of similar rows
+ * locked somebody out permanently, with no remedy short of a database edit.
+ * Their sessions are NOT restored — they sign in again, which is also the only
+ * way we learn they still know their password.
+ */
+export function reactivateUser(userId) {
+  return apiFetch(`/admin/users/${userId}/reactivate`, { method: "POST" });
+}
+
 // --------------------------------------------------------------------------
 // Invitations
 // --------------------------------------------------------------------------

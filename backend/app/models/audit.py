@@ -172,6 +172,14 @@ class AuditAction:
     # tested it, who deleted it, and whether the test passed. The credential
     # itself never appears in a payload — only its connector, label and the
     # verification outcome.
+    USER_REACTIVATED = "user.reactivated"
+
+    # A reset request is a security event whether or not it was the account
+    # owner who made it, so both halves are recorded — the request and the
+    # completion. Neither payload carries the token or its index.
+    PASSWORD_RESET_REQUESTED = "user.password_reset_requested"
+    PASSWORD_RESET_COMPLETED = "user.password_reset_completed"
+
     CONNECTION_CREATED = "connection.created"
     CONNECTION_UPDATED = "connection.updated"
     CONNECTION_TESTED = "connection.tested"

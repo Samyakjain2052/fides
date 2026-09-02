@@ -557,3 +557,262 @@ async def test_a_failed_test_is_recorded_and_audited(
         ).scalars().all()
         assert len(events) == 1
         assert events[0].payload["ok"] is False
+
+
+# --------------------------------------------------------------------------- #
+# Where a connector may connect.
+#
+# A connection test is a request to a host somebody else chose, which makes it an
+# SSRF primitive unless it is fenced. This deployment made that concrete: the
+# container apps share a VNet with the private endpoint to our OWN PostgreSQL
+# server, so a tenant who pointed a "customer database" at that private address
+# got back `password authentication failed for user "datashield_app"` — proof the
+# server was there, proof the role name was real, and a password-guessing oracle
+# against production from inside our network. Registration is open.
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def _no_private_hosts(monkeypatch):
+    """The deployed default. Local compose sets the opposite."""
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("DS_CONNECTOR_ALLOW_PRIVATE_HOSTS", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("host", "because"),
+    [
+        ("10.30.8.4", "the private endpoint to our own database"),
+        ("127.0.0.1", "loopback"),
+        ("169.254.169.254", "the cloud metadata service that hands out tokens"),
+        ("192.168.1.1", "a home router"),
+        ("172.16.0.5", "private space"),
+        ("0.0.0.0", "unspecified"),
+    ],
+)
+async def test_a_probe_refuses_a_private_address(_no_private_hosts, host, because):
+    result = await probes.run("postgresql", {
+        "host": host, "port": "5432", "user": "u", "password": "p",
+        "database": "d", "tls": "false",
+    })
+    assert not result.ok, f"{host} ({because}) was allowed"
+    # And the refusal explains itself rather than looking like a network blip.
+    assert "will not connect" in result.message
+
+
+async def test_the_refusal_happens_before_any_connection_attempt(_no_private_hosts):
+    """Refused by address, not by timing out. A guard that merely waits for a
+    failed TCP connect still reveals whether the port was open."""
+    import time
+
+    started = time.monotonic()
+    result = await probes.run("postgresql", {
+        "host": "10.255.255.1", "port": "5432", "user": "u", "password": "p",
+        "database": "d", "tls": "false",
+    })
+    elapsed = time.monotonic() - started
+    assert not result.ok
+    assert elapsed < 2.0, f"took {elapsed:.1f}s — it tried to connect"
+
+
+@pytest.mark.parametrize("connector_id", ["postgresql", "mysql", "mongodb"])
+async def test_every_live_connector_enforces_the_guard(_no_private_hosts, connector_id):
+    """One probe forgetting the check is the whole hole reopened."""
+    result = await probes.run(connector_id, {
+        "host": "169.254.169.254", "port": "5432", "user": "u",
+        "password": "p", "database": "d", "tls": "false",
+    })
+    assert not result.ok
+    assert "will not connect" in result.message
+
+
+def test_a_globally_routable_address_passes_the_guard(_no_private_hosts):
+    """The guard must not refuse everything.
+
+    Asserted on the guard itself rather than by probing, because it takes no
+    network I/O to prove and a test that dials a real public host is a test that
+    fails on a plane. Note the address choice: the RFC 5737 documentation ranges
+    (192.0.2.0/24 and friends) are NOT usable here — Python's `ipaddress`
+    classifies them as special-purpose, so the guard refuses them, correctly.
+    """
+    from app.connectors.hosts import resolve_and_check
+
+    # A public resolver's well-known address. Checked, not connected to.
+    addresses = resolve_and_check("8.8.8.8", 5432)
+    assert "8.8.8.8" in addresses
+
+
+def test_the_guard_checks_every_resolved_address(_no_private_hosts):
+    """A name with both a public and a private A record must be refused. Checking
+    only the first would let it through half the time."""
+    from app.connectors.hosts import HostNotAllowed, resolve_and_check
+
+    # localhost commonly resolves to both 127.0.0.1 and ::1; either must refuse.
+    with pytest.raises(HostNotAllowed):
+        resolve_and_check("localhost", 5432)
+
+
+# --------------------------------------------------------------------------- #
+# Health monitoring.
+#
+# Deliberately a scheduled job rather than something the admin page does on load.
+# A probe is a real connection to a customer's production system with their
+# credentials: on page load, a refresh authenticates against their database
+# again, ten connections is ten simultaneous production connections, and once
+# API connectors exist every page view spends their rate limit. The deciding
+# objection is that a page-load check is only correct while somebody is looking —
+# and the point of monitoring is knowing a connection broke at 3am, before a
+# rights request arrives and its statutory clock starts.
+# --------------------------------------------------------------------------- #
+
+async def _make(session, tenant, host="192.0.2.1", label="mon"):
+    return await connection_service.create(
+        session, tenant_id=tenant["id"], actor=_actor(tenant),
+        connector_id="postgresql", label=label,
+        values={"host": host, "database": "d", "user": "u", "password": "p",
+                "tls": "false"},
+    )
+
+
+async def test_a_failure_streak_counts_up(app_session_factory, tenant_a):
+    """One failure is a blip; the count is what distinguishes it from an outage."""
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        out = await _make(s, tenant_a)
+        row = await s.scalar(select(Connection))
+        for expected in (1, 2, 3):
+            await connection_service.health_check(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a), row=row
+            )
+            assert row.consecutive_failures == expected
+        assert row.status == "failing"
+
+
+async def test_a_success_resets_the_streak_and_clears_the_alert(
+    app_session_factory, tenant_a
+):
+    """Otherwise a connection that broke, was fixed, and broke again stays
+    silent — the alert flag would still be set from the first outage."""
+    if not _reachable("app-postgres", 5432):
+        pytest.skip("app-postgres is not running")
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        await _make(s, tenant_a, host="192.0.2.1")
+        row = await s.scalar(select(Connection))
+        for _ in range(3):
+            await connection_service.health_check(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a), row=row
+            )
+        assert row.consecutive_failures == 3
+        assert row.alerted_at is not None
+
+        # Point it at something that works and check again.
+        await connection_service.update(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+            connection_id=row.id,
+            # The password has to be supplied too. Omitting it keeps the stored
+            # one, which is correct behaviour and was the bug in this test.
+            values={"host": "app-postgres", "port": "5432",
+                    "database": os.environ.get("APP_POSTGRES_DB", "appdb"),
+                    "user": os.environ.get("APP_POSTGRES_USER", "appuser"),
+                    "password": os.environ.get("APP_POSTGRES_PASSWORD",
+                                               "apppassword"),
+                    "tls": "false"},
+        )
+        ok = await connection_service.health_check(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a), row=row
+        )
+        assert ok, row.last_test_message
+        assert row.consecutive_failures == 0
+        assert row.alerted_at is None
+        assert row.last_ok_at is not None
+        assert row.status == "connected"
+
+
+async def test_the_dpo_is_told_once_not_every_tick(app_session_factory, tenant_a):
+    """Fifteen-minute reminders about a connection somebody is already fixing
+    train people to filter the sender."""
+    from app.models.notification import Notification
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        from app.services import notification_service as ns
+        await ns.seed_default_templates(s, tenant_id=tenant_a["id"])
+
+        await _make(s, tenant_a)
+        row = await s.scalar(select(Connection))
+        # Well past the threshold.
+        for _ in range(6):
+            await connection_service.health_check(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a), row=row
+            )
+
+        notices = (
+            await s.execute(
+                select(Notification).where(
+                    Notification.template_key == "connection.failing"
+                )
+            )
+        ).scalars().all()
+        assert len(notices) == 1, f"sent {len(notices)} notices for one outage"
+
+
+async def test_nothing_is_sent_before_the_threshold(app_session_factory, tenant_a):
+    """A single blip must not page anybody."""
+    from app.models.notification import Notification
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        from app.services import notification_service as ns
+        await ns.seed_default_templates(s, tenant_id=tenant_a["id"])
+
+        await _make(s, tenant_a)
+        row = await s.scalar(select(Connection))
+        await connection_service.health_check(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a), row=row
+        )
+        notices = (
+            await s.execute(
+                select(Notification).where(
+                    Notification.template_key == "connection.failing"
+                )
+            )
+        ).scalars().all()
+        assert notices == []
+
+
+async def test_the_scheduled_job_and_the_button_record_the_same_way(
+    app_session_factory, tenant_a
+):
+    """Both go through one recorder, so they cannot disagree about what a failure
+    means or when somebody is told."""
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        out = await _make(s, tenant_a, label="via-button")
+        via_button = await connection_service.test(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+            connection_id=uuid.UUID(out["id"]),
+        )
+        assert via_button["consecutive_failures"] == 1
+        assert via_button["status"] == "failing"
+
+
+async def test_a_connection_with_monitoring_off_is_left_alone(
+    app_session_factory, tenant_a
+):
+    """An admin who knows a system is down for maintenance can silence it
+    without deleting the credential and re-entering it later."""
+    from app.services.scheduler import check_connections
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        await _make(s, tenant_a)
+        row = await s.scalar(select(Connection))
+        row.monitor = False
+        await s.commit()
+
+    # The job selects on `monitor`, so this row is not in its work set.
+    await check_connections()
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        row = await s.scalar(select(Connection))
+        assert row.last_tested_at is None
+        assert row.consecutive_failures == 0

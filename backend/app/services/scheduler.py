@@ -56,7 +56,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.job_run import JobRun
@@ -69,6 +69,13 @@ logger = logging.getLogger("app.scheduler")
 # tenant's admin: "the escalation clock did this" and "a person did this" are
 # different facts, and the timelines record `automated=True` for the same reason.
 SYSTEM_ACTOR = Actor(type="system", id=None, label="scheduler")
+
+#: How often a connection is re-probed, and therefore also how stale a result on
+#: the admin page can be. One constant so the schedule and the staleness window
+#: cannot drift apart. Fifteen minutes is a compromise: often enough that a
+#: broken integration is noticed within a deadline's first hour, rare enough that
+#: a customer's database does not see a connection storm from us.
+CONNECTION_CHECK_SECONDS = 900
 
 
 @dataclass
@@ -246,6 +253,74 @@ async def warn_before_purge() -> tuple[int, int]:
     return await _for_each_tenant(work)
 
 
+async def check_connections() -> tuple[int, int]:
+    """Probe connections whose last check has gone stale.
+
+    WHY THIS IS A JOB AND NOT SOMETHING THE ADMIN PAGE DOES
+
+    The obvious design is to probe every connection when the page loads. It does
+    not survive contact with what a probe actually is: a real connection to a
+    customer's production system using their credentials. On page load that means
+    an admin who refreshes twice has just authenticated twice against their own
+    database, ten connections is ten simultaneous production connections or
+    eighty seconds of blocking at the 8s timeout, and once the API connectors
+    exist every page view spends the customer's rate limit.
+
+    The deciding objection is different though. A page-load check is only correct
+    while somebody is looking at the page. The value of monitoring is knowing
+    that a connection broke at 3am — before a rights request arrives and its
+    statutory clock starts — which is exactly what nobody is watching a screen
+    for.
+
+    So: this runs every 15 minutes, the page reads the recorded result instantly,
+    and a failure streak notifies the DPO once rather than every tick.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.connection import Connection
+    from app.services import connection_service
+
+    # Two intervals of slack, so a row is not re-probed just because the loop
+    # drifted by a second.
+    stale_before = datetime.now(UTC) - timedelta(seconds=CONNECTION_CHECK_SECONDS)
+
+    async def work(session: AsyncSession, tenant_id: uuid.UUID) -> int:
+        rows = (
+            await session.execute(
+                select(Connection).where(
+                    Connection.tenant_id == tenant_id,
+                    Connection.monitor.is_(True),
+                    Connection.status != "disabled",
+                    # Never checked, or checked long enough ago to be stale.
+                    or_(
+                        Connection.last_tested_at.is_(None),
+                        Connection.last_tested_at < stale_before,
+                    ),
+                )
+            )
+        ).scalars().all()
+
+        checked = 0
+        for row in rows:
+            try:
+                await connection_service.health_check(
+                    session, tenant_id=tenant_id, actor=SYSTEM_ACTOR, row=row
+                )
+                checked += 1
+            except Exception:  # noqa: BLE001
+                # One connection's probe must not stop the sweep. A customer
+                # with a pathological host should still get their other
+                # connections checked.
+                logger.exception(
+                    "connection health check failed",
+                    extra={"context": {"connection": str(row.id),
+                                       "connector": row.connector_id}},
+                )
+        return checked
+
+    return await _for_each_tenant(work)
+
+
 JOBS: dict[str, Job] = {
     "notifications.drain": Job(
         name="notifications.drain",
@@ -263,6 +338,16 @@ JOBS: dict[str, Job] = {
         description=(
             "Escalates complaints past this workspace's escalation threshold to the "
             "published Grievance Officer. Idempotent."
+        ),
+    ),
+    "connections.healthcheck": Job(
+        name="connections.healthcheck",
+        interval_seconds=CONNECTION_CHECK_SECONDS,
+        run=check_connections,
+        description=(
+            "Probes each configured connection that has gone stale, records the "
+            "result, and notifies the DPO once a connection has failed "
+            "repeatedly. Deliberately not done on page load — see the function."
         ),
     ),
     "retention.prepurge_warn": Job(

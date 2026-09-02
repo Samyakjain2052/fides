@@ -24,6 +24,19 @@
 //
 // Credentials are never displayed. The server will not return one; the most an
 // admin sees back is a last-4 hint, enough to recognise which key they pasted.
+//
+// NO PROBE ON MOUNT, DELIBERATELY. The obvious design is to test every
+// connection when this page opens. A probe is a real connection to the
+// customer's production system using their credentials, so on mount that means a
+// refresh authenticates against their database again, ten connections is ten
+// simultaneous production connections or eighty seconds of waiting at the 8s
+// timeout, and once the API connectors exist every page view spends their rate
+// limit. The deciding objection is different: a page-load check is only correct
+// while somebody is looking at the page, and the point of monitoring is knowing
+// a connection broke at 3am — before a rights request arrives and its statutory
+// clock starts. So `connections.healthcheck` probes every 15 minutes in the
+// background, this page reads the recorded result instantly, and the age of that
+// result is shown rather than hidden.
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -36,6 +49,23 @@ import {
   testConnection,
 } from "../../api/connections";
 import { useApp } from "../../context/AppContext";
+
+/**
+ * How old a health result is, in words.
+ *
+ * Shown because a green badge from four hours ago and one from four minutes ago
+ * are different claims, and a page that renders both identically is quietly
+ * lying about the second.
+ */
+function freshness(iso) {
+  if (!iso) return { text: "never checked", stale: true };
+  const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (minutes < 1) return { text: "checked just now", stale: false };
+  if (minutes < 60) return { text: `checked ${minutes}m ago`, stale: minutes > 45 };
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return { text: `checked ${hours}h ago`, stale: true };
+  return { text: `checked ${Math.floor(hours / 24)}d ago`, stale: true };
+}
 
 const TONE_DOT = {
   success: "bg-success",
@@ -213,6 +243,12 @@ export default function Connections() {
             A connection is only <strong>Connected</strong> once a test has
             actually reached the system. Storing a password proves nothing.
           </p>
+          <p className="mt-1 text-xs text-muted">
+            Checked automatically every 15 minutes in the background, so this
+            page loads instantly and a connection that breaks overnight is
+            noticed before a rights request arrives. Each row shows how old its
+            result is. <strong>Test</strong> checks one immediately.
+          </p>
         </div>
 
         {rows.length === 0 ? (
@@ -239,10 +275,29 @@ export default function Connections() {
                       </p>
                       <div className="mt-1 flex flex-wrap items-center gap-2">
                         <Badge tone={copy.tone}>{copy.label}</Badge>
-                        {row.last_tested_at && (
+                        {(() => {
+                          const f = freshness(row.last_tested_at);
+                          return (
+                            <span
+                              className={`text-xs ${f.stale ? "text-warning" : "text-muted"}`}
+                              title={
+                                row.last_tested_at
+                                  ? new Date(row.last_tested_at).toLocaleString()
+                                  : "no check has run yet"
+                              }
+                            >
+                              {f.text}
+                            </span>
+                          );
+                        })()}
+                        {row.consecutive_failures > 1 && (
+                          <span className="text-xs text-danger">
+                            {row.consecutive_failures} checks in a row
+                          </span>
+                        )}
+                        {!row.monitor && (
                           <span className="text-xs text-muted">
-                            tested{" "}
-                            {new Date(row.last_tested_at).toLocaleString()}
+                            monitoring off
                           </span>
                         )}
                       </div>

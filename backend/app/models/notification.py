@@ -78,6 +78,16 @@ TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
     "breach.principal_notice": (
         "reference", "categories", "discovered_on", "remediation", "organisation",
     ),
+    # Goes to the DPO, not to a data principal — the only key here that does.
+    # A connection to a customer's own system that has stopped working shrinks
+    # their DSAR reach silently, and the moment they would otherwise find out is
+    # while a statutory deadline is running.
+    # Goes to a console user who cannot sign in. `expires_in` is stated because
+    # a reset link with an unclear lifetime gets opened an hour too late.
+    "user.password_reset": ("reset_url", "expires_in", "organisation"),
+    "connection.failing": (
+        "connection", "system", "failures", "since", "reason", "organisation",
+    ),
 }
 
 

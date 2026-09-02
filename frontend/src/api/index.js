@@ -40,8 +40,11 @@
 // and a screen that says "this step is not implemented" is more useful than no
 // screen. They must not be described as anything else.
 //
-// `sendResetLink` is in the same category: there is no password-reset flow on the
-// server yet, so it resolves without sending anything.
+// `sendResetLink` used to live here and has been DELETED, not moved: there is a
+// real password reset now (auth.js -> requestPasswordReset / resetPassword,
+// backed by /v1/auth/forgot-password and /v1/auth/reset-password). The stub
+// waited 500ms and returned {sent: true} without a network call, so somebody who
+// forgot their password saw a confirmation and never received anything.
 // ============================================================================
 
 const delay = (ms = 220) => new Promise((r) => setTimeout(r, ms));
@@ -87,19 +90,6 @@ export const CORRECTABLE_FIELDS = [
 // ---------------------------------------------------------------------------
 // Stubs. Each one is reachable only from a screen that declares it.
 // ---------------------------------------------------------------------------
-
-/**
- * No password reset exists on the server, so this sends nothing.
- *
- * It validates the field and resolves, which is also what a real implementation
- * would look like from here — a reset endpoint must not reveal whether an
- * address is registered. The difference is that nothing arrives.
- */
-export async function sendResetLink(email) {
-  await delay(500);
-  if (!email) throw new Error("Enter your registered email address.");
-  return { sent: true, email };
-}
 
 /** Simulated. Accepts any six digits — see the DSAR module's caveat. */
 export async function sendOtp(destination) {

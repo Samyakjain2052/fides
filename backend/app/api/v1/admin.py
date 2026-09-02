@@ -147,6 +147,25 @@ async def deactivate_user(
     return UserOut.model_validate(user)
 
 
+@router.post("/users/{user_id}/reactivate", response_model=UserOut,
+             summary="Restore a revoked account")
+async def reactivate_user(
+    user_id: uuid.UUID,
+    current: Annotated[CurrentUser, Depends(require(Capability.USER_MANAGE))],
+) -> UserOut:
+    """The way back from Revoke access.
+
+    Without this, revoking was one-way: a misclick in a table of similar rows
+    locked somebody out permanently and the only remedy was a database edit.
+    Their sessions are not restored — see `tenant_service.reactivate_user`.
+    """
+    user = await tenant_service.reactivate_user(
+        current.session, tenant_id=current.tenant_id, user_id=user_id,
+        actor=current.actor,
+    )
+    return UserOut.model_validate(user)
+
+
 # ---------------------------------------------------------------- api keys --
 @router.get("/api-keys", response_model=list[ApiKeyOut], summary="List API keys")
 async def list_api_keys(

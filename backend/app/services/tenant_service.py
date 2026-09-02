@@ -180,6 +180,47 @@ async def change_role(
     return user
 
 
+async def reactivate_user(
+    session: AsyncSession, *, tenant_id: uuid.UUID, user_id: uuid.UUID, actor: Actor
+) -> User:
+    """Restore a revoked account.
+
+    Added because revoking was one-way: an admin who clicked the wrong row had
+    locked somebody out with no path back except a database edit. That is a bad
+    property for a destructive-looking action sitting in a table of similar rows.
+
+    Sessions are deliberately NOT restored. Their refresh tokens were revoked
+    when access was withdrawn and revocation is meant to be final — the person
+    signs in again, which is also the only way we learn they still know their
+    password.
+    """
+    user = (
+        await session.execute(
+            select(User).where(User.id == user_id, User.tenant_id == tenant_id)
+        )
+    ).scalar_one_or_none()
+    if user is None:
+        raise NotFound("User not found.")
+
+    if user.is_active:
+        return user
+
+    user.is_active = True
+    # Cleared so a lockout from before the revocation does not survive it: an
+    # account restored into a locked state looks reactivated and is not.
+    user.failed_login_count = 0
+    user.locked_until = None
+    await session.flush()
+
+    await audit_service.record(
+        session, tenant_id=tenant_id, actor=actor,
+        action=AuditAction.USER_REACTIVATED,
+        entity_type="user", entity_id=user.id,
+        payload={"sessions_restored": False},
+    )
+    return user
+
+
 async def deactivate_user(
     session: AsyncSession, *, tenant_id: uuid.UUID, user_id: uuid.UUID, actor: Actor
 ) -> User:

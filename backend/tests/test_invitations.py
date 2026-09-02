@@ -1143,3 +1143,131 @@ async def test_prod_refuses_to_boot_without_a_public_base_url(monkeypatch):
             Settings()
     finally:
         get_settings.cache_clear()
+
+
+# --------------------------------------------------------------------------- #
+# Revoking, and coming back from it.
+#
+# Reported as "we are not able to revoke someone's access". Revoking worked: the
+# account was deactivated and its sessions killed. What did not work was seeing
+# it — `UserOut` carried no `is_active`, so the user list looked identical after
+# the click, gave no way to tell a revoked account from an active one, and
+# offered "Revoke access" again on an account that was already revoked.
+# --------------------------------------------------------------------------- #
+
+async def test_the_user_list_says_whether_an_account_is_active(
+    app_session_factory, tenant_a, client
+):
+    from app.schemas.auth import UserOut
+
+    assert "is_active" in UserOut.model_fields, (
+        "the user list cannot show revoked accounts without this"
+    )
+
+
+async def test_revoking_then_restoring_round_trips(app_session_factory, tenant_a):
+    """The way back, which did not exist: a misclick locked somebody out with no
+    remedy short of a database edit."""
+    from app.services import tenant_service
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        user = await tenant_service.create_user(
+            s, tenant_id=tenant_a["id"], email="revokee@tenant-a.example.com",
+            full_name="Revokee", role="data_principal",
+            password="correct-horse-battery-staple-7", actor=_actor(tenant_a),
+        )
+        assert user.is_active
+
+        await tenant_service.deactivate_user(
+            s, tenant_id=tenant_a["id"], user_id=user.id, actor=_actor(tenant_a)
+        )
+        assert user.is_active is False
+
+        restored = await tenant_service.reactivate_user(
+            s, tenant_id=tenant_a["id"], user_id=user.id, actor=_actor(tenant_a)
+        )
+        assert restored.is_active is True
+
+
+async def test_restoring_clears_a_lockout(app_session_factory, tenant_a):
+    """An account restored into a locked state looks reactivated and is not."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.services import tenant_service
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        user = await tenant_service.create_user(
+            s, tenant_id=tenant_a["id"], email="locked@tenant-a.example.com",
+            full_name="Locked Out", role="data_principal",
+            password="correct-horse-battery-staple-8", actor=_actor(tenant_a),
+        )
+        user.failed_login_count = 5
+        user.locked_until = datetime.now(UTC) + timedelta(hours=1)
+        await tenant_service.deactivate_user(
+            s, tenant_id=tenant_a["id"], user_id=user.id, actor=_actor(tenant_a)
+        )
+
+        restored = await tenant_service.reactivate_user(
+            s, tenant_id=tenant_a["id"], user_id=user.id, actor=_actor(tenant_a)
+        )
+        assert restored.failed_login_count == 0
+        assert restored.locked_until is None
+
+
+async def test_restoring_does_not_bring_back_their_sessions(
+    app_session_factory, tenant_a
+):
+    """Revocation is meant to be final. Reviving the refresh tokens it killed
+    would mean a revoked laptop resumed working without anybody signing in."""
+    from sqlalchemy import func
+
+    from app.models.user import RefreshToken
+    from app.services import auth_service, tenant_service
+
+    async with app_session_factory() as session:
+        async with session.begin():
+            await set_tenant_context(session, tenant_a["id"])
+            user = await tenant_service.create_user(
+                session, tenant_id=tenant_a["id"],
+                email="sessions@tenant-a.example.com", full_name="Has Sessions",
+                role="data_principal", password="correct-horse-battery-staple-9",
+                actor=_actor(tenant_a),
+            )
+
+    async with app_session_factory() as session:
+        async with session.begin():
+            await auth_service.authenticate(
+                session, tenant_slug=tenant_a["slug"],
+                email="sessions@tenant-a.example.com",
+                password="correct-horse-battery-staple-9",
+            )
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        await tenant_service.deactivate_user(
+            s, tenant_id=tenant_a["id"], user_id=user.id, actor=_actor(tenant_a)
+        )
+        await tenant_service.reactivate_user(
+            s, tenant_id=tenant_a["id"], user_id=user.id, actor=_actor(tenant_a)
+        )
+        live = await s.scalar(
+            select(func.count()).select_from(RefreshToken).where(
+                RefreshToken.user_id == user.id,
+                RefreshToken.revoked_at.is_(None),
+            )
+        )
+    assert live == 0, "a revoked session came back to life"
+
+
+async def test_restoring_an_active_account_is_a_no_op(app_session_factory, tenant_a):
+    from app.services import tenant_service
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        user = await tenant_service.create_user(
+            s, tenant_id=tenant_a["id"], email="already@tenant-a.example.com",
+            full_name="Already Active", role="data_principal",
+            password="correct-horse-battery-staple-10", actor=_actor(tenant_a),
+        )
+        again = await tenant_service.reactivate_user(
+            s, tenant_id=tenant_a["id"], user_id=user.id, actor=_actor(tenant_a)
+        )
+        assert again.is_active is True

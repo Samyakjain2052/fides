@@ -59,6 +59,15 @@ class UserOut(BaseModel):
     tenant_id: uuid.UUID
     mfa_enabled: bool
     last_login_at: datetime | None = None
+    #: Whether this account can still sign in.
+    #:
+    #: Absent until now, and its absence was reported as "we are not able to
+    #: revoke someone's access". Revoking worked perfectly — the account was
+    #: deactivated and its sessions killed — but the user list could not show
+    #: it, so the table looked identical after the click and an admin had no
+    #: way to tell a revoked account from an active one, or to know the action
+    #: had done anything at all.
+    is_active: bool = True
 
 
 class WorkspaceOut(BaseModel):

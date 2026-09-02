@@ -148,9 +148,23 @@ CONNECTORS: tuple[Connector, ...] = (
         id="mongodb", label="MongoDB", category="Databases",
         auth=AuthKind.DATABASE, status=Status.LIVE,
         fields=(
+            # `srv` is not a nicety — without it this connector cannot reach
+            # Atlas, which is how most managed MongoDB is actually deployed.
+            # An Atlas cluster is addressed as mongodb+srv://cluster.mongodb.net
+            # and resolves to a replica set through SRV records; a bare host and
+            # port reaches one node of it at best, and usually nothing.
+            Field_("srv", "Atlas / SRV cluster", kind="select",
+                   options=("false", "true"), default="false", required=False,
+                   help="Turn on for MongoDB Atlas, or any host given to you as "
+                        "mongodb+srv://. Leave the port blank when you do."),
             Field_("host", "Host", placeholder="mongo.internal.example.com",
-                   help="Must be reachable from this service."),
-            Field_("port", "Port", kind="number", default="27017"),
+                   help="Must be reachable from this service. For Atlas, the "
+                        "cluster hostname without the mongodb+srv:// prefix."),
+            Field_("port", "Port", kind="number", default="27017",
+                   required=False,
+                   help="Ignored for an SRV cluster, which carries its own."),
+            Field_("replica_set", "Replica set", required=False,
+                   help="Only for a self-hosted replica set addressed by host."),
             Field_("database", "Database", placeholder="customers"),
             Field_("user", "Username", required=False),
             Field_("password", "Password", secret=True, kind="password",
@@ -187,6 +201,14 @@ CONNECTORS: tuple[Connector, ...] = (
             Field_("password", "Password", secret=True, kind="password"),
             Field_("warehouse", "Warehouse"),
             Field_("database", "Database"),
+            # Snowflake privileges hang off the ROLE, not the user. A session
+            # that does not set one gets the user's default, which is often
+            # PUBLIC and can see nothing — the connection succeeds and every
+            # query returns empty, which is the worst way for this to fail.
+            Field_("role", "Role", required=False,
+                   help="The role that actually holds the grants. Without it "
+                        "Snowflake uses your default, which often sees nothing."),
+            Field_("schema", "Schema", required=False, default="PUBLIC"),
         ),
         capabilities=(Capability.DISCOVER, Capability.ACCESS),
     ),
@@ -223,6 +245,11 @@ CONNECTORS: tuple[Connector, ...] = (
         fields=(
             Field_("app_id", "App ID"),
             Field_("secret_key", "Secret key", secret=True, kind="password"),
+            Field_("environment", "Environment", kind="select",
+                   options=("production", "sandbox"), default="production",
+                   help="Sandbox and production have different base URLs and\n"
+                        "different keys. Getting this wrong looks like an auth\n"
+                        "failure."),
         ),
         capabilities=(Capability.DISCOVER, Capability.ACCESS),
     ),
@@ -233,6 +260,11 @@ CONNECTORS: tuple[Connector, ...] = (
         fields=(
             Field_("merchant_key", "Merchant key"),
             Field_("salt", "Salt", secret=True, kind="password"),
+            Field_("environment", "Environment", kind="select",
+                   options=("production", "sandbox"), default="production",
+                   help="Sandbox and production have different base URLs and\n"
+                        "different keys. Getting this wrong looks like an auth\n"
+                        "failure."),
         ),
         capabilities=(Capability.DISCOVER, Capability.ACCESS),
     ),
@@ -244,6 +276,11 @@ CONNECTORS: tuple[Connector, ...] = (
             Field_("merchant_id", "Merchant ID"),
             Field_("salt_key", "Salt key", secret=True, kind="password"),
             Field_("salt_index", "Salt index", default="1"),
+            Field_("environment", "Environment", kind="select",
+                   options=("production", "sandbox"), default="production",
+                   help="Sandbox and production have different base URLs and\n"
+                        "different keys. Getting this wrong looks like an auth\n"
+                        "failure."),
         ),
         capabilities=(Capability.DISCOVER, Capability.ACCESS),
     ),
@@ -341,6 +378,13 @@ CONNECTORS: tuple[Connector, ...] = (
                    placeholder="yourstore.myshopify.com"),
             Field_("access_token", "Admin API access token", secret=True,
                    kind="password"),
+            # Shopify puts the version in the request path and retires versions
+            # on a published schedule. Omitting it means the call either fails
+            # or silently follows whatever Shopify currently defaults to, which
+            # changes under you.
+            Field_("api_version", "Admin API version", default="2024-10",
+                   help="Shopify retires versions on a schedule; pin the one "
+                        "your app was built against."),
         ),
         capabilities=_ALL_FOUR,
     ),
@@ -383,6 +427,11 @@ CONNECTORS: tuple[Connector, ...] = (
         auth=AuthKind.API_KEY, status=Status.PLANNED,
         fields=(
             Field_("api_token", "API token", secret=True, kind="password"),
+            Field_("environment", "Environment", kind="select",
+                   options=("production", "sandbox"), default="production",
+                   help="Sandbox and production have different base URLs and\n"
+                        "different keys. Getting this wrong looks like an auth\n"
+                        "failure."),
         ),
         capabilities=(Capability.DISCOVER, Capability.ACCESS),
     ),
@@ -397,6 +446,11 @@ CONNECTORS: tuple[Connector, ...] = (
             Field_("phone_number_id", "Phone number ID"),
             Field_("access_token", "Permanent access token", secret=True,
                    kind="password"),
+            # Needed for anything account-scoped rather than message-scoped,
+            # including reading the message templates a consent notice uses.
+            Field_("business_account_id", "WhatsApp Business Account ID",
+                   required=False,
+                   help="The WABA id. Required to read or manage templates."),
         ),
         capabilities=(Capability.CONSENT_PUSH,),
     ),
@@ -421,9 +475,19 @@ CONNECTORS: tuple[Connector, ...] = (
         note="Call recordings are personal data and often the largest store of "
              "it a company forgets about.",
         fields=(
-            Field_("sid", "Account SID"),
-            Field_("api_token", "API token", secret=True, kind="password"),
-            Field_("subdomain", "Subdomain", default="api.exotel.com"),
+            # Exotel authenticates with an API KEY and API TOKEN pair as HTTP
+            # Basic credentials, with the SID only identifying the account in
+            # the URL path. The key was missing here, so these fields could not
+            # have authenticated anything.
+            Field_("sid", "Account SID",
+                   help="Identifies the account in the request path."),
+            Field_("api_key", "API key",
+                   help="The username half of the Basic credential."),
+            Field_("api_token", "API token", secret=True, kind="password",
+                   help="The password half."),
+            Field_("subdomain", "Subdomain", default="api.exotel.com",
+                   help="api.exotel.com, or api.in.exotel.com for the "
+                        "Singapore/India cluster."),
         ),
         capabilities=(Capability.DISCOVER, Capability.ACCESS, Capability.ERASE),
     ),
@@ -508,6 +572,14 @@ CONNECTORS: tuple[Connector, ...] = (
             Field_("role_arn", "Role ARN", required=False,
                    placeholder="arn:aws:iam::123456789012:role/DataShieldAccess",
                    help="Preferred. Leave the keys blank if you use this."),
+            # Without an external id, a cross-account role that trusts our
+            # account can be assumed on behalf of ANY customer who knows the
+            # ARN — the confused-deputy problem AWS documents this field to
+            # solve. It is not optional in practice, only in the API.
+            Field_("external_id", "External ID", required=False, secret=True,
+                   kind="password",
+                   help="Required with a Role ARN. Without it, anyone who "
+                        "learns the ARN can have it assumed on their behalf."),
             Field_("access_key_id", "Access key ID", required=False),
             Field_("secret_access_key", "Secret access key", secret=True,
                    kind="password", required=False),

@@ -25,6 +25,7 @@ import {
   capabilities as fetchCapabilities,
   changeRole,
   deactivateUser,
+  reactivateUser,
   invite,
   listInvitations,
   listSessions,
@@ -266,10 +267,20 @@ export default function UserRoleManagement() {
               {users.map((u) => {
                 const isMe = u.id === me?.id;
                 return (
-                  <tr key={u.id}>
+                  <tr key={u.id} className={u.is_active ? "" : "opacity-60"}>
                     <td className="td">
                       {u.full_name}
                       {isMe && <span className="ml-1 tag">you</span>}
+                      {/* Stated on the row, not left to be inferred from which
+                          button is showing. A revoked account that looks exactly
+                          like an active one is how "revoke does not work" gets
+                          reported for a feature that works. */}
+                      {!u.is_active && (
+                        <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-xs text-danger">
+                          <span className="h-2 w-2 rounded-full bg-danger" aria-hidden="true" />
+                          access revoked
+                        </span>
+                      )}
                     </td>
                     <td className="td text-xs text-muted">{u.email}</td>
                     <td className="td">
@@ -279,7 +290,7 @@ export default function UserRoleManagement() {
                         // You cannot change your own role — the server refuses it
                         // too, so that a mis-click cannot lock a workspace out of
                         // its own console.
-                        disabled={busy || isMe}
+                        disabled={busy || isMe || !u.is_active}
                         onChange={(e) =>
                           setConfirmRole({ user: u, role: e.target.value })
                         }
@@ -306,13 +317,35 @@ export default function UserRoleManagement() {
                         >
                           Sessions
                         </button>
-                        {!isMe && (
+                        {/* One button or the other, driven by `is_active`.
+                            Before the API returned that field this always said
+                            "Revoke access" — including for accounts already
+                            revoked — so the click appeared to do nothing and the
+                            table gave no sign the first one had worked. */}
+                        {!isMe && u.is_active && (
                           <button
                             type="button"
                             className="text-danger underline"
                             onClick={() => setConfirmDeactivate(u)}
                           >
                             Revoke access
+                          </button>
+                        )}
+                        {!isMe && !u.is_active && (
+                          <button
+                            type="button"
+                            className="text-teal underline"
+                            onClick={async () => {
+                              try {
+                                await reactivateUser(u.id);
+                                notify(`${u.full_name} can sign in again.`);
+                                await load();
+                              } catch (err) {
+                                notify(err.message, "error");
+                              }
+                            }}
+                          >
+                            Restore access
                           </button>
                         )}
                       </div>

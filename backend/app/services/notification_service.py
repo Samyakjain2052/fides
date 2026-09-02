@@ -792,6 +792,28 @@ DEFAULT_TEMPLATES: dict[str, tuple[str, str]] = {
         "If you were not expecting this, you can ignore this email and the "
         "invitation will lapse.\n\n{{organisation}}",
     ),
+    "user.password_reset": (
+        "Reset your {{organisation}} password",
+        "Somebody asked to reset the password for your {{organisation}} "
+        "account.\n\n"
+        "Set a new one here:\n\n    {{reset_url}}\n\n"
+        "The link works once and expires in {{expires_in}}. Asking for another "
+        "one immediately invalidates this.\n\n"
+        "If this was not you, nothing has changed and you can ignore this "
+        "email — but somebody knows your address, so it is worth checking "
+        "your account.\n\n{{organisation}}",
+    ),
+    "connection.failing": (
+        "A connection has stopped working: {{connection}}",
+        "The {{system}} connection {{connection}} has failed its last "
+        "{{failures}} checks. It last worked {{since}}.\n\n"
+        "What the system reported:\n\n    {{reason}}\n\n"
+        "Why this matters: while it is failing, a rights request cannot reach "
+        "the data held in that system. If a request is already open, its "
+        "statutory deadline is still running.\n\n"
+        "Check the credentials and the network path in Connections, then use "
+        "Test to confirm.\n\n{{organisation}}",
+    ),
     "breach.principal_notice": (
         "Important: a data security incident affecting your information",
         "We are writing to tell you about a personal data breach that affected "

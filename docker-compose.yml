@@ -247,6 +247,9 @@ services:
       APP_POSTGRES_HOST: ${APP_POSTGRES_HOST}
       APP_POSTGRES_PORT: ${APP_POSTGRES_PORT}
       APP_POSTGRES_DB: ${APP_POSTGRES_DB}
+      # The probe tests connect to the demo datastores, which sit on a Docker
+      # bridge network and are therefore private. Deployed environments leave
+      # this at its safe default of false.
       APP_POSTGRES_USER: ${APP_POSTGRES_USER}
       APP_POSTGRES_PASSWORD: ${APP_POSTGRES_PASSWORD}
       APP_MONGO_HOST: ${APP_MONGO_HOST}
@@ -408,6 +411,10 @@ services:
       # connections feature refuses to store anything rather than
       # falling back to something weaker.
       DS_CREDENTIAL_ENCRYPTION_KEY: ${DS_CREDENTIAL_ENCRYPTION_KEY:-}
+      # The demo datastores are on a Docker bridge network, so they are private
+      # by definition. Deployed environments leave this at its default of false
+      # — see connectors/hosts.py for what that prevents.
+      DS_CONNECTOR_ALLOW_PRIVATE_HOSTS: "true"
       # The scheduler sends real notifications, so it needs the same provider
       # settings as the API. With the default console provider it logs instead.
       DS_NOTIFICATION_PROVIDER: ${DS_NOTIFICATION_PROVIDER:-console}
@@ -466,6 +473,10 @@ services:
       # A DIFFERENT database from the one cms-backend serves. The suite
       # truncates every table between tests; pointed at the app's database it
       # destroys local demo data on every run — which is how this was found.
+      # The probe tests connect to the demo datastores, which sit on a Docker
+      # bridge network and are therefore private. Deployed environments leave
+      # this at its safe default of false.
+      DS_CONNECTOR_ALLOW_PRIVATE_HOSTS: "true"
       DS_DATABASE_URL: postgresql+asyncpg://datashield_app:apppassword@cms-db:5432/datashield_test
       DS_DATABASE_OWNER_URL: postgresql+asyncpg://datashield_owner:ownerpassword@cms-db:5432/datashield_test
       DS_JWT_SECRET: ${DS_JWT_SECRET}
@@ -511,6 +522,10 @@ services:
       # connections feature refuses to store anything rather than
       # falling back to something weaker.
       DS_CREDENTIAL_ENCRYPTION_KEY: ${DS_CREDENTIAL_ENCRYPTION_KEY:-}
+      # The demo datastores are on a Docker bridge network, so they are private
+      # by definition. Deployed environments leave this at its default of false
+      # — see connectors/hosts.py for what that prevents.
+      DS_CONNECTOR_ALLOW_PRIVATE_HOSTS: "true"
       DS_COOKIE_SECURE: ${DS_COOKIE_SECURE:-false}
       # Notifications. `console` logs instead of sending, which is why it is safe
       # as a default and why the backend refuses it in prod.

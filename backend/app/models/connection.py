@@ -28,6 +28,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -99,6 +100,26 @@ class Connection(UUIDMixin, TenantMixin, TimestampMixin, Base):
     #: rather than a paraphrase. Probes scrub credentials out of driver errors
     #: before they reach here.
     last_test_message: Mapped[str | None] = mapped_column(Text)
+
+    #: A streak, not a boolean. One failed check is a blip — a failover, a
+    #: restart, a DNS hiccup. Three in a row is a broken integration, and only
+    #: the second is worth waking somebody for.
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+
+    #: When it last actually worked. Separate from `last_tested_at` so
+    #: "failing since Tuesday" is answerable — a single last-tested timestamp
+    #: cannot express it.
+    last_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    #: Whether the background job checks this one. Lets an admin silence a system
+    #: they know is down for maintenance without deleting the credential.
+    monitor: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    #: Set when a failure notice is sent, so crossing the threshold notifies once
+    #: instead of every fifteen minutes until somebody fixes it.
+    alerted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")

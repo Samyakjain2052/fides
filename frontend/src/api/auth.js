@@ -301,3 +301,32 @@ export function suggestWorkspace(companyName) {
 export function listUsers() {
   return apiFetch("/admin/users");
 }
+
+
+/**
+ * Ask for a password reset link.
+ *
+ * Resolves the same way whether or not that address has an account — the server
+ * refuses to reveal it, because for a DPDP product "does this person have an
+ * account with this company" is itself personal data. So the UI must not promise
+ * an email arrived; it can only say one was sent if the address is known.
+ *
+ * Replaces `sendResetLink` in api/index.js, which waited 500ms and returned
+ * success without making a network call.
+ */
+export function requestPasswordReset({ workspace, email }) {
+  return call("/auth/forgot-password", {
+    method: "POST",
+    body: { workspace: workspace.trim().toLowerCase(), email: email.trim() },
+  });
+}
+
+/** Set a new password from a reset link, and get signed in. */
+export async function resetPassword({ token, password }) {
+  return applySession(
+    await call("/auth/reset-password", {
+      method: "POST",
+      body: { token, password },
+    }),
+  );
+}
