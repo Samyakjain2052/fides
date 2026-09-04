@@ -23,6 +23,7 @@
 //     sentence to a note while implying a recorded legal exemption. A note field
 //     that says it is a note replaces it.
 // ============================================================================
+import { Link } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   changeStatus,
@@ -443,6 +444,24 @@ export default function DSARQueue() {
                 </button>
               </div>
             )}
+
+            {/* The data map. Placed above the engine work on purpose: for an
+                erasure this is now the thing an admin actually uses, and it
+                works whether or not the DSAR engine is deployed. */}
+            <Link
+              to={`/admin/dsar/${selected.id}/data-map`}
+              className="btn-secondary block w-full text-center"
+            >
+              {selected.type === "erasure"
+                ? "Find and erase this person's data"
+                : "See where this person's data is"}
+            </Link>
+            <p className="text-xs text-muted">
+              Searches every connected system for this person and shows which
+              tables hold their data — counts and categories, not values.
+              {selected.type === "erasure" &&
+                " Erasure is carried out from there."}
+            </p>
 
             {/* ----------------------------------------- type-specific work -- */}
             <div className="rounded-lg border border-line p-4">

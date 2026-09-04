@@ -180,6 +180,12 @@ class AuditAction:
     PASSWORD_RESET_REQUESTED = "user.password_reset_requested"
     PASSWORD_RESET_COMPLETED = "user.password_reset_completed"
 
+    # Building a data map is itself processing — it queries a customer's
+    # systems about one person — so it is recorded. The payload holds table
+    # names and counts, never a value.
+    DSAR_DATA_MAP_BUILT = "dsar.data_map_built"
+    DSAR_CONNECTED_ERASURE = "dsar.connected_erasure"
+
     CONNECTION_CREATED = "connection.created"
     CONNECTION_UPDATED = "connection.updated"
     CONNECTION_TESTED = "connection.tested"

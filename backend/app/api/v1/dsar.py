@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, require
@@ -26,7 +27,7 @@ from app.schemas.dsar import (
     DsarStatusChange,
     DsarSubmit,
 )
-from app.services import dsar_service
+from app.services import data_map_service, dsar_service
 
 router = APIRouter(prefix="/dsar", tags=["rights requests"])
 
@@ -186,6 +187,56 @@ async def list_requests(
         )
         items.append(await _detail(current, row, with_timeline=False))
     return DsarPage(items=items, total=total)
+
+
+class EraseBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: The request's own reference, typed back. Same guard the retention live
+    #: run uses — an irreversible action should not follow from one click.
+    confirm_reference: str = Field(..., max_length=32)
+    #: Optional "<connection_id>:<table>" allow-list, so an admin who must
+    #: retain one table for a statutory reason can erase the rest.
+    only: list[str] | None = None
+
+
+@router.get("/{request_id}/data-map",
+            summary="Where this person's data is, across connected systems")
+async def data_map(
+    request_id: uuid.UUID,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    """Metadata only: systems, tables, row counts, categories, matched column.
+
+    No values. A rights request authorises acting on somebody's data, not
+    reading it — see data_map_service for the reasoning, and for why an
+    unverified connection is reported as *unknown* rather than empty.
+    """
+    return await data_map_service.build(
+        current.session, tenant_id=current.tenant_id, actor=current.actor,
+        request_id=request_id,
+    )
+
+
+@router.post("/{request_id}/erase",
+             summary="Mask this person out of the connected systems")
+async def erase_across_systems(
+    request_id: uuid.UUID,
+    body: EraseBody,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    """Irreversible. Refuses without the reference, and refuses under a legal hold.
+
+    Does not mark the request completed: erasing the connected systems is one
+    part of fulfilling it, and whether everything in scope was reached is the
+    admin's judgement to record.
+    """
+    return await data_map_service.erase(
+        current.session, tenant_id=current.tenant_id, actor=current.actor,
+        request_id=request_id,
+        confirm_reference=body.confirm_reference,
+        only=body.only,
+    )
 
 
 @router.get("/{request_id}", response_model=DsarDetail, summary="One request and its timeline")
