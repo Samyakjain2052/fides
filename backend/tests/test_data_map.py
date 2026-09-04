@@ -27,11 +27,19 @@ from app.services import connection_service, data_map_service, dsar_service
 from app.services.audit_service import Actor
 
 TEST_KEY = base64.b64encode(b"m" * 32).decode()
+
+# `or` rather than a get() default, deliberately.
+#
+# docker-compose passes these through as ${APP_POSTGRES_DB} etc. With no .env —
+# which is exactly the case in CI — that expands to an EMPTY STRING, so the
+# variable is set-but-empty and `os.environ.get(key, default)` returns "" and
+# never the default. That produced `ConnectionRefused: Database is required.`
+# in CI on a test that does not even need the database to be reachable.
 PG = {
     "host": "app-postgres", "port": "5432",
-    "user": os.environ.get("APP_POSTGRES_USER", "appuser"),
-    "password": os.environ.get("APP_POSTGRES_PASSWORD", "apppassword"),
-    "database": os.environ.get("APP_POSTGRES_DB", "appdb"),
+    "user": os.environ.get("APP_POSTGRES_USER") or "appuser",
+    "password": os.environ.get("APP_POSTGRES_PASSWORD") or "apppassword",
+    "database": os.environ.get("APP_POSTGRES_DB") or "appdb",
     "tls": "false",
 }
 

@@ -458,9 +458,9 @@ async def test_the_postgres_probe_really_connects():
         pytest.skip("app-postgres is not running")
     result = await probes.run("postgresql", {
         "host": "app-postgres", "port": "5432",
-        "user": os.environ.get("APP_POSTGRES_USER", "appuser"),
-        "password": os.environ.get("APP_POSTGRES_PASSWORD", "apppassword"),
-        "database": os.environ.get("APP_POSTGRES_DB", "appdb"),
+        "user": os.environ.get("APP_POSTGRES_USER") or "appuser",
+        "password": os.environ.get("APP_POSTGRES_PASSWORD") or "apppassword",
+        "database": os.environ.get("APP_POSTGRES_DB") or "appdb",
         "tls": "false",
     })
     assert result.ok, result.message
@@ -513,9 +513,9 @@ async def test_a_successful_test_marks_the_connection_connected(
             connector_id="postgresql", label="demo-store",
             values={
                 "host": "app-postgres", "port": "5432",
-                "user": os.environ.get("APP_POSTGRES_USER", "appuser"),
-                "password": os.environ.get("APP_POSTGRES_PASSWORD", "apppassword"),
-                "database": os.environ.get("APP_POSTGRES_DB", "appdb"),
+                "user": os.environ.get("APP_POSTGRES_USER") or "appuser",
+                "password": os.environ.get("APP_POSTGRES_PASSWORD") or "apppassword",
+                "database": os.environ.get("APP_POSTGRES_DB") or "appdb",
                 "tls": "false",
             },
         )
@@ -715,8 +715,8 @@ async def test_a_success_resets_the_streak_and_clears_the_alert(
             # The password has to be supplied too. Omitting it keeps the stored
             # one, which is correct behaviour and was the bug in this test.
             values={"host": "app-postgres", "port": "5432",
-                    "database": os.environ.get("APP_POSTGRES_DB", "appdb"),
-                    "user": os.environ.get("APP_POSTGRES_USER", "appuser"),
+                    "database": os.environ.get("APP_POSTGRES_DB") or "appdb",
+                    "user": os.environ.get("APP_POSTGRES_USER") or "appuser",
                     "password": os.environ.get("APP_POSTGRES_PASSWORD",
                                                "apppassword"),
                     "tls": "false"},
