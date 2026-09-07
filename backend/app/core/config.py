@@ -141,6 +141,33 @@ class Settings(BaseSettings):
     # Docker bridge network and are private by definition.
     connector_allow_private_hosts: bool = False
 
+    # ------------------------------------------------------------ file storage --
+    # Uploaded bytes — ID documents, evidence, delivered packages — live in an
+    # object store, not in Postgres. See app/storage.
+    #
+    # `local` is a directory and is correct for development and the test suite.
+    # It is NOT correct for Container Apps: the filesystem there is ephemeral, so
+    # a revision restart would silently lose every uploaded identity document.
+    # Production must set azure_blob.
+    storage_backend: str = "local"
+    storage_local_root: str = "/tmp/datashield-files"
+    storage_azure_connection_string: str | None = None
+    storage_azure_container: str = "datashield-files"
+
+    # Per-file ceiling. Generous enough for a photographed ID or a scanned
+    # contract, small enough that a single request cannot exhaust the container's
+    # memory — uploads are read fully before encryption, so this bound is real.
+    max_upload_bytes: int = 25 * 1024 * 1024
+
+    # How long an identity document survives after the request it proved.
+    #
+    # Data minimisation is not optional here: a photograph of somebody's
+    # government ID is the most sensitive object this product will ever hold, and
+    # its purpose is exhausted the moment identity is confirmed. The retention
+    # sweep deletes them on this schedule; keeping them "just in case" is how a
+    # privacy product becomes the breach.
+    id_document_retention_days: int = 30
+
     # The DSAR engine's gateway. The backend calls it rather than the browser,
     # so the request row and the engine call are written in one transaction, the
     # gateway can sit behind internal-only ingress, and the frontend talks to one

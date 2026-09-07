@@ -135,6 +135,53 @@ def open_sealed(sealed: str) -> dict[str, Any]:
     return loaded
 
 
+def seal_bytes(plaintext: bytes, *, aad: str = SCHEME) -> bytes:
+    """Encrypt raw bytes — an uploaded file, not a credential dict.
+
+    Separate from `seal` because the payloads differ in kind. `seal` takes a
+    dict, JSON-encodes it and base64s the result, which is fine for a 200-byte
+    credential and wrong for a 12 MB photograph: base64 would inflate every
+    stored object by a third for no benefit, since a blob store holds bytes
+    perfectly well.
+
+    `aad` is additional authenticated data — not secret, but bound to the
+    ciphertext, so a blob cannot be moved to a different row and still open.
+    Callers pass the file's own id, which means an attacker with write access to
+    the object store cannot swap one person's ID document for another's without
+    the decryption failing.
+    """
+    nonce = os.urandom(_NONCE_BYTES)
+    try:
+        blob = AESGCM(_key()).encrypt(nonce, plaintext, aad.encode())
+    except CredentialSealError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise CredentialSealError(f"could not encrypt: {type(exc).__name__}") from exc
+    # Scheme prefix in the object itself, so a blob found on its own is
+    # identifiable and a future scheme change stays readable.
+    return SCHEME.encode() + b":" + nonce + blob
+
+
+def open_sealed_bytes(sealed: bytes, *, aad: str = SCHEME) -> bytes:
+    """Decrypt what `seal_bytes` wrote. Raises rather than returning partial data."""
+    prefix = SCHEME.encode() + b":"
+    if not sealed.startswith(prefix):
+        raise CredentialSealError("stored object is not in a known format")
+    body = sealed[len(prefix):]
+    nonce, blob = body[:_NONCE_BYTES], body[_NONCE_BYTES:]
+    try:
+        return AESGCM(_key()).decrypt(nonce, blob, aad.encode())
+    except InvalidTag as exc:
+        raise CredentialSealError(
+            "stored object failed authentication — the encryption key may have "
+            "changed, or the object was replaced"
+        ) from exc
+    except CredentialSealError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise CredentialSealError(f"could not decrypt: {type(exc).__name__}") from exc
+
+
 def mask(value: str) -> str:
     """What an admin is allowed to see back.
 

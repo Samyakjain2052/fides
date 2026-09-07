@@ -10,6 +10,7 @@ from app.api.v1 import (
     connections,
     consent,
     dsar,
+    files,
     grievances,
     notifications,
     reports,
@@ -24,6 +25,7 @@ api_router.include_router(breaches.router)
 api_router.include_router(connections.router)
 api_router.include_router(consent.router)
 api_router.include_router(dsar.router)
+api_router.include_router(files.router)
 api_router.include_router(grievances.router)
 api_router.include_router(notifications.router)
 api_router.include_router(reports.router)

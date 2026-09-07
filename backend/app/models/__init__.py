@@ -14,6 +14,7 @@ from app.models.job_run import JobRun
 from app.models.grievance import Grievance, GrievanceEvent
 from app.models.notification import Notification, NotificationTemplate
 from app.models.retention import PurgeRun, PurgeRunItem, RetentionPolicy
+from app.models.stored_file import StoredFile
 from app.models.public_api import ApiRequestLog, IdempotencyKey
 from app.models.publishable_key import ConsentProvenance, PublishableKey
 from app.models.tenant import Tenant
@@ -45,6 +46,7 @@ __all__ = [
     "Purpose",
     "RetentionPolicy",
     "RefreshToken",
+    "StoredFile",
     "Tenant",
     "UserInvitation",
     "User",
@@ -89,4 +91,15 @@ TENANT_SCOPED_TABLES = [
     "breach_events",
     # Phase 8 — invitations.
     "user_invitations",
+    # Connections to a customer's own systems.
+    "connections",
+    # Password resets. Was missing from this list for a release — it had a
+    # policy, but the list did not know about it, which is precisely the drift
+    # the note above claims cannot happen. It cannot now: the check queries
+    # pg_class for every table carrying a tenant_id rather than trusting this.
+    "password_resets",
+    # Phase 10 — uploaded and generated objects. Metadata only; the bytes sit
+    # in an object store, encrypted, and RLS here is what stops one customer
+    # resolving another customer's file id to a downloadable object.
+    "stored_files",
 ]

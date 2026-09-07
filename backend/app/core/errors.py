@@ -63,6 +63,19 @@ class Conflict(AppError):
     title = "Conflict"
 
 
+class ValidationProblem(AppError):
+    """Input we can describe as wrong, from a route that already parsed.
+
+    Distinct from FastAPI's own 422: that one reports a schema mismatch and its
+    body is a list of field errors. This is for things a schema cannot express —
+    a file whose magic bytes contradict its declared type, an upload over the
+    size ceiling — where the useful response is one sentence a person can act on.
+    """
+
+    error_type = "/errors/invalid"
+    title = "Not acceptable input"
+
+
 class RateLimited(AppError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     error_type = "/errors/rate-limited"
