@@ -33,3 +33,6 @@ dist/
 # Local Python venvs
 .venv/
 venv/
+
+# Competitor research screenshots — reference material, not source
+Osano/

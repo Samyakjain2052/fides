@@ -27,7 +27,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.core import throttle
-from app.core.errors import Conflict
+from app.core.errors import AuthenticationError, Conflict
 from app.db.session import set_tenant_context
 from app.models.audit import AuditEvent
 from app.models.invitation import INVITATION_TTL_HOURS, UserInvitation
@@ -351,7 +351,10 @@ async def test_inviting_an_existing_user_is_refused(app_session_factory, tenant_
     async with scoped(app_session_factory, tenant_a["id"]) as s:
         with pytest.raises(Conflict) as exc:
             await _invite(s, tenant_a, email=tenant_a["admin_email"])
-        assert "already has an account" in str(exc.value)
+        # Wording tightened when revoked accounts became invitable: the
+        # refusal now says "active", because a revoked account IS
+        # invitable and the old sentence implied otherwise.
+        assert "already has an active account" in str(exc.value)
 
 
 async def test_an_accepted_invitation_cannot_be_revoked(app_session_factory, tenant_a):
@@ -1271,3 +1274,206 @@ async def test_restoring_an_active_account_is_a_no_op(app_session_factory, tenan
             s, tenant_id=tenant_a["id"], user_id=user.id, actor=_actor(tenant_a)
         )
         assert again.is_active is True
+
+
+# --------------------------------------------------------------------------- #
+# Inviting somebody back after revoking their access.
+#
+# Reported from the console: revoke a person, try to invite them again, and get
+# "already has an account in this workspace. Change their role instead, or
+# deactivate them first" — pointing at the exact action the administrator had
+# just taken. The check was `existing_user is not None`, which ignored
+# `is_active`, so a revoked person could never be invited back.
+# --------------------------------------------------------------------------- #
+
+async def test_a_revoked_person_can_be_invited_back(app_session_factory, tenant_a):
+    from app.services import tenant_service
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        user = await tenant_service.create_user(
+            s, tenant_id=tenant_a["id"], email="returner@tenant-a.example.com",
+            full_name="Returner", role="data_principal",
+            password="correct-horse-battery-staple-20", actor=_actor(tenant_a),
+        )
+        await tenant_service.deactivate_user(
+            s, tenant_id=tenant_a["id"], user_id=user.id, actor=_actor(tenant_a)
+        )
+
+        row, token = await invitation_service.invite(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+            email="returner@tenant-a.example.com", role="auditor",
+            invited_by=tenant_a["admin_id"],
+        )
+        assert token, "a revoked person could not be invited back"
+        assert row.role == "auditor"
+
+
+async def test_an_active_person_still_cannot_be_invited(
+    app_session_factory, tenant_a
+):
+    """The half that must NOT have loosened. Two live invitations for one active
+    account is how somebody ends up with a second password."""
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        with pytest.raises(
+            invitation_service.InvitationRefused, match="already has an active"
+        ):
+            await invitation_service.invite(
+                s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                email=tenant_a["admin_email"], role="auditor",
+                invited_by=tenant_a["admin_id"],
+            )
+
+
+async def test_accepting_revives_the_row_rather_than_duplicating_it(
+    app_session_factory, tenant_a
+):
+    """A plain INSERT would hit the unique (tenant, email) constraint and surface
+    as the generic refusal — the person would be told their perfectly good link
+    was invalid."""
+    from sqlalchemy import func
+
+    from app.services import tenant_service
+
+    email = "revived@tenant-a.example.com"
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        user = await tenant_service.create_user(
+            s, tenant_id=tenant_a["id"], email=email, full_name="Old Name",
+            role="data_principal", password="correct-horse-battery-staple-21",
+            actor=_actor(tenant_a),
+        )
+        original_id = user.id
+        await tenant_service.deactivate_user(
+            s, tenant_id=tenant_a["id"], user_id=user.id, actor=_actor(tenant_a)
+        )
+        _, token = await invitation_service.invite(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+            email=email, role="auditor", invited_by=tenant_a["admin_id"],
+        )
+        await s.commit()
+
+    tenant_id, secret = invitation_service.split_token(token)
+    async with scoped(app_session_factory, tenant_id) as session:
+        revived = await invitation_service.accept(
+            session, tenant_id=tenant_id, secret=secret, full_name="New Name",
+            password="a-brand-new-passphrase-22",
+        )
+        revived_id, revived_active = revived.id, revived.is_active
+        revived_name, revived_role = revived.full_name, revived.role
+        await session.commit()
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        count = await s.scalar(
+            select(func.count()).select_from(User).where(User.email == email)
+        )
+    assert count == 1, "acceptance created a duplicate account"
+    assert revived_id == original_id, "a different row was created"
+    assert revived_active is True
+    assert revived_name == "New Name"
+    # The role the administrator chose for THIS invitation, not the old one.
+    assert revived_role == "auditor"
+
+
+async def test_the_revived_account_uses_the_new_password_only(
+    app_session_factory, tenant_a
+):
+    from app.services import auth_service, tenant_service
+
+    email = "newpass@tenant-a.example.com"
+    old_password = "correct-horse-battery-staple-23"
+    new_password = "a-different-passphrase-24"
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        user = await tenant_service.create_user(
+            s, tenant_id=tenant_a["id"], email=email, full_name="Pass Test",
+            role="data_principal", password=old_password, actor=_actor(tenant_a),
+        )
+        await tenant_service.deactivate_user(
+            s, tenant_id=tenant_a["id"], user_id=user.id, actor=_actor(tenant_a)
+        )
+        _, token = await invitation_service.invite(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+            email=email, role="data_principal", invited_by=tenant_a["admin_id"],
+        )
+        await s.commit()
+
+    tenant_id, secret = invitation_service.split_token(token)
+    async with scoped(app_session_factory, tenant_id) as session:
+        await invitation_service.accept(
+            session, tenant_id=tenant_id, secret=secret, full_name="Pass Test",
+            password=new_password,
+        )
+        await session.commit()
+
+    # The new one works.
+    async with app_session_factory() as session:
+        async with session.begin():
+            pair = await auth_service.authenticate(
+                session, tenant_slug=tenant_a["slug"], email=email,
+                password=new_password,
+            )
+    assert pair.access_token
+
+    # The old one does not.
+    with pytest.raises(AuthenticationError):
+        async with app_session_factory() as session:
+            async with session.begin():
+                await auth_service.authenticate(
+                    session, tenant_slug=tenant_a["slug"], email=email,
+                    password=old_password,
+                )
+
+
+async def test_reviving_does_not_bring_back_the_old_sessions(
+    app_session_factory, tenant_a
+):
+    """Those were revoked when access was withdrawn. Accepting an invitation is
+    not a reason to resurrect a session from before the revocation."""
+    from sqlalchemy import func
+
+    from app.models.user import RefreshToken
+    from app.services import auth_service, tenant_service
+
+    email = "sessions-revive@tenant-a.example.com"
+    password = "correct-horse-battery-staple-25"
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        user = await tenant_service.create_user(
+            s, tenant_id=tenant_a["id"], email=email, full_name="Session Person",
+            role="data_principal", password=password, actor=_actor(tenant_a),
+        )
+        user_id = user.id
+        await s.commit()
+
+    async with app_session_factory() as session:
+        async with session.begin():
+            await auth_service.authenticate(
+                session, tenant_slug=tenant_a["slug"], email=email,
+                password=password,
+            )
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        await tenant_service.deactivate_user(
+            s, tenant_id=tenant_a["id"], user_id=user_id, actor=_actor(tenant_a)
+        )
+        _, token = await invitation_service.invite(
+            s, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+            email=email, role="data_principal", invited_by=tenant_a["admin_id"],
+        )
+        await s.commit()
+
+    tenant_id, secret = invitation_service.split_token(token)
+    async with scoped(app_session_factory, tenant_id) as session:
+        await invitation_service.accept(
+            session, tenant_id=tenant_id, secret=secret,
+            full_name="Session Person", password="yet-another-passphrase-26",
+        )
+        await session.commit()
+
+    async with scoped(app_session_factory, tenant_a["id"]) as s:
+        live = await s.scalar(
+            select(func.count()).select_from(RefreshToken).where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.revoked_at.is_(None),
+            )
+        )
+    assert live == 0, "a session from before the revocation came back"

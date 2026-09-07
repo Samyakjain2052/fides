@@ -144,13 +144,26 @@ async def invite(
     existing_user = await session.scalar(
         select(User).where(User.tenant_id == tenant_id, User.email == email)
     )
-    if existing_user is not None:
-        # Safe to say inside the console: the caller can already list every user
-        # in this workspace, so this discloses nothing they cannot see. The
-        # PUBLIC acceptance path is where non-disclosure matters.
+    # An ACTIVE account blocks an invitation; a revoked one does not.
+    #
+    # This used to refuse on `existing_user is not None`, and the message told
+    # the administrator to "deactivate them first" — which they had already
+    # done. Somebody whose access was revoked could never be invited back, and
+    # the error pointed at the very action they had taken.
+    #
+    # Re-inviting a revoked account is a real workflow: a person leaves, comes
+    # back, and should return through a fresh single-use link with a password
+    # they choose, rather than by having their old one restored. `accept` revives
+    # the existing row rather than inserting a second one.
+    #
+    # Safe to say inside the console: the caller can already list every user in
+    # this workspace, so this discloses nothing they cannot see. The PUBLIC
+    # acceptance path is where non-disclosure matters.
+    if existing_user is not None and existing_user.is_active:
         raise InvitationRefused(
-            f"{email} already has an account in this workspace. Change their role "
-            "instead, or deactivate them first."
+            f"{email} already has an active account in this workspace. Change "
+            "their role instead, or revoke their access first if you want to "
+            "invite them back with a new password."
         )
 
     now = datetime.now(UTC)
@@ -330,17 +343,49 @@ async def accept(
     validate_password(password, email=row.email, name=full_name)
 
     now = datetime.now(UTC)
-    user = User(
-        tenant_id=tenant_id,
-        email=row.email,
-        password_hash=hash_password(password),
-        full_name=full_name,
-        # The invited role, not one the acceptor chooses. The whole point of the
-        # token is that an administrator decided what this account may do.
-        role=row.role,
-        password_changed_at=now,
+
+    # Revive a revoked account rather than inserting a second one.
+    #
+    # `invite` now permits inviting somebody whose access was revoked, so by the
+    # time a link is accepted there may already be a row for this address. A
+    # plain INSERT would hit the unique (tenant, email) constraint and surface as
+    # the generic refusal — the person would be told their perfectly good link
+    # was invalid.
+    #
+    # Everything that made the account theirs is replaced: a password they
+    # choose, the role the administrator picked for THIS invitation, and a
+    # cleared lockout. What is deliberately not restored is their old sessions —
+    # those were revoked when access was withdrawn, and accepting an invitation
+    # is not a reason to resurrect them.
+    existing = await session.scalar(
+        select(User).where(User.tenant_id == tenant_id, User.email == row.email)
     )
-    session.add(user)
+    if existing is not None:
+        if existing.is_active:
+            # Somebody registered or was restored between the invitation and its
+            # acceptance. Deliberately vague: this endpoint is public.
+            raise generic
+        user = existing
+        user.is_active = True
+        user.full_name = full_name
+        user.password_hash = hash_password(password)
+        user.role = row.role
+        user.password_changed_at = now
+        user.failed_login_count = 0
+        user.locked_until = None
+    else:
+        user = User(
+            tenant_id=tenant_id,
+            email=row.email,
+            password_hash=hash_password(password),
+            full_name=full_name,
+            # The invited role, not one the acceptor chooses. The whole point of
+            # the token is that an administrator decided what this account may do.
+            role=row.role,
+            password_changed_at=now,
+        )
+        session.add(user)
+
     try:
         await session.flush()
     except IntegrityError as exc:
