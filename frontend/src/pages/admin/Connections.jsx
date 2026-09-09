@@ -46,8 +46,10 @@ import {
   createConnection,
   deleteConnection,
   listConnections,
+  setOwnership,
   testConnection,
 } from "../../api/connections";
+import { listUsers } from "../../api/auth";
 import { useApp } from "../../context/AppContext";
 
 /**
@@ -100,6 +102,10 @@ export default function Connections() {
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(null);
   const [showUnavailable, setShowUnavailable] = useState(false);
+  // Who can be named as an owner. A failure here degrades the owner picker
+  // to empty rather than blanking the page — the credentials on this screen
+  // matter more than the dropdown.
+  const [people, setPeople] = useState([]);
 
   const load = useCallback(async () => {
     try {
@@ -115,6 +121,12 @@ export default function Connections() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    listUsers()
+      .then((u) => setPeople(u.filter((p) => p.is_active)))
+      .catch(() => setPeople([]));
+  }, []);
 
   const grouped = useMemo(() => {
     if (!cat) return [];
@@ -161,6 +173,18 @@ export default function Connections() {
       setError(err.message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const saveOwnership = async (row, patch) => {
+    try {
+      await setOwnership(row.id, patch);
+      await load();
+    } catch (err) {
+      // Notified rather than shown inline: this is a small edit on one row of a
+      // long list, and clearing the page-level error for it would hide a
+      // credential problem somebody is in the middle of fixing.
+      notify(err.message, "error");
     }
   };
 
@@ -337,6 +361,61 @@ export default function Connections() {
                       </div>
                     ))}
                   </dl>
+
+                  {/* ------------------------------------------ ownership -- */}
+                  {/*
+                      Who answers for this system. Not the same as who pasted
+                      the credential — usually an engineer doing setup, rarely
+                      the person who should handle a rights request about the
+                      data inside. An unowned system shows as unowned, because
+                      the alternative is work that silently belongs to nobody.
+                  */}
+                  <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-line pt-3">
+                    <div className="min-w-[190px]">
+                      <label className="label" htmlFor={`owner-${row.id}`}>
+                        Owner
+                      </label>
+                      <select
+                        id={`owner-${row.id}`}
+                        className="input py-1 text-sm"
+                        value={row.owner_user_id || ""}
+                        onChange={(e) =>
+                          saveOwnership(row, {
+                            ownerUserId: e.target.value || null,
+                            clearOwner: !e.target.value,
+                          })
+                        }
+                      >
+                        <option value="">Nobody yet</option>
+                        {people.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.full_name || p.email}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="min-w-[240px] flex-1">
+                      <label className="label" htmlFor={`purpose-${row.id}`}>
+                        What it is used for
+                      </label>
+                      <input
+                        id={`purpose-${row.id}`}
+                        className="input py-1 text-sm"
+                        defaultValue={row.purpose_note || ""}
+                        placeholder="e.g. billing and invoices for Indian customers"
+                        onBlur={(e) => {
+                          if ((e.target.value || "") !== (row.purpose_note || ""))
+                            saveOwnership(row, { purposeNote: e.target.value });
+                        }}
+                      />
+                    </div>
+                    {!row.owner_user_id && (
+                      <p className="w-full text-xs text-warning">
+                        No owner. Rights-request work against this system will
+                        arrive unassigned.
+                      </p>
+                    )}
+                  </div>
 
                   {row.last_test_ok === false && row.last_test_message && (
                     <p className="mt-2 rounded-lg border border-danger/40 bg-danger/5 px-3 py-2 text-xs text-ink">

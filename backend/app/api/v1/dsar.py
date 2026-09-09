@@ -20,6 +20,7 @@ from app.core.errors import NotFound, PermissionDenied, ValidationProblem
 from app.core.permissions import Capability
 from app.models.consent import DataPrincipal
 from app.models.dsar import DsarRequest
+from app.models.user import User
 from app.schemas.dsar import (
     DsarDetail,
     DsarEventOut,
@@ -29,6 +30,7 @@ from app.schemas.dsar import (
     DsarSubmit,
 )
 from app.services import (
+    action_item_service,
     data_map_service,
     dsar_fulfilment_service,
     dsar_service,
@@ -572,6 +574,250 @@ async def post_message(
             notify=False,
         )
     return dsar_fulfilment_service.message_as_dict(message, [])
+
+
+# --------------------------------------------------------------------------- #
+# Per-system action items
+# --------------------------------------------------------------------------- #
+
+class ManualItem(BaseModel):
+    system_label: str = Field(..., min_length=1, max_length=160)
+    assignee_user_id: uuid.UUID | None = None
+
+
+class AssignItem(BaseModel):
+    #: Null unassigns, which is how a DPO hands an item back when the wrong
+    #: person has it. Distinct from leaving it alone.
+    assignee_user_id: uuid.UUID | None = None
+
+
+class CloseItem(BaseModel):
+    outcome: str
+    #: Required. A dropdown value records that a button was pressed; this
+    #: records that somebody looked.
+    attestation: str = Field(..., min_length=1, max_length=4000)
+    records_found: int = Field(default=0, ge=0)
+    #: The lawful ground, required when retaining against a request.
+    basis: str | None = Field(default=None, max_length=2000)
+    internal_notes: str | None = Field(default=None, max_length=4000)
+
+
+class SkipItem(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=2000)
+
+
+class ThirdParty(BaseModel):
+    address: str = Field(..., min_length=1, max_length=320)
+    note: str | None = Field(default=None, max_length=500)
+
+
+async def _items_payload(current: CurrentUser, request_id: uuid.UUID) -> dict[str, Any]:
+    items = await action_item_service.for_request(
+        current.session, request_id=request_id
+    )
+    # One query for every assignee rather than one per item.
+    ids = {i.assignee_user_id for i in items if i.assignee_user_id}
+    people = {}
+    if ids:
+        rows = (
+            await current.session.execute(select(User).where(User.id.in_(ids)))
+        ).scalars().all()
+        people = {u.id: u for u in rows}
+
+    return {
+        "items": [
+            action_item_service.as_dict(i, people.get(i.assignee_user_id))
+            for i in items
+        ],
+        "summary": action_item_service.summarise(items),
+    }
+
+
+@router.get(
+    "/{request_id}/action-items",
+    summary="The per-system work on this request, and who owns each piece",
+)
+async def list_action_items(
+    request_id: uuid.UUID,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_READ))],
+) -> dict[str, Any]:
+    """Read-only for an auditor: `dsar:read`, not `dsar:process`.
+
+    "Which of the fifteen systems has nobody touched" is exactly the question an
+    auditor should be able to answer without being able to close anything.
+    """
+    await dsar_service.get(current.session, current.tenant_id, request_id)
+    return await _items_payload(current, request_id)
+
+
+@router.post(
+    "/{request_id}/action-items/fan-out",
+    summary="Create one item per connected system. Safe to repeat.",
+)
+async def fan_out_action_items(
+    request_id: uuid.UUID,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    """Idempotent: re-running after a connection is added creates only what is
+    missing, and never disturbs work somebody has already claimed."""
+    row = await dsar_service.get(current.session, current.tenant_id, request_id)
+    created = await action_item_service.fan_out(
+        current.session, tenant_id=current.tenant_id, actor=current.actor,
+        request=row,
+    )
+    payload = await _items_payload(current, request_id)
+    return {"created": len(created), **payload}
+
+
+@router.post(
+    "/{request_id}/action-items",
+    status_code=201,
+    summary="Add an item for a system this product cannot reach",
+)
+async def add_manual_action_item(
+    request_id: uuid.UUID,
+    body: ManualItem,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    """A processor's own database, an offline archive, a payroll bureau.
+
+    In most organisations these are the majority of systems, and a tool that
+    only tracks what it holds credentials for is tracking the easy part.
+    """
+    row = await dsar_service.get(current.session, current.tenant_id, request_id)
+    item = await action_item_service.add_manual(
+        current.session, tenant_id=current.tenant_id, actor=current.actor,
+        request=row, system_label=body.system_label,
+        assignee_user_id=body.assignee_user_id,
+    )
+    return action_item_service.as_dict(item)
+
+
+@router.patch(
+    "/{request_id}/action-items/{item_id}/assign",
+    summary="Assign, reassign, or hand an item back",
+)
+async def assign_action_item(
+    request_id: uuid.UUID,
+    item_id: uuid.UUID,
+    body: AssignItem,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    await dsar_service.get(current.session, current.tenant_id, request_id)
+    item = await action_item_service.get(current.session, item_id=item_id)
+    await action_item_service.assign(
+        current.session, tenant_id=current.tenant_id, actor=current.actor,
+        item=item, assignee_user_id=body.assignee_user_id,
+    )
+    return action_item_service.as_dict(item)
+
+
+@router.post(
+    "/{request_id}/action-items/{item_id}/claim",
+    summary="Take an item yourself",
+)
+async def claim_action_item(
+    request_id: uuid.UUID,
+    item_id: uuid.UUID,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    await dsar_service.get(current.session, current.tenant_id, request_id)
+    item = await action_item_service.get(current.session, item_id=item_id)
+    await action_item_service.claim(
+        current.session, tenant_id=current.tenant_id, actor=current.actor,
+        item=item, user_id=current.user.id,
+    )
+    return action_item_service.as_dict(item)
+
+
+@router.post(
+    "/{request_id}/action-items/{item_id}/close",
+    summary="Close an item with a stated conclusion",
+)
+async def close_action_item(
+    request_id: uuid.UUID,
+    item_id: uuid.UUID,
+    body: CloseItem,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    """The attestation is required, including for a nil result.
+
+    "We searched payroll and it holds nothing about this person" is a finding,
+    and recording it as one is the difference between that and "nobody looked at
+    payroll" — which a queue that simply returns no rows expresses identically.
+    """
+    row = await dsar_service.get(current.session, current.tenant_id, request_id)
+    item = await action_item_service.get(current.session, item_id=item_id)
+    await action_item_service.close(
+        current.session, tenant_id=current.tenant_id, actor=current.actor,
+        request=row, item=item, user_id=current.user.id,
+        outcome=body.outcome, attestation=body.attestation,
+        records_found=body.records_found, basis=body.basis,
+        internal_notes=body.internal_notes,
+    )
+    return action_item_service.as_dict(item)
+
+
+@router.post(
+    "/{request_id}/action-items/{item_id}/skip",
+    summary="Deliberately not do one, with a reason",
+)
+async def skip_action_item(
+    request_id: uuid.UUID,
+    item_id: uuid.UUID,
+    body: SkipItem,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    row = await dsar_service.get(current.session, current.tenant_id, request_id)
+    item = await action_item_service.get(current.session, item_id=item_id)
+    await action_item_service.skip(
+        current.session, tenant_id=current.tenant_id, actor=current.actor,
+        request=row, item=item, reason=body.reason,
+    )
+    return action_item_service.as_dict(item)
+
+
+@router.post(
+    "/{request_id}/action-items/{item_id}/reopen",
+    summary="Undo a close, keeping the superseded conclusion in the audit chain",
+)
+async def reopen_action_item(
+    request_id: uuid.UUID,
+    item_id: uuid.UUID,
+    body: SkipItem,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    await dsar_service.get(current.session, current.tenant_id, request_id)
+    item = await action_item_service.get(current.session, item_id=item_id)
+    await action_item_service.reopen(
+        current.session, tenant_id=current.tenant_id, actor=current.actor,
+        item=item, reason=body.reason,
+    )
+    return action_item_service.as_dict(item)
+
+
+@router.post(
+    "/{request_id}/action-items/{item_id}/third-party",
+    summary="Record that somebody outside was told to act",
+)
+async def notify_third_party(
+    request_id: uuid.UUID,
+    item_id: uuid.UUID,
+    body: ThirdParty,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    """§8(2) keeps the fiduciary responsible for its processors.
+
+    Records that we told them, whom, and when. It does not send anything — what
+    reaches a processor is a contractual matter and frequently not email.
+    """
+    await dsar_service.get(current.session, current.tenant_id, request_id)
+    item = await action_item_service.get(current.session, item_id=item_id)
+    await action_item_service.record_third_party(
+        current.session, tenant_id=current.tenant_id, actor=current.actor,
+        item=item, address=body.address, note=body.note,
+    )
+    return action_item_service.as_dict(item)
 
 
 # --------------------------------------------------------------------------- #

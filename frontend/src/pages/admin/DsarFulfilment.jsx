@@ -1,9 +1,9 @@
 // ============================================================================
 // Fulfilling one rights request (/admin/dsar/:requestId/fulfil)
 //
-// The screen where a tracked request becomes an answered one. Four things, in
-// the order they actually happen: verify who is asking, talk to them, check
-// what would be disclosed, then assemble and send it.
+// The screen where a tracked request becomes an answered one, in the order the
+// work actually happens: verify who is asking, talk to them, work through the
+// systems one by one, then check and send what is being disclosed.
 //
 // WHAT THIS SCREEN CANNOT DO, AND WHY THAT IS THE POINT
 //
@@ -29,6 +29,8 @@
 // ============================================================================
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { actionItems } from "../../api/actionItems";
+import { listUsers } from "../../api/auth";
 import { getRequest } from "../../api/dsar";
 import {
   EXCLUDED_MARKER,
@@ -42,6 +44,7 @@ import {
   saveBlob,
   uploadIdentityDocument,
 } from "../../api/fulfilment";
+import ActionItems from "../../components/common/ActionItems";
 import MessageThread from "../../components/common/MessageThread";
 import { useApp } from "../../context/AppContext";
 
@@ -99,7 +102,7 @@ function ValueCell({ value, classification }) {
 
 export default function DsarFulfilment() {
   const { requestId } = useParams();
-  const { notify } = useApp();
+  const { notify, user } = useApp();
 
   const [request, setRequest] = useState(null);
   const [error, setError] = useState("");
@@ -114,6 +117,11 @@ export default function DsarFulfilment() {
   const [note, setNote] = useState("");
   const [refusal, setRefusal] = useState("");
 
+  // Who can be assigned work. Loaded once; a failure here must not blank the
+  // page — an unassignable list is a degraded screen, not a broken one.
+  const [people, setPeople] = useState([]);
+  const [itemsDone, setItemsDone] = useState(false);
+
   const load = useCallback(async () => {
     setError("");
     try {
@@ -126,6 +134,21 @@ export default function DsarFulfilment() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    listUsers()
+      .then((rows) => setPeople(rows.filter((u) => u.is_active)))
+      .catch(() => setPeople([]));
+  }, []);
+
+  // Only to tick the step heading. The authority on whether the work is done is
+  // the panel itself; this is a summary read, and a failure just leaves the
+  // tick off.
+  useEffect(() => {
+    actionItems(requestId)
+      .then((d) => setItemsDone(Boolean(d.summary?.all_closed)))
+      .catch(() => setItemsDone(false));
+  }, [requestId, busy]);
 
   const guard = async (fn, ok) => {
     setBusy(true);
@@ -352,10 +375,24 @@ export default function DsarFulfilment() {
         </div>
       </Section>
 
+      {/* ---------------------------------------------------- action items -- */}
+      <Section
+        step="3"
+        title="The work, system by system"
+        subtitle="Who owns each piece, and what they concluded — including where nothing was found."
+        done={itemsDone}
+      >
+        <ActionItems
+          requestId={requestId}
+          people={people}
+          currentUserId={user?.id}
+        />
+      </Section>
+
       {/* ----------------------------------------------------- disclosure -- */}
       {isAccess ? (
         <Section
-          step="3"
+          step="4"
           title="What would be disclosed"
           subtitle="Field names, locations, and the values that identify nobody on their own."
           done={Boolean(request.package_delivered_at)}
@@ -554,7 +591,7 @@ export default function DsarFulfilment() {
         </Section>
       ) : (
         <Section
-          step="3"
+          step="4"
           title="Carrying it out"
           subtitle={`A ${request.type} request is not answered with a disclosure package.`}
           done={closed}

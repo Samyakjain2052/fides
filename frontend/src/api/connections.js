@@ -45,6 +45,30 @@ export function updateConnection(id, { label, values }) {
 }
 
 /**
+ * Name who is answerable for a system, and what it is for.
+ *
+ * Separate call from `updateConnection` because it does something different:
+ * editing a credential invalidates the verification (an admin must not be able
+ * to edit a working connection into a broken one and keep a green badge),
+ * whereas naming an owner does not. Folding the two together would make
+ * assigning an owner force a re-test for no reason.
+ *
+ * `clearOwner` is how an owner is actually removed. A blank field means
+ * "unchanged", the same as a blank secret.
+ */
+export function setOwnership(id, { ownerUserId, ownerEmail, purposeNote, clearOwner }) {
+  return apiFetch(`/connections/${id}`, {
+    method: "PATCH",
+    body: {
+      owner_user_id: ownerUserId ?? null,
+      owner_email: ownerEmail ?? null,
+      purpose_note: purposeNote ?? null,
+      clear_owner: Boolean(clearOwner),
+    },
+  });
+}
+
+/**
  * Really connect, and record the outcome.
  *
  * The only thing that can move a connection to `connected`. Storing credentials

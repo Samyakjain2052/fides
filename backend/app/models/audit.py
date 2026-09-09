@@ -208,6 +208,21 @@ class AuditAction:
     DSAR_MESSAGE_SENT = "dsar.message_sent"
     DSAR_MESSAGE_RECEIVED = "dsar.message_received"
 
+    # Per-system work. The CLOSED payload carries the attestation, because a
+    # sentence somebody was willing to write about what they found is the
+    # evidence — including in the negative case, where "we searched payroll and
+    # it held nothing" and "nobody looked at payroll" are otherwise identical.
+    DSAR_ACTION_ITEMS_CREATED = "dsar.action_items_created"
+    DSAR_ACTION_ITEM_ASSIGNED = "dsar.action_item_assigned"
+    DSAR_ACTION_ITEM_CLOSED = "dsar.action_item_closed"
+    # Its own action rather than folded into CLOSED: reopening supersedes a
+    # conclusion somebody already signed, and finding out that happened should
+    # not require reading every close event in sequence.
+    DSAR_ACTION_ITEM_REOPENED = "dsar.action_item_reopened"
+    # §8(2) keeps the fiduciary responsible for its processors, so telling one
+    # to act is a fact worth producing with a date on it.
+    DSAR_THIRD_PARTY_NOTIFIED = "dsar.third_party_notified"
+
     CONNECTION_CREATED = "connection.created"
     CONNECTION_UPDATED = "connection.updated"
     CONNECTION_TESTED = "connection.tested"

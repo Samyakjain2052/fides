@@ -33,6 +33,7 @@ from app.core.crypto import CredentialSealError, mask, open_sealed, seal
 from app.core.errors import Conflict, NotFound
 from app.models.audit import AuditAction
 from app.models.connection import Connection
+from app.models.user import User
 from app.services import audit_service, notification_service
 from app.services.audit_service import Actor
 
@@ -121,6 +122,16 @@ def _out(row: Connection) -> dict[str, Any]:
         "last_ok_at": row.last_ok_at,
         "monitor": row.monitor,
         "created_at": row.created_at,
+        # Ownership. Distinct from `created_by`, which records who pasted the
+        # credential — frequently an engineer doing setup, and rarely the person
+        # who should be answering a rights request about the data inside.
+        #
+        # This is what makes the action-item fan-out useful: an item against an
+        # owned system arrives assigned, and one against an unowned system
+        # arrives visibly unassigned rather than quietly nobody's.
+        "owner_user_id": str(row.owner_user_id) if row.owner_user_id else None,
+        "owner_email": row.owner_email,
+        "purpose_note": row.purpose_note,
     }
 
 
@@ -235,6 +246,10 @@ async def update(
     connection_id: uuid.UUID,
     label: str | None = None,
     values: dict[str, Any] | None = None,
+    owner_user_id: uuid.UUID | None = None,
+    owner_email: str | None = None,
+    purpose_note: str | None = None,
+    clear_owner: bool = False,
 ) -> dict[str, Any]:
     """Edit a connection.
 
@@ -242,6 +257,12 @@ async def update(
     because the form cannot show the admin what is already there, so blank means
     "unchanged", not "empty". Clearing a credential is done by deleting the
     connection.
+
+    The ownership fields follow the opposite rule, and need `clear_owner` to be
+    removed. That asymmetry is deliberate: a blank secret is almost always "I
+    did not retype my password", while a blank owner field could genuinely mean
+    "this has no owner" — so unsetting one has to be asked for explicitly rather
+    than inferred from an empty input.
     """
     row = await _get(session, connection_id)
     connector = registry.get(row.connector_id)
@@ -253,6 +274,33 @@ async def update(
     if label is not None and label.strip() and label.strip() != row.label:
         row.label = label.strip()
         changed.append("label")
+
+    # Ownership does not touch the credential, so it deliberately does NOT
+    # invalidate the verification below. Naming an owner is not a reason to make
+    # somebody re-test a working connection.
+    if clear_owner:
+        row.owner_user_id = None
+        row.owner_email = None
+        changed.append("owner")
+    else:
+        if owner_user_id is not None and owner_user_id != row.owner_user_id:
+            owner = await session.scalar(
+                select(User).where(User.id == owner_user_id, User.is_active)
+            )
+            if owner is None:
+                raise NotFound(
+                    "That person does not have an active account in this "
+                    "workspace."
+                )
+            row.owner_user_id = owner_user_id
+            changed.append("owner")
+        if owner_email is not None:
+            row.owner_email = owner_email.strip().lower() or None
+            changed.append("owner_email")
+
+    if purpose_note is not None:
+        row.purpose_note = purpose_note.strip() or None
+        changed.append("purpose_note")
 
     if values:
         existing = open_sealed(row.config_sealed)

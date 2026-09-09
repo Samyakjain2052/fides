@@ -124,3 +124,26 @@ class Connection(UUIDMixin, TenantMixin, TimestampMixin, Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
+
+    # --- ownership --------------------------------------------------------
+    #
+    # Who is answerable for this system. Distinct from `created_by`, which
+    # records who pasted the credential — frequently an engineer doing setup,
+    # and rarely the person who should be answering a rights request about the
+    # data inside it.
+    #
+    # This is what makes the action-item fan-out useful: an item against a
+    # system with an owner arrives assigned, and one without arrives visibly
+    # unassigned rather than quietly nobody's.
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+    #: A second owner with no account here — a processor's contact, a team
+    #: alias. Plain text because there is no user row to point at.
+    owner_email: Mapped[str | None] = mapped_column(String(320))
+
+    #: What the system is used for, in the owner's own words. Fills the gap
+    #: between a connection (a credential) and a processing record (a purpose),
+    #: and is the field a RoPA draws on.
+    purpose_note: Mapped[str | None] = mapped_column(Text)

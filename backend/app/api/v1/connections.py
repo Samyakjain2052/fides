@@ -45,6 +45,20 @@ class ConnectionPatch(BaseModel):
     #: already stored, so blank cannot mean "clear it".
     values: dict[str, Any] | None = None
 
+    #: Who is answerable for this system. Not the same as who pasted the
+    #: credential, which is usually an engineer doing setup. This is what an
+    #: action-item fan-out assigns to.
+    owner_user_id: uuid.UUID | None = None
+    #: A second owner with no account here — a processor's contact, a team alias.
+    owner_email: str | None = Field(None, max_length=320)
+    #: What the system is used for, in the owner's words. The field a RoPA draws
+    #: on, and the gap between "a credential" and "a processing record".
+    purpose_note: str | None = Field(None, max_length=4000)
+    #: Removing an owner has to be asked for. A blank `owner_email` means
+    #: "unchanged" for the same reason a blank secret does; this is how you
+    #: actually unset one.
+    clear_owner: bool = False
+
 
 @router.get("/catalog", summary="Everything this product can connect to")
 async def catalog(
@@ -115,6 +129,10 @@ async def update_connection(
         connection_id=connection_id,
         label=body.label,
         values=body.values,
+        owner_user_id=body.owner_user_id,
+        owner_email=body.owner_email,
+        purpose_note=body.purpose_note,
+        clear_owner=body.clear_owner,
     )
 
 

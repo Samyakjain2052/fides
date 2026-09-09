@@ -9,6 +9,7 @@ from app.models.audit import AuditAction, AuditEvent
 from app.models.breach import Breach, BreachAffectedPrincipal, BreachEvent
 from app.models.consent import Consent, DataPrincipal, Notice, Purpose
 from app.models.dsar import DsarEvent, DsarRequest
+from app.models.dsar_action_item import DsarActionItem
 from app.models.dsar_message import DsarMessage
 from app.models.invitation import UserInvitation
 from app.models.job_run import JobRun
@@ -31,6 +32,7 @@ __all__ = [
     "BreachEvent",
     "Consent",
     "ConsentProvenance",
+    "DsarActionItem",
     "DsarEvent",
     "DsarMessage",
     "DsarRequest",
@@ -78,6 +80,7 @@ TENANT_SCOPED_TABLES = [
     "dsar_requests",
     "dsar_events",
     "dsar_messages",
+    "dsar_action_items",
     # Phase 7 — retention.
     "retention_policies",
     "purge_runs",
