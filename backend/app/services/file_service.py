@@ -293,10 +293,21 @@ async def purge_expired(session, *, tenant_id: uuid.UUID, now: datetime | None =
 #: see that identity was verified, and no need whatever to look at the
 #: photograph — so the person who has to make the verification decision can open
 #: it and nobody else can.
+#: `dsar_package` has NO staff capability, and that is the important entry.
+#:
+#: An assembled package is one person's complete personal data in a single
+#: object. Staff get `disclosure.preview` instead — field names, locations, and
+#: the values that identify neither a household nor an account — which is enough
+#: to confirm the match is the right person and the package is not obviously
+#: wrong, and is not enough to read somebody's Aadhaar number while doing it.
+#:
+#: The alternative is a product where any DPO can read any customer's financial
+#: records by raising a request on their behalf. Assembling, re-sending and
+#: verifying a package all work through metadata and the redacted preview; none
+#: of them require the bytes.
 _STAFF_CAPABILITY = {
     "dsar_id_document": "dsar:process",
     "dsar_evidence": "dsar:read",
-    "dsar_package": "dsar:read",
     "dsar_message": "dsar:read",
     "grievance_attachment": "grievance:read",
     "assessment_evidence": "assessment:read",

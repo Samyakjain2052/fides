@@ -64,29 +64,14 @@ export function retryDispatch(id) {
   return apiFetch(`/dsar/${id}/retry`, { method: "POST" });
 }
 
-/**
- * The access package: one person's complete personal data.
- *
- * Every retrieval is audited server-side, and the package expires — an expired
- * one says so rather than 404ing, because the person is entitled to know it
- * existed and that the window closed.
- */
-export function getPackage(id) {
-  return apiFetch(`/dsar/${id}/package`);
-}
-
-/** Download the package as a file, without ever putting it in a URL. */
-export async function downloadPackage(id, reference) {
-  const data = await getPackage(id);
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `access-package-${reference || id}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-  return data;
-}
+// The access package moved to ./fulfilment.js.
+//
+// It used to be fetched here as JSON and turned into a .json file in the
+// browser. Three things were wrong with that: a request fulfilled through the
+// connections path produced nothing at all, a JSON dump is not a disclosure a
+// person can read, and the response was assembled live from the engine so it
+// only worked while the engine still held the data. The package is now a real
+// stored artifact — see `downloadPackage` in ./fulfilment.js.
 
 /**
  * Server shape -> the shape the existing screens render.
@@ -114,14 +99,19 @@ export function toRow(d) {
     user_email: d.principal_email,
     user_id: d.principal_ref,
     correction: d.correction_payload,
-    // An access package is only offered when the server says there is one and
-    // the window is still open. Rendering a download that 409s would be worse
-    // than not rendering it.
-    export_url:
-      d.type === "access" && d.status === "completed" && d.package_available_until
-        ? `/v1/dsar/${d.id}/package`
-        : null,
+    // The package is fetched with an authenticated request, not linked. A URL
+    // in an href would 401 without a bearer token, and putting a credential in
+    // one to fix that would leave it in history and in every referer header.
     package_available_until: d.package_available_until,
+    package_assembled_at: d.package_assembled_at,
+    // Delivery, not completion, is what makes a download available. They are
+    // separate steps — an admin sends the data and then closes the request —
+    // and gating on `completed` told people their information was ready while
+    // offering them no way to collect it.
+    package_delivered_at: d.package_delivered_at,
+    identity_document_id: d.identity_document_id,
+    identity_reviewed_at: d.identity_reviewed_at,
+    identity_rejection_reason: d.identity_rejection_reason,
     engine_ref: d.engine_ref,
     engine_status: d.engine_status,
     engine_error: d.engine_error,

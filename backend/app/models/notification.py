@@ -88,6 +88,17 @@ TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
     "connection.failing": (
         "connection", "system", "failures", "since", "reason", "organisation",
     ),
+    # Correspondence on a rights request. Note what is NOT available here:
+    # there is no `body` and no `preview` placeholder, so a customer editing
+    # this template cannot make it quote the message. Messages about a rights
+    # request routinely contain personal data, and an email is an unencrypted
+    # object that sits in an inbox for years — the notification says a message
+    # exists, and reading it requires signing in.
+    "dsar.message": ("reference", "organisation"),
+    # Likewise the package is never attached and cannot be linked to
+    # unauthenticated: no `download_url` placeholder exists. It is one person's
+    # complete personal record in a single file.
+    "dsar.package_ready": ("reference", "expires_on", "organisation"),
 }
 
 

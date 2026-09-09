@@ -25,13 +25,7 @@
 // ============================================================================
 import { Link } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  changeStatus,
-  downloadPackage,
-  getRequest,
-  queueRows,
-  retryDispatch,
-} from "../../api/dsar";
+import { changeStatus, getRequest, queueRows, retryDispatch } from "../../api/dsar";
 import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/common/StatusBadge";
 import SLACountdown from "../../components/common/SLACountdown";
@@ -445,6 +439,21 @@ export default function DSARQueue() {
               </div>
             )}
 
+            {/* Fulfilment first, because it is the whole job: verify who is
+                asking, talk to them, and send them what they asked for. The
+                queue can only ever move a status; that screen is where the
+                obligation is actually discharged. */}
+            <Link
+              to={`/admin/dsar/${selected.id}/fulfil`}
+              className="btn-primary block w-full text-center"
+            >
+              Answer this request
+            </Link>
+            <p className="text-xs text-muted">
+              Identity, the conversation with the requester, and — for an access
+              request — checking and sending the disclosure.
+            </p>
+
             {/* The data map. Placed above the engine work on purpose: for an
                 erasure this is now the thing an admin actually uses, and it
                 works whether or not the DSAR engine is deployed. */}
@@ -470,35 +479,41 @@ export default function DSARQueue() {
               {selected.type === "access" && (
                 <div className="mt-2 space-y-2">
                   <p className="text-sm text-muted">
-                    The engine collects this person&rsquo;s data across every
-                    connected datastore. The package expires, and every retrieval
-                    is audited.
+                    Check what would be disclosed, then assemble and send it.
                   </p>
-                  {selected.package_available_until ? (
-                    <>
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        disabled={busy}
-                        onClick={() =>
-                          act(
-                            () => downloadPackage(selected.id, selected.reference),
-                            "Package downloaded. The retrieval is in the audit trail.",
-                          )
-                        }
-                      >
-                        Download the access package
-                      </button>
-                      <p className="text-xs text-muted">
-                        Available until{" "}
-                        {new Date(selected.package_available_until).toLocaleString()}.
-                      </p>
-                    </>
+                  {selected.package_delivered_at ? (
+                    <p className="text-xs text-success">
+                      Sent{" "}
+                      {new Date(selected.package_delivered_at).toLocaleString()}.
+                    </p>
+                  ) : selected.package_assembled_at ? (
+                    <p className="text-xs text-warning">
+                      A package was assembled{" "}
+                      {new Date(selected.package_assembled_at).toLocaleString()}{" "}
+                      and has not been sent yet.
+                    </p>
                   ) : (
                     <p className="text-xs text-muted">
-                      No package yet — one is produced when the request completes.
+                      Nothing assembled yet.
                     </p>
                   )}
+                  <Link
+                    to={`/admin/dsar/${selected.id}/fulfil`}
+                    className="btn-secondary block w-full text-center"
+                  >
+                    Check and send the disclosure
+                  </Link>
+                  {/* There is deliberately no download button here.
+                      The assembled package is one person's complete personal
+                      record, and no staff capability opens it — the preview on
+                      the fulfilment screen shows field names, locations and the
+                      values that identify nobody, which is what checking a
+                      disclosure actually needs. */}
+                  <p className="text-xs text-muted">
+                    Staff see the field names and the non-identifying values,
+                    never the government ID, financial or health values. Those go
+                    to the person and to nobody else.
+                  </p>
                 </div>
               )}
 

@@ -22,10 +22,16 @@ from app.models.stored_file import StoredFile
 from app.services import file_service
 from app.storage import get_storage, reset_storage
 
-pytestmark = pytest.mark.asyncio
+# No module-level asyncio mark: `asyncio_mode = "auto"` already applies
+# one to every async test, and marking the synchronous tests here too
+# only produces warnings.
 
 # A key for the suite. Real deployments read this from Key Vault.
 TEST_KEY = base64.b64encode(b"k" * 32).decode()
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+JPEG = b"\xff\xd8\xff" + b"\x00" * 64
+PDF = b"%PDF-1.7\n" + b"\x00" * 64
 
 
 @pytest.fixture(autouse=True)
@@ -47,10 +53,6 @@ def _storage(monkeypatch, tmp_path):
     yield
     get_settings.cache_clear()
     reset_storage()
-
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
-JPEG = b"\xff\xd8\xff" + b"\x00" * 64
-PDF = b"%PDF-1.7\n" + b"\x00" * 64
 
 
 async def _store(factory, tenant, **kw):

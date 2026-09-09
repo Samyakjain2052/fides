@@ -33,6 +33,7 @@ import GrievanceStatus from "./pages/user/GrievanceStatus";
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import DSARQueue from "./pages/admin/DSARQueue";
 import DsarDataMap from "./pages/admin/DsarDataMap";
+import DsarFulfilment from "./pages/admin/DsarFulfilment";
 import ConsentQueue from "./pages/admin/ConsentQueue";
 import GrievanceQueue from "./pages/admin/GrievanceQueue";
 import BreachManagement from "./pages/admin/BreachManagement";
@@ -131,6 +132,7 @@ export default function App() {
         <Route path="dashboard" element={<RequireRole allow={["admin"]}><AdminDashboard /></RequireRole>} />
         <Route path="dsar" element={<RequireRole allow={["admin"]}><DSARQueue /></RequireRole>} />
         <Route path="dsar/:requestId/data-map" element={<RequireRole allow={["admin"]}><DsarDataMap /></RequireRole>} />
+        <Route path="dsar/:requestId/fulfil" element={<RequireRole allow={["admin"]}><DsarFulfilment /></RequireRole>} />
         <Route path="consent-validation" element={<RequireRole allow={["admin"]}><ConsentQueue /></RequireRole>} />
         <Route
           path="grievances"

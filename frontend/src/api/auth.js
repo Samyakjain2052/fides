@@ -225,6 +225,44 @@ export async function apiDownload(path, { method = "POST", body } = {}) {
   }
 }
 
+/**
+ * Authenticated multipart upload.
+ *
+ * Separate from `apiFetch` for the opposite reason to `apiDownload`: `call()`
+ * sets `Content-Type: application/json` and serialises the body, and a
+ * multipart upload needs the browser to set the header itself so it can include
+ * the boundary. Setting it by hand produces a body the server cannot parse.
+ *
+ * Same one-shot refresh-and-retry, because an upload is the worst place to fail
+ * on an expired token — the person has already chosen the file, and a 401 they
+ * have to recover from by re-picking it reads as the upload being rejected.
+ */
+export async function apiUpload(path, file, { field = "file" } = {}) {
+  const attempt = async () => {
+    const form = new FormData();
+    form.append(field, file, file.name);
+    const headers = {};
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const resp = await fetch(`${API}${path}`, {
+      method: "POST",
+      headers,
+      credentials: "include",
+      body: form,
+    });
+    if (!resp.ok) throw await toError(resp);
+    return resp.json();
+  };
+
+  try {
+    return await attempt();
+  } catch (err) {
+    if (err.status !== 401) throw err;
+    const session = await restoreSession();
+    if (!session) throw err;
+    return attempt();
+  }
+}
+
 export async function logout() {
   try {
     await call("/auth/logout", { method: "POST", auth: true });

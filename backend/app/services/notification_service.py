@@ -743,6 +743,28 @@ DEFAULT_TEMPLATES: dict[str, tuple[str, str]] = {
         "If you disagree, you may raise a grievance with our Grievance Officer.\n\n"
         "{{organisation}}",
     ),
+    # Carries NO content, deliberately. Correspondence about a rights request
+    # quotes personal data as a matter of course, and an email is an unencrypted
+    # object that sits in an inbox for years and gets forwarded by accident. The
+    # notification says a message exists; reading it requires signing in.
+    "dsar.message": (
+        "There is a new message about your data request {{reference}}",
+        "We have sent you a message about your data request ({{reference}}).\n\n"
+        "Sign in to your account to read it and to reply. We have not included "
+        "it here, because messages about your request may contain your personal "
+        "data and email is not a safe place to put it.\n\n{{organisation}}",
+    ),
+    # Likewise: the package is never attached. It is one person's complete
+    # personal record in a single file.
+    "dsar.package_ready": (
+        "The information you asked for is ready — {{reference}}",
+        "Your data request ({{reference}}) is complete, and the information we "
+        "hold about you is ready to download.\n\n"
+        "Sign in to your account to collect it. It is available until "
+        "{{expires_on}}, after which you can ask us for another copy.\n\n"
+        "We have not attached it to this email. It contains all of your personal "
+        "data, and anyone who obtained the email could read it.\n\n{{organisation}}",
+    ),
     "consent.withdrawn": (
         "You withdrew consent for {{purpose}}",
         "We have recorded that you withdrew your consent for {{purpose}}.\n\n"

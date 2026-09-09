@@ -1,32 +1,65 @@
 // ============================================================================
 // DSAR Request Status (/user/dsar/status)
-// List of the user's requests; click one for the tracker, SLA countdown,
-// rejection reason, download link, and its notification history.
+//
+// The person's own view of their requests: the tracker, the legal deadline, the
+// conversation with the fiduciary, and — for a completed access request — the
+// actual data.
+//
+// This is the collection point for the disclosure package, and it is the ONLY
+// one. The package is never emailed and never linked to unauthenticated: it is
+// this person's complete personal record in a single file, and an email
+// attachment or a signed URL in an inbox is a copy of it nobody can withdraw.
+// Signing in is the price of that, and it is a low one.
 // ============================================================================
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { myNotifications } from "../../api/notifications";
 import { myRows } from "../../api/dsar";
+import {
+  downloadPackage,
+  saveBlob,
+  uploadIdentityDocument,
+} from "../../api/fulfilment";
+import MessageThread from "../../components/common/MessageThread";
 import StatusBadge from "../../components/common/StatusBadge";
 import SLACountdown from "../../components/common/SLACountdown";
 import TimelineTracker, { DSAR_STEPS } from "../../components/common/TimelineTracker";
+import { useApp } from "../../context/AppContext";
 
-const TYPE_LABEL = { access: "Access", correct: "Correction", erase: "Erasure" };
+// Keyed to what the SERVER actually sends. These were previously "correct" and
+// "erase", which match nothing: the API's types are access / correction /
+// erasure, so every branch testing them was dead and the completion panels for
+// a correction and an erasure never rendered at all.
+const TYPE_LABEL = {
+  access: "Access",
+  correction: "Correction",
+  erasure: "Erasure",
+};
 
 export default function DSARStatus() {
+  const { notify } = useApp();
   const [rows, setRows] = useState([]);
-  const [selected, setSelected] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
   const [notifications, setNotifications] = useState([]);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const fresh = await myRows();
+    setRows(fresh);
+    setSelectedId((prev) => prev || fresh[0]?.id || null);
+  }, []);
 
   useEffect(() => {
-    myRows().then((r) => {
-      setRows(r);
-      setSelected((prev) => prev || r[0] || null);
-    });
-    // A bell-and-braces failure here must not blank the page the person came
+    load();
+    // A belt-and-braces failure here must not blank the page the person came
     // for: their requests matter more than the history of emails about them.
     myNotifications().then(setNotifications).catch(() => setNotifications([]));
-  }, []);
+  }, [load]);
+
+  // Held by id rather than by object, so a reload after an upload does not
+  // leave a stale copy selected showing the state from before it.
+  const selected = rows.find((r) => r.id === selectedId) || null;
 
   // Matched on entity_id, not on whether the reference appears in the subject
   // line. Substring-matching a subject breaks the moment somebody edits a
@@ -60,7 +93,7 @@ export default function DSARStatus() {
               <button
                 key={r.id}
                 type="button"
-                onClick={() => setSelected(r)}
+                onClick={() => setSelectedId(r.id)}
                 className={`card w-full p-4 text-left transition ${
                   selected?.id === r.id ? "border-navy/50 ring-1 ring-navy/20" : "hover:border-navy/30"
                 }`}
@@ -147,16 +180,60 @@ export default function DSARStatus() {
                   </div>
                 )}
 
-                {selected.status === "completed" && selected.type === "access" && (
+                {/* Offered whenever a package has been delivered, not only on
+                    `completed`. Delivery and completion are separate steps —
+                    an admin sends the data and then closes the request — and
+                    gating the download on the status meant the person could be
+                    told their information was ready and find no way to get it. */}
+                {selected.type === "access" && selected.package_delivered_at && (
                   <div className="mt-4 rounded-lg border border-success/40 bg-success/5 p-3">
-                    <p className="text-sm font-medium text-ink">Your data is ready</p>
-                    <a href={selected.export_url || "#"} className="btn-secondary mt-2">
-                      Download my data export
-                    </a>
+                    <p className="text-sm font-medium text-ink">
+                      The information we hold about you is ready
+                    </p>
+                    <p className="mt-1 text-xs text-muted">
+                      A ZIP file containing everything we found, with a plain
+                      explanation of what is in it.
+                      {selected.package_available_until && (
+                        <>
+                          {" "}
+                          Available until{" "}
+                          {new Date(
+                            selected.package_available_until,
+                          ).toLocaleDateString()}
+                          , after which you can ask us for another copy.
+                        </>
+                      )}
+                    </p>
+                    <button
+                      type="button"
+                      className="btn-secondary mt-2"
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusy(true);
+                        setError("");
+                        try {
+                          saveBlob(
+                            await downloadPackage(selected.id),
+                            `${selected.reference}.zip`,
+                          );
+                        } catch (e) {
+                          setError(e.message);
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      {busy ? "Preparing…" : "Download my data"}
+                    </button>
+                    <p className="mt-2 text-xs text-muted">
+                      This file contains your personal data in full. Anyone who
+                      obtains it can read all of it — keep it somewhere you
+                      control.
+                    </p>
                   </div>
                 )}
 
-                {selected.status === "completed" && selected.type === "correct" && (
+                {selected.status === "completed" && selected.type === "correction" && (
                   <div className="mt-4 rounded-lg border border-success/40 bg-success/5 p-3 text-sm">
                     <p className="font-medium text-ink">Correction applied</p>
                     <p className="mt-1 text-muted">
@@ -167,7 +244,7 @@ export default function DSARStatus() {
                   </div>
                 )}
 
-                {selected.status === "completed" && selected.type === "erase" && (
+                {selected.status === "completed" && selected.type === "erasure" && (
                   <div className="mt-4 rounded-lg border border-success/40 bg-success/5 p-3 text-sm">
                     <p className="font-medium text-ink">Erasure completed</p>
                     <p className="mt-1 text-muted">
@@ -193,6 +270,88 @@ export default function DSARStatus() {
                     </ul>
                   </div>
                 )}
+              </div>
+
+              {error && (
+                <p className="rounded-lg border border-danger/40 bg-danger/5 px-4 py-3 text-sm text-danger">
+                  {error}
+                </p>
+              )}
+
+              {/* Identity. Shown only while it is still needed — asking somebody
+                  to prove who they are after we already decided they had is
+                  just an unexplained demand for a photograph of their ID. */}
+              {!selected.verified_at &&
+                !["completed", "rejected", "cancelled"].includes(
+                  selected.status,
+                ) && (
+                  <div className="card p-5">
+                    <p className="text-sm font-semibold text-ink">
+                      We may need to check it is you
+                    </p>
+                    <p className="mt-1 text-sm text-muted">
+                      {selected.identity_rejection_reason ? (
+                        <>
+                          The document you sent could not be accepted:{" "}
+                          <strong className="text-ink">
+                            {selected.identity_rejection_reason}
+                          </strong>{" "}
+                          You can send another.
+                        </>
+                      ) : (
+                        <>
+                          Before we hand over or delete personal data we have to
+                          be sure whose it is. A photo of any government ID is
+                          enough — we only look at it to confirm your name, and
+                          it is destroyed as soon as we have.
+                        </>
+                      )}
+                    </p>
+                    <label className="btn-secondary mt-3 inline-flex cursor-pointer items-center">
+                      {busy ? "Uploading…" : "Send a photo of my ID"}
+                      <input
+                        type="file"
+                        className="hidden"
+                        accept="image/png,image/jpeg,image/webp,image/heic,application/pdf"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          setBusy(true);
+                          setError("");
+                          try {
+                            await uploadIdentityDocument(selected.id, file);
+                            notify(
+                              "Thank you — we will check it and get on with your request.",
+                            );
+                            await load();
+                          } catch (err) {
+                            setError(err.message);
+                          } finally {
+                            setBusy(false);
+                            e.target.value = "";
+                          }
+                        }}
+                      />
+                    </label>
+                  </div>
+                )}
+
+              {/* The conversation. */}
+              <div className="card p-5">
+                <p className="text-sm font-semibold text-ink">Messages</p>
+                <p className="mt-1 text-sm text-muted">
+                  Anything we need to ask you, and anything you want to add,
+                  stays here with your request.
+                </p>
+                <div className="mt-3 h-[360px]">
+                  <MessageThread
+                    requestId={selected.id}
+                    side="principal"
+                    readOnly={["completed", "rejected", "cancelled"].includes(
+                      selected.status,
+                    )}
+                  />
+                </div>
               </div>
 
               <div className="card p-5">

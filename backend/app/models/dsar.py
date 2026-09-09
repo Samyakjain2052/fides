@@ -109,9 +109,58 @@ class DsarRequest(UUIDMixin, TenantMixin, TimestampMixin, Base):
     # It expires; see the service for why that is not optional.
     package_available_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # ------------------------------------------------ identity verification --
+    #
+    # `verification_method` and `verified_at` above record that verification
+    # happened. These record the DECISION: which document was examined, who
+    # examined it, when, and — if it was refused — why. A rejection on identity
+    # grounds is the one refusal a person is most likely to challenge, and
+    # "verified_at IS NULL" is not an answer to "why was I turned down".
+    identity_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("stored_files.id", ondelete="SET NULL")
+    )
+    identity_reviewed_by: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    identity_reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    identity_rejection_reason: Mapped[str | None] = mapped_column(Text)
+
+    # ---------------------------------------------------- assembled package --
+    #
+    # The stored artifact, as opposed to the live engine passthrough that
+    # preceded it. Assembled once, hashed, and delivered through the message
+    # thread — so a request fulfilled by hand through the connections path
+    # produces a real deliverable, and the engine is not required to retain
+    # somebody's data forever just so a download keeps working.
+    package_file_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("stored_files.id", ondelete="SET NULL")
+    )
+    package_assembled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    package_delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
     @property
     def is_open(self) -> bool:
         return self.status not in ("completed", "rejected", "cancelled")
+
+    @property
+    def identity_verified(self) -> bool:
+        """Whether identity was affirmatively confirmed.
+
+        Not the same as `verified_at is not None`: a request can arrive already
+        verified by another route (an authenticated portal session, a staff
+        member acting on a known caller), and this asks specifically whether a
+        document was reviewed and accepted.
+        """
+        return (
+            self.identity_reviewed_at is not None
+            and self.identity_rejection_reason is None
+        )
 
 
 class DsarEvent(UUIDMixin, TenantMixin, TimestampMixin, Base):

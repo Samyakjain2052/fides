@@ -78,6 +78,22 @@ class DsarOut(BaseModel):
     correction_payload: dict[str, Any] | None
     package_available_until: datetime | None
 
+    # ------------------------------------------------------------ fulfilment --
+    #
+    # Identity as a decision, not just a timestamp. `identity_document_id` says
+    # a document is attached; the review fields say what was concluded about it.
+    # A screen needs all three to distinguish "nothing submitted" from "waiting
+    # for review" from "refused, and here is why".
+    identity_document_id: uuid.UUID | None = None
+    identity_reviewed_at: datetime | None = None
+    identity_rejection_reason: str | None = None
+
+    # Assembled and delivered are separate on purpose. "We prepared it" must
+    # never read as "they received it" — and the person's download is offered on
+    # DELIVERY, because an admin sends the data and then closes the request.
+    package_assembled_at: datetime | None = None
+    package_delivered_at: datetime | None = None
+
 
 class DsarDetail(DsarOut):
     principal_ref: str | None = None

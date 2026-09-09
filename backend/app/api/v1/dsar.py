@@ -10,12 +10,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, require
-from app.core.errors import PermissionDenied
+from app.core.config import get_settings
+from app.core.errors import NotFound, PermissionDenied, ValidationProblem
 from app.core.permissions import Capability
 from app.models.consent import DataPrincipal
 from app.models.dsar import DsarRequest
@@ -27,9 +28,36 @@ from app.schemas.dsar import (
     DsarStatusChange,
     DsarSubmit,
 )
-from app.services import data_map_service, dsar_service
+from app.services import (
+    data_map_service,
+    dsar_fulfilment_service,
+    dsar_service,
+    file_service,
+)
 
 router = APIRouter(prefix="/dsar", tags=["rights requests"])
+
+
+async def _read_bounded(file: UploadFile) -> bytes:
+    """Read an upload, refusing one that is over the ceiling.
+
+    Read in chunks and abandoned as soon as the limit is passed, rather than
+    `await file.read()` and checking the length afterwards. The difference
+    matters: the naive version pulls the whole body into memory before deciding
+    it was too big, which makes the size limit an invitation rather than a
+    defence.
+    """
+    limit = get_settings().max_upload_bytes
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(1024 * 256):
+        total += len(chunk)
+        if total > limit:
+            raise ValidationProblem(
+                f"Files must be {limit // (1024 * 1024)} MB or smaller."
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 async def _detail(current: CurrentUser, row: DsarRequest, *, with_timeline: bool = True):
@@ -310,26 +338,326 @@ async def retry_dispatch(
 
 @router.get(
     "/{request_id}/package",
-    summary="Download the access package — audited, and it expires",
+    summary="Download the assembled disclosure package — audited, and it expires",
 )
 async def get_package(
     request_id: uuid.UUID,
     current: Annotated[CurrentUser, Depends(require(Capability.SELF_READ))],
-) -> Any:
-    """One person's complete personal data in a single response.
+) -> Response:
+    """One person's complete personal data, as the stored artifact.
 
-    Every retrieval writes an audit entry, and the package expires. Both matter
-    more here than anywhere else in the API: this is the object that would do the
-    most damage if it leaked, and "who downloaded it, and when" has to be
-    answerable.
+    This used to proxy live JSON from the engine, which had three problems: a
+    request fulfilled through the connections path produced nothing at all, the
+    response was not something anybody could keep, and the engine had to retain
+    the data indefinitely for the endpoint to keep working. It now serves the
+    package that was assembled, stored and hashed — so what the person receives
+    is exactly what an administrator reviewed and delivered.
+
+    Only the person it belongs to. `dsar:process` does NOT open this: staff get
+    the redacted preview instead, and reviewing a disclosure does not require
+    reading somebody's government ID. See services/disclosure.py.
     """
     row = await dsar_service.get(current.session, current.tenant_id, request_id)
 
-    if Capability.DSAR_PROCESS.value not in set(current.capabilities):
-        mine = await _self_principal(current)
-        if row.principal_id != mine.id:
-            raise PermissionDenied("That request belongs to someone else.")
+    mine = await _self_principal(current)
+    if row.principal_id != mine.id:
+        # 404, not 403 — the same reasoning as every other file refusal.
+        raise NotFound("No such request.")
 
-    return await dsar_service.package(
+    stored, data = await dsar_fulfilment_service.package_for_principal(
+        current.session, request=row
+    )
+    await dsar_fulfilment_service.note_package_downloaded(
         current.session, tenant_id=current.tenant_id, actor=current.actor, request=row
     )
+
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{row.reference}.zip"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Identity verification
+# --------------------------------------------------------------------------- #
+
+class IdentityReview(BaseModel):
+    accept: bool
+    #: Required on a refusal. Enforced in the service, not just here — this is
+    #: the refusal a person is most likely to challenge.
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+@router.post(
+    "/{request_id}/identity",
+    status_code=201,
+    summary="Attach a document proving who is asking",
+)
+async def upload_identity_document(
+    request_id: uuid.UUID,
+    current: Annotated[CurrentUser, Depends(require(Capability.SELF_READ))],
+    file: Annotated[UploadFile, File(description="Photo or scan of an ID")],
+) -> dict[str, Any]:
+    """Upload identity proof, for your own request or — with `dsar:process` — anyone's.
+
+    Read fully into memory and bounded by `max_upload_bytes`. Streaming to disk
+    first would mean an unvalidated file existing on the filesystem before
+    anything had decided whether we accept it at all.
+    """
+    row = await dsar_service.get(current.session, current.tenant_id, request_id)
+    staff = Capability.DSAR_PROCESS.value in set(current.capabilities)
+
+    principal_id = None
+    if not staff:
+        mine = await _self_principal(current)
+        if row.principal_id != mine.id:
+            raise NotFound("No such request.")
+        principal_id = mine.id
+
+    stored = await dsar_fulfilment_service.submit_identity_document(
+        current.session,
+        tenant_id=current.tenant_id,
+        actor=current.actor,
+        request=row,
+        filename=file.filename or "identity",
+        data=await _read_bounded(file),
+        declared_content_type=file.content_type,
+        principal_id=principal_id,
+        uploaded_by=current.user.id if staff else None,
+    )
+    return file_service.as_dict(stored)
+
+
+@router.get(
+    "/{request_id}/identity/document",
+    summary="Open the submitted identity document — recorded every time",
+)
+async def download_identity_document(
+    request_id: uuid.UUID,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> Response:
+    """`dsar:process` only, and every look is audited.
+
+    Looking at a photograph of somebody's government ID is itself processing,
+    and the person whose ID it is has a right to know who looked. Recorded here
+    rather than at the review decision, so a look that leads to no decision is
+    still on the record.
+    """
+    row = await dsar_service.get(current.session, current.tenant_id, request_id)
+    if row.identity_document_id is None:
+        raise NotFound("No identity document has been submitted for this request.")
+
+    stored, data = await file_service.fetch(
+        current.session, file_id=row.identity_document_id
+    )
+    await dsar_fulfilment_service.note_identity_viewed(
+        current.session, tenant_id=current.tenant_id, actor=current.actor, request=row
+    )
+    return Response(
+        content=data,
+        media_type=stored.content_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="identity-{row.reference}"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
+    )
+
+
+@router.post(
+    "/{request_id}/identity/review",
+    response_model=DsarDetail,
+    summary="Accept or refuse the submitted identity document",
+)
+async def review_identity_document(
+    request_id: uuid.UUID,
+    body: IdentityReview,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> Any:
+    """Accepting destroys the document; its purpose is then served — §8(7).
+
+    Refusing requires a reason, which the person is entitled to be told.
+    """
+    row = await dsar_service.get(current.session, current.tenant_id, request_id)
+    await dsar_fulfilment_service.review_identity(
+        current.session,
+        tenant_id=current.tenant_id,
+        actor=current.actor,
+        request=row,
+        reviewer_id=current.user.id,
+        accept=body.accept,
+        reason=body.reason,
+    )
+    return await _detail(current, row)
+
+
+# --------------------------------------------------------------------------- #
+# The message thread
+# --------------------------------------------------------------------------- #
+
+class MessageBody(BaseModel):
+    body: str = Field(..., min_length=1, max_length=20_000)
+
+
+@router.get("/{request_id}/messages", summary="The correspondence on this request")
+async def get_messages(
+    request_id: uuid.UUID,
+    current: Annotated[CurrentUser, Depends(require(Capability.SELF_READ))],
+) -> dict[str, Any]:
+    """Both sides of the thread. Reading marks the other side's messages seen."""
+    row = await dsar_service.get(current.session, current.tenant_id, request_id)
+    staff = Capability.DSAR_READ.value in set(current.capabilities)
+    if not staff:
+        mine = await _self_principal(current)
+        if row.principal_id != mine.id:
+            raise NotFound("No such request.")
+
+    messages = await dsar_fulfilment_service.thread(
+        current.session, request_id=row.id
+    )
+    await dsar_fulfilment_service.mark_read(
+        current.session, request_id=row.id, reader_is_staff=staff
+    )
+
+    out = []
+    for message in messages:
+        attachments = await file_service.for_entity(
+            current.session, entity_type="dsar_message", entity_id=message.id
+        )
+        out.append(dsar_fulfilment_service.message_as_dict(message, attachments))
+    return {"reference": row.reference, "messages": out}
+
+
+@router.post(
+    "/{request_id}/messages", status_code=201, summary="Send a message on this request"
+)
+async def post_message(
+    request_id: uuid.UUID,
+    body: MessageBody,
+    current: Annotated[CurrentUser, Depends(require(Capability.SELF_READ))],
+) -> dict[str, Any]:
+    """Direction is derived from who is asking, never from the request body.
+
+    A caller who could set `direction` themselves could forge a message that
+    appears to have come from the data principal — which in a statutory
+    correspondence record is evidence fabrication.
+    """
+    row = await dsar_service.get(current.session, current.tenant_id, request_id)
+    staff = Capability.DSAR_PROCESS.value in set(current.capabilities)
+
+    if staff:
+        message = await dsar_fulfilment_service.post_message(
+            current.session,
+            tenant_id=current.tenant_id, actor=current.actor, request=row,
+            body=body.body, direction="to_principal",
+            author_user_id=current.user.id,
+            author_label=current.user.full_name or current.user.email,
+        )
+    else:
+        mine = await _self_principal(current)
+        if row.principal_id != mine.id:
+            raise NotFound("No such request.")
+        message = await dsar_fulfilment_service.post_message(
+            current.session,
+            tenant_id=current.tenant_id, actor=current.actor, request=row,
+            body=body.body, direction="from_principal",
+            author_principal_id=mine.id,
+            author_label=current.user.email,
+            notify=False,
+        )
+    return dsar_fulfilment_service.message_as_dict(message, [])
+
+
+# --------------------------------------------------------------------------- #
+# Assembling and delivering the disclosure
+# --------------------------------------------------------------------------- #
+
+class AssembleBody(BaseModel):
+    #: Typed back, like the retention live run and the connected erasure. This
+    #: gathers one person's entire record into a single object.
+    confirm_reference: str = Field(..., max_length=32)
+
+
+class DeliverBody(BaseModel):
+    covering_note: str | None = Field(default=None, max_length=5000)
+
+
+@router.get(
+    "/{request_id}/disclosure/preview",
+    summary="What would be disclosed — sensitive values excluded",
+)
+async def preview_disclosure(
+    request_id: uuid.UUID,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    """Field names, locations, and the values that identify nobody on their own.
+
+    Government ID, financial and health values read `<SENSITIVE VALUE EXCLUDED>`,
+    and credential material is withheld outright. This is the only view of the
+    disclosure staff get — the assembled package itself is readable by its
+    subject and by nobody else.
+    """
+    row = await dsar_service.get(current.session, current.tenant_id, request_id)
+    return await dsar_fulfilment_service.preview(
+        current.session, tenant_id=current.tenant_id, actor=current.actor, request=row
+    )
+
+
+@router.post(
+    "/{request_id}/disclosure/assemble",
+    summary="Build and store the disclosure package. Does not send it.",
+)
+async def assemble_disclosure(
+    request_id: uuid.UUID,
+    body: AssembleBody,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    """Assembling is not delivering, and the two must stay distinguishable.
+
+    A package can be assembled, checked against the preview, and found wrong.
+    "We prepared it" must never read as "they received it" in an audit.
+    """
+    row = await dsar_service.get(current.session, current.tenant_id, request_id)
+    stored, summary = await dsar_fulfilment_service.assemble(
+        current.session,
+        tenant_id=current.tenant_id, actor=current.actor, request=row,
+        confirm_reference=body.confirm_reference,
+    )
+    return {
+        "package": file_service.as_dict(stored),
+        "fields": summary["field_count"],
+        "collections": summary["collections"],
+        "counts": summary["counts"],
+        "expires_at": row.package_available_until,
+        "delivered": False,
+    }
+
+
+@router.post(
+    "/{request_id}/disclosure/deliver",
+    summary="Put the assembled package in the thread and notify the requester",
+)
+async def deliver_disclosure(
+    request_id: uuid.UUID,
+    body: DeliverBody,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    """The package is never emailed. The notification says one is waiting."""
+    row = await dsar_service.get(current.session, current.tenant_id, request_id)
+    message = await dsar_fulfilment_service.deliver(
+        current.session,
+        tenant_id=current.tenant_id, actor=current.actor, request=row,
+        author_user_id=current.user.id,
+        author_label=current.user.full_name or current.user.email,
+        covering_note=body.covering_note,
+    )
+    return {
+        "delivered_at": row.package_delivered_at,
+        "message": dsar_fulfilment_service.message_as_dict(message, []),
+    }

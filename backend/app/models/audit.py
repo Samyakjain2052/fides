@@ -186,6 +186,28 @@ class AuditAction:
     DSAR_DATA_MAP_BUILT = "dsar.data_map_built"
     DSAR_CONNECTED_ERASURE = "dsar.connected_erasure"
 
+    # Fulfilment. Each of these is a disclosure or a decision about one, and
+    # the payloads carry counts, hashes and reasons — never a disclosed value.
+    #
+    # DSAR_IDENTITY_* is separate from DSAR_STATUS_CHANGED because refusing a
+    # request on identity grounds is the refusal a person is most likely to
+    # challenge, and it needs to be findable without reading every status change.
+    DSAR_IDENTITY_SUBMITTED = "dsar.identity_submitted"
+    DSAR_IDENTITY_VERIFIED = "dsar.identity_verified"
+    DSAR_IDENTITY_REJECTED = "dsar.identity_rejected"
+    DSAR_IDENTITY_VIEWED = "dsar.identity_viewed"
+
+    # Assembling is not delivering. A package can exist for days before anybody
+    # sends it, and "we prepared it" is not "they received it".
+    DSAR_PACKAGE_ASSEMBLED = "dsar.package_assembled"
+    DSAR_PACKAGE_DELIVERED = "dsar.package_delivered"
+    DSAR_PACKAGE_DOWNLOADED = "dsar.package_downloaded"
+
+    # Correspondence about a statutory request is evidence of how it was
+    # handled, so both directions are recorded.
+    DSAR_MESSAGE_SENT = "dsar.message_sent"
+    DSAR_MESSAGE_RECEIVED = "dsar.message_received"
+
     CONNECTION_CREATED = "connection.created"
     CONNECTION_UPDATED = "connection.updated"
     CONNECTION_TESTED = "connection.tested"
