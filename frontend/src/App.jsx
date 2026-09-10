@@ -27,6 +27,7 @@ import PreferenceCentre from "./pages/user/PreferenceCentre";
 import ConsentHistory from "./pages/user/ConsentHistory";
 import DSARPortal from "./pages/user/DSARPortal";
 import DSARStatus from "./pages/user/DSARStatus";
+import Nomination from "./pages/user/Nomination";
 import GrievanceForm from "./pages/user/GrievanceForm";
 import GrievanceStatus from "./pages/user/GrievanceStatus";
 
@@ -119,6 +120,10 @@ export default function App() {
         <Route path="consent-history" element={<ConsentHistory />} />
         <Route path="dsar" element={<DSARPortal />} />
         <Route path="dsar/status" element={<DSARStatus />} />
+        {/* §14. Self-service on purpose: a nomination made after the event
+            is not a nomination, so putting it behind a support request
+            means it is made too late, which is to say never. */}
+        <Route path="nomination" element={<Nomination />} />
         <Route path="grievance" element={<GrievanceForm />} />
         <Route path="grievance/status" element={<GrievanceStatus />} />
       </Route>

@@ -19,26 +19,72 @@ import { useApp } from "../../context/AppContext";
 import LanguageSwitcher from "../../components/common/LanguageSwitcher";
 import TimelineTracker, { DSAR_STEPS } from "../../components/common/TimelineTracker";
 
+// The ids ARE the server's request types. Previously these were "correct" and
+// "erase" and had to be translated on submit and back again on display — a
+// mapping that got the display half wrong, so the correction and erasure
+// completion panels on the status screen never rendered at all.
+//
+// §12(1) names correction, completion and updating separately, and they are
+// three different operations on the system holding the data: fixing a value
+// that is wrong, supplying one that is missing, and replacing one that has
+// changed. Offering only "correct" makes somebody pick the nearest wrong word,
+// which then has to be guessed at by whoever picks the request up.
 const TYPES = [
   {
     id: "access",
     icon: "📋",
-    title: "Access My Data",
-    blurb: "Get a copy of all personal information we hold about you.",
+    title: "See my data",
+    blurb: "Get a copy of the personal information we hold about you.",
+    law: "Section 11",
   },
   {
-    id: "correct",
+    id: "correction",
     icon: "✏️",
-    title: "Correct My Data",
-    blurb: "Fix information that is wrong or incomplete.",
+    title: "Correct something wrong",
+    blurb: "Something we hold about you is inaccurate.",
+    law: "Section 12(1)",
   },
   {
-    id: "erase",
+    id: "completion",
+    icon: "➕",
+    title: "Add something missing",
+    blurb: "Something we should hold about you is absent or incomplete.",
+    law: "Section 12(1)",
+  },
+  {
+    id: "updating",
+    icon: "🔄",
+    title: "Update something that has changed",
+    blurb: "A detail was right and is now out of date — a new address, a new number.",
+    law: "Section 12(1)",
+  },
+  {
+    id: "erasure",
     icon: "🗑️",
-    title: "Erase My Data",
+    title: "Erase my data",
     blurb: "Ask us to delete your personal information.",
+    law: "Section 12(3)",
   },
 ];
+
+/** Which types need to say what should change. Mirrors CORRECTION_TYPES. */
+const NEEDS_PAYLOAD = ["correction", "completion", "updating"];
+
+/** The wording each of those asks for, since they are asking different things. */
+const PAYLOAD_COPY = {
+  correction: {
+    current: "What we have now (and is wrong)",
+    corrected: "What it should be",
+  },
+  completion: {
+    current: "What we have now (if anything)",
+    corrected: "What should be there",
+  },
+  updating: {
+    current: "The detail we hold now",
+    corrected: "The new value",
+  },
+};
 
 export default function DSARPortal() {
   const { t, notify } = useApp();
@@ -109,14 +155,14 @@ export default function DSARPortal() {
     setError("");
     try {
       const details =
-        type === "correct" ? { correction } : type === "erase" ? { erasure } : {};
+        NEEDS_PAYLOAD.includes(type) ? { correction } : type === "erasure" ? { erasure } : {};
       // Real now: this creates a row in PostgreSQL and dispatches access and
       // erasure to the Fides engine. `details` carries the correction payload,
       // which the engine cannot do — that stays a tracked manual workflow.
       const row = await submitRequest({
-        type: type === "erase" ? "erasure" : type,
+        type,
         verificationMethod: verification,
-        correctionPayload: type === "correct" ? details : undefined,
+        correctionPayload: NEEDS_PAYLOAD.includes(type) ? details : undefined,
       });
       setCreated(row);
       setStep(4);
@@ -248,10 +294,16 @@ export default function DSARPortal() {
             </p>
           )}
 
-          {type === "correct" && (
+          {NEEDS_PAYLOAD.includes(type) && (
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="sm:col-span-2">
-                <label className="label" htmlFor="c-field">Which field is wrong?</label>
+                <label className="label" htmlFor="c-field">
+                  {type === "completion"
+                    ? "Which detail is missing?"
+                    : type === "updating"
+                      ? "Which detail has changed?"
+                      : "Which field is wrong?"}
+                </label>
                 <select
                   id="c-field"
                   className="input"
@@ -264,12 +316,16 @@ export default function DSARPortal() {
                 </select>
               </div>
               <div>
-                <label className="label" htmlFor="c-current">Current value</label>
+                <label className="label" htmlFor="c-current">
+                  {PAYLOAD_COPY[type]?.current || "Current value"}
+                </label>
                 <input id="c-current" className="input" value={correction.current}
                        onChange={(e) => setCorrection({ ...correction, current: e.target.value })} />
               </div>
               <div>
-                <label className="label" htmlFor="c-new">Correct value</label>
+                <label className="label" htmlFor="c-new">
+                  {PAYLOAD_COPY[type]?.corrected || "Correct value"}
+                </label>
                 <input id="c-new" className="input" value={correction.corrected}
                        onChange={(e) => setCorrection({ ...correction, corrected: e.target.value })} />
               </div>
@@ -281,7 +337,7 @@ export default function DSARPortal() {
             </div>
           )}
 
-          {type === "erase" && (
+          {type === "erasure" && (
             <div className="space-y-3">
               <div>
                 <label className="label" htmlFor="e-reason">Reason (optional)</label>

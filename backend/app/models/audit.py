@@ -243,6 +243,17 @@ class AuditAction:
     # Vendors — §8(2). Approving a processor is a decision about somebody
     # else's data with a named person behind it, so the decision and its reason
     # are recorded rather than only the resulting state.
+    # §14 nomination. INVOKED is the loudest entry in this vocabulary: after
+    # it, somebody other than the data principal can obtain or destroy their
+    # entire record, and the payload carries the evidence a human recorded
+    # because that evidence IS the justification.
+    NOMINATION_CREATED = "nomination.created"
+    NOMINATION_REVOKED = "nomination.revoked"
+    NOMINATION_INVOKED = "nomination.invoked"
+    NOMINATION_INVOCATION_RETRACTED = "nomination.invocation_retracted"
+    # A request raised by a nominee rather than by the person themselves.
+    DSAR_RAISED_BY_NOMINEE = "dsar.raised_by_nominee"
+
     VENDOR_CREATED = "vendor.created"
     VENDOR_UPDATED = "vendor.updated"
     VENDOR_DECIDED = "vendor.decided"

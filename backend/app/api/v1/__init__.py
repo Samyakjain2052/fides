@@ -13,6 +13,7 @@ from app.api.v1 import (
     dsar,
     files,
     grievances,
+    nominations,
     notifications,
     reports,
     retention,
@@ -30,6 +31,7 @@ api_router.include_router(consent.router)
 api_router.include_router(dsar.router)
 api_router.include_router(files.router)
 api_router.include_router(grievances.router)
+api_router.include_router(nominations.router)
 api_router.include_router(notifications.router)
 api_router.include_router(reports.router)
 api_router.include_router(retention.router)

@@ -38,11 +38,32 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, UUIDMixin
 
-# access and erasure execute against the Fides engine. `correction` does not —
-# the engine has no correction action — so it is a tracked manual workflow with
-# the same deadline and the same audit trail. A right the product hides is worse
-# than one it handles by hand.
-DSAR_TYPES = ("access", "erasure", "correction")
+# The rights the Act actually grants, kept distinct because §12(1) names them
+# separately and a person is entitled to ask for the one they mean.
+#
+#   access      §11 — a summary of their personal data and the processing of it
+#   correction  §12(1) — a value is wrong
+#   completion  §12(1) — a value is absent and should not be
+#   updating    §12(1) — a value was right and has changed
+#   erasure     §12(3)
+#
+# Collapsing the middle three into "correction" was the previous shape, and it
+# loses information the fiduciary needs: correcting a misspelled name, adding a
+# missing middle name, and changing an address after a move are three different
+# operations on the source system, with different evidence and different risk of
+# getting it wrong. A screen that offers only "correction" also makes somebody
+# choose the closest wrong word for what they want, which then has to be
+# guessed at by whoever picks the request up.
+#
+# access and erasure execute against the Fides engine. The §12(1) three do not —
+# the engine has no correction action — so they are tracked manual workflows
+# with the same deadline and the same audit trail. A right the product hides is
+# worse than one it handles by hand.
+DSAR_TYPES = ("access", "correction", "completion", "updating", "erasure")
+
+#: The §12(1) family. Grouped because they share a workflow: no engine action,
+#: a payload describing the change, and a human making it in the source system.
+CORRECTION_TYPES = ("correction", "completion", "updating")
 
 DSAR_STATUSES = (
     "received",      # recorded, nothing started
@@ -99,6 +120,13 @@ class DsarRequest(UUIDMixin, TenantMixin, TimestampMixin, Base):
 
     requested_by_actor: Mapped[str] = mapped_column(
         String(16), nullable=False, default="principal"
+    )
+
+    #: Set when a NOMINEE raised this rather than the person themselves —
+    #: §14. The link matters for the audit trail: "who asked for this
+    #: erasure" has to be answerable, and "the deceased" is not the answer.
+    nomination_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("nominations.id", ondelete="SET NULL")
     )
     rejection_reason: Mapped[str | None] = mapped_column(Text)
 

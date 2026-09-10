@@ -28,7 +28,12 @@ from app.core.config import get_settings
 from app.core.errors import Conflict, NotFound
 from app.models.audit import AuditAction
 from app.models.consent import DataPrincipal
-from app.models.dsar import DSAR_TYPES, DsarEvent, DsarRequest
+from app.models.dsar import (
+    CORRECTION_TYPES,
+    DSAR_TYPES,
+    DsarEvent,
+    DsarRequest,
+)
 from app.models.tenant import Tenant
 from app.services import audit_service
 from app.services.audit_service import Actor
@@ -58,6 +63,19 @@ _ENGINE_ACTION = {"access": "access", "erasure": "erasure"}
 
 class DsarRefused(Conflict):
     """A lawful or procedural reason the request cannot proceed as asked."""
+
+
+class DuplicateRequest(DsarRefused):
+    """The same person already has this kind of request open.
+
+    Its own class rather than a plain refusal, because the caller needs to be
+    able to tell this apart: a duplicate is answered by pointing at the
+    existing request, and every other refusal is not. Carries the reference so
+    the message can name it.
+    """
+
+    def __init__(self, detail: str, **extra) -> None:
+        super().__init__(detail, **extra)
 
 
 # --------------------------------------------------------------------------- #
@@ -129,6 +147,12 @@ async def submit(
     verified: bool = False,
     correction_payload: dict[str, Any] | None = None,
     requested_by_actor: str = "principal",
+    nomination_id: uuid.UUID | None = None,
+    # Staff override, for the case where somebody genuinely does need a
+    # second request of the same kind open — a correction to a different
+    # field while the first is still being made, most plausibly. Never
+    # settable by a data principal raising their own request.
+    allow_duplicate: bool = False,
 ) -> DsarRequest:
     """Record the request, then ask the engine to execute it.
 
@@ -148,10 +172,45 @@ async def submit(
     if principal is None:
         raise NotFound("No such data principal.")
 
-    if type == "correction" and not correction_payload:
-        raise DsarRefused(
-            "A correction request has to say what is wrong and what it should be."
+    if type in CORRECTION_TYPES and not correction_payload:
+        # The §12(1) family all need to say what should change; they differ in
+        # what KIND of change it is, which is why they are separate types.
+        what = {
+            "correction": "what is wrong and what it should be",
+            "completion": "what is missing and what should be added",
+            "updating": "what has changed and what the new value is",
+        }[type]
+        raise DsarRefused(f"A {type} request has to say {what}.")
+
+    # ------------------------------------------------------------ duplicates --
+    #
+    # Refused rather than silently merged. A person with an access request
+    # already in progress who raises another has usually either forgotten or
+    # not seen an acknowledgement, and the useful response is to point them at
+    # the one that exists — not to open a second clock against the same work,
+    # and not to quietly discard what they just asked for.
+    #
+    # Scoped to OPEN requests: asking again a year later is legitimate, and the
+    # partial index this reads matches.
+    if not allow_duplicate:
+        open_same = await session.scalar(
+            select(DsarRequest).where(
+                DsarRequest.principal_id == principal_id,
+                DsarRequest.type == type,
+                DsarRequest.status.in_(("received", "verifying", "in_progress")),
+            )
         )
+        if open_same is not None:
+            raise DuplicateRequest(
+                f"You already have a {type} request in progress "
+                f"({open_same.reference}), raised on "
+                f"{open_same.submitted_at:%d %B %Y} and due by "
+                f"{open_same.deadline_at:%d %B %Y}. We are working on it — "
+                "there is no need to ask again, and raising a second one does "
+                "not make the first any faster.",
+                reference=open_same.reference,
+                existing_request_id=str(open_same.id),
+            )
     if type in ("access", "erasure") and not principal.email:
         # The engine locates a person by email — it is the identity every dataset
         # is annotated with. Without one there is nothing to execute against, and
@@ -177,6 +236,7 @@ async def submit(
         verified_at=now if verified else None,
         requested_by_actor=requested_by_actor,
         correction_payload=correction_payload,
+        nomination_id=nomination_id,
     )
     session.add(request)
     await session.flush()

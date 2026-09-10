@@ -20,6 +20,7 @@ from app.models.dsar_message import DsarMessage
 from app.models.invitation import UserInvitation
 from app.models.job_run import JobRun
 from app.models.grievance import Grievance, GrievanceEvent
+from app.models.nomination import Nomination
 from app.models.notification import Notification, NotificationTemplate
 from app.models.retention import PurgeRun, PurgeRunItem, RetentionPolicy
 from app.models.stored_file import StoredFile
@@ -51,6 +52,7 @@ __all__ = [
     "GrievanceEvent",
     "IdempotencyKey",
     "JobRun",
+    "Nomination",
     "Notice",
     "Notification",
     "NotificationTemplate",
@@ -95,6 +97,8 @@ TENANT_SCOPED_TABLES = [
     "dsar_events",
     "dsar_messages",
     "dsar_action_items",
+    # §14 — the right to nominate. No GDPR equivalent.
+    "nominations",
     # Phase 7 — retention.
     "retention_policies",
     "purge_runs",

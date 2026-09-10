@@ -765,6 +765,18 @@ DEFAULT_TEMPLATES: dict[str, tuple[str, str]] = {
         "We have not attached it to this email. It contains all of your personal "
         "data, and anyone who obtained the email could read it.\n\n{{organisation}}",
     ),
+    "nomination.recorded": (
+        "You have been nominated under the Digital Personal Data Protection Act",
+        "{{nominee_name}},\n\n"
+        "Somebody has nominated you under section 14 of the Digital Personal "
+        "Data Protection Act, 2023. That means if they die or become unable to "
+        "act for themselves, you may ask us to {{scope}}.\n\n"
+        "Nothing is expected of you now, and nothing changes for you unless "
+        "that happens. We are telling you so that you know the arrangement "
+        "exists — a nomination nobody has heard of is one nobody will use.\n\n"
+        "If you would rather not be nominated, tell us and we will let them "
+        "know.\n\n{{organisation}}",
+    ),
     "consent.withdrawn": (
         "You withdrew consent for {{purpose}}",
         "We have recorded that you withdrew your consent for {{purpose}}.\n\n"

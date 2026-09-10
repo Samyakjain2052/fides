@@ -19,6 +19,7 @@ const NAV = [
   { to: "/user/consent-history", label: "Consent History", icon: "⏱", module: "consent" },
   { to: "/user/dsar", label: "Data Requests", icon: "📋", module: "dsar" },
   { to: "/user/dsar/status", label: "Request Status", icon: "◷", module: "dsar" },
+  { to: "/user/nomination", label: "Nominate Someone", icon: "🕊", module: "nomination" },
   { to: "/user/grievance", label: "File a Complaint", icon: "✉", module: "grievance" },
   { to: "/user/grievance/status", label: "Complaint Status", icon: "◔", module: "grievance" },
 ];

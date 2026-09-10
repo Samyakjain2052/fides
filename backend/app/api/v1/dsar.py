@@ -35,6 +35,7 @@ from app.services import (
     dsar_fulfilment_service,
     dsar_service,
     file_service,
+    nomination_service,
 )
 
 router = APIRouter(prefix="/dsar", tags=["rights requests"])
@@ -125,10 +126,29 @@ async def submit_request(
     recorded on the request and in the audit trail rather than inferred later.
     """
     requested_by = "principal"
+    nomination_id = None
+    held = set(current.capabilities)
+    staff = Capability.DSAR_PROCESS.value in held
 
-    if body.principal_id is not None:
-        held = set(current.capabilities)
-        if Capability.DSAR_PROCESS.value not in held:
+    if body.nomination_id is not None:
+        # §14. A nominee acting for somebody who has died or lost capacity.
+        #
+        # Authorised against the nomination itself rather than against the
+        # caller's role: the nominee is usually not a user of this product at
+        # all, and what grants them standing is the invoked nomination and the
+        # scope the principal chose — both checked in `authorise_request`,
+        # which fails closed.
+        nomination = await nomination_service.get(
+            current.session, nomination_id=body.nomination_id
+        )
+        nomination_service.authorise_request(
+            nomination=nomination, request_type=body.type
+        )
+        principal_id = nomination.principal_id
+        nomination_id = nomination.id
+        requested_by = "staff" if staff else "principal"
+    elif body.principal_id is not None:
+        if not staff:
             raise PermissionDenied(
                 "Raising a request on someone else's behalf needs dsar:process.",
                 required=[Capability.DSAR_PROCESS.value],
@@ -149,6 +169,11 @@ async def submit_request(
         verified=body.verification_method is not None,
         correction_payload=body.correction_payload,
         requested_by_actor=requested_by,
+        nomination_id=nomination_id,
+        # Only staff may override the duplicate check. A data principal raising
+        # a second identical request has almost always forgotten the first, and
+        # the useful answer is to point at it.
+        allow_duplicate=staff and body.allow_duplicate,
     )
     # Access and erasure go to the engine; correction stays a manual workflow.
     await dsar_service.dispatch_to_engine(

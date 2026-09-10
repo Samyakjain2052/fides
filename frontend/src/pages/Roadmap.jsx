@@ -124,6 +124,15 @@ export default function Roadmap() {
 }
 
 const LIVE_DETAIL = {
+  nomination:
+    "Section 14 lets a person name somebody to exercise their rights if "  +
+    "they die or become unable to act. It has no equivalent under the "  +
+    "GDPR or any US state law, and it is the only right that has to be "  +
+    "exercised before it is needed — so it is self-service. Activation is "  +
+    "deliberately NOT automated: a named member of staff records what "  +
+    "evidence they saw, the database refuses the change without it, and "  +
+    "the evidence goes into the audit chain. Nothing about a date or an "  +
+    "inactive account makes a nomination take effect.",
   vendors:
     "Every processor and third party that holds your data, with their "  +
     "agreement, where the data sits, who to ask for a deletion and how "  +

@@ -86,6 +86,11 @@ export const MODULE_STATUS = {
   // on the screen itself: there is no risk score, because a number per
   // vendor is the output of a research operation and not of a form.
   vendors: "live",
+  // §14 — the right to nominate somebody to exercise your rights if you
+  // die or lose capacity. No GDPR or US-state equivalent. Live, with the
+  // one thing that cannot be automated left to a human: activation needs a
+  // staff member to record what evidence they saw.
+  nomination: "live",
 };
 
 export const MODULE_LABELS = {
@@ -105,6 +110,7 @@ export const MODULE_LABELS = {
   connections: "Connections",
   assessments: "Assessments (DPIA & RoPA)",
   vendors: "Vendors & processors",
+  nomination: "Nomination (§14)",
 };
 
 /**

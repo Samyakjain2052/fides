@@ -22,15 +22,34 @@ class DsarSubmit(BaseModel):
         description="Whose data. Omit when raising your own request — the "
                     "signed-in identity is used.",
     )
-    type: Literal["access", "erasure", "correction"]
+    # §12(1) names correction, completion and updating separately, and they
+    # are different operations on a source system — fixing a wrong value,
+    # supplying a missing one, and replacing one that has changed. Offering
+    # only "correction" makes somebody pick the nearest wrong word, which then
+    # has to be guessed at by whoever picks the request up.
+    type: Literal["access", "correction", "completion", "updating", "erasure"]
     verification_method: Literal["otp", "digilocker", "staff_verified", "session"] | None = None
     correction_payload: dict[str, Any] | None = Field(
         None,
-        description="Correction only: what is wrong and what it should be. The "
-                    "engine has no correction action, so this is worked by hand "
-                    "against the same deadline.",
+        description="Required for correction, completion and updating: what "
+                    "should change. The engine has no correction action, so "
+                    "these are worked by hand against the same deadline.",
         examples=[{"field": "phone", "current": "+91 90000 00000",
                    "corrected": "+91 98765 43210"}],
+    )
+    nomination_id: uuid.UUID | None = Field(
+        None,
+        description="§14. Set when a NOMINEE is raising this on behalf of "
+                    "somebody who has died or lost capacity. Authority comes "
+                    "from the nomination being invoked and from the scope the "
+                    "principal chose, not from the caller's role.",
+    )
+    allow_duplicate: bool = Field(
+        False,
+        description="Staff only. Permits a second open request of the same "
+                    "kind — a correction to a different field while the first "
+                    "is still being made, for instance. Ignored for a data "
+                    "principal raising their own request.",
     )
 
 

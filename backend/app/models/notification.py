@@ -99,6 +99,12 @@ TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
     # unauthenticated: no `download_url` placeholder exists. It is one person's
     # complete personal record in a single file.
     "dsar.package_ready": ("reference", "expires_on", "organisation"),
+    # §14. Goes to the NOMINEE, not to the data principal — one of the very
+    # few messages this product sends to somebody who is not its subject and
+    # not its operator. No `accept_url` placeholder: acceptance is optional
+    # under §14, and a link that implies the nomination is invalid without it
+    # would misstate the right.
+    "nomination.recorded": ("nominee_name", "scope", "organisation"),
 }
 
 
