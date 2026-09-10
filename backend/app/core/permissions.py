@@ -76,6 +76,13 @@ class Capability(StrEnum):
     ASSESSMENT_RESPOND = "assessment:respond"
     ASSESSMENT_APPROVE = "assessment:approve"
 
+    # The vendor register. Read is granted to the auditor for the same
+    # reason as assessments — a processor list is exactly what an audit
+    # inspects — while deciding that a processor may receive personal data
+    # is an administrative act.
+    VENDOR_READ = "vendor:read"
+    VENDOR_MANAGE = "vendor:manage"
+
     TENANT_MANAGE = "tenant:manage"
 
 
@@ -108,6 +115,7 @@ _MATRIX: dict[Role, frozenset[Capability]] = {
         Capability.CONNECTION_MANAGE,
         Capability.ASSESSMENT_READ, Capability.ASSESSMENT_RESPOND,
         Capability.ASSESSMENT_APPROVE,
+        Capability.VENDOR_READ, Capability.VENDOR_MANAGE,
     }),
     # Read-only by construction: an auditor who could change what they audit is
     # not an auditor.
@@ -115,7 +123,7 @@ _MATRIX: dict[Role, frozenset[Capability]] = {
         Capability.AUDIT_READ, Capability.AUDIT_VERIFY,
         Capability.REPORT_GENERATE, Capability.CONSENT_READ,
         # A DPIA is exactly the document an audit exists to inspect.
-        Capability.ASSESSMENT_READ,
+        Capability.ASSESSMENT_READ, Capability.VENDOR_READ,
     }),
     Role.GRIEVANCE_OFFICER: _SELF | frozenset({
         Capability.GRIEVANCE_READ, Capability.GRIEVANCE_PROCESS,

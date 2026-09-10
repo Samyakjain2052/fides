@@ -27,6 +27,7 @@ from app.models.public_api import ApiRequestLog, IdempotencyKey
 from app.models.publishable_key import ConsentProvenance, PublishableKey
 from app.models.tenant import Tenant
 from app.models.user import RefreshToken, User
+from app.models.vendor import Vendor, VendorDocument, VendorSystem
 
 __all__ = [
     "ApiKey",
@@ -64,6 +65,9 @@ __all__ = [
     "Tenant",
     "UserInvitation",
     "User",
+    "Vendor",
+    "VendorDocument",
+    "VendorSystem",
 ]
 
 # Tables that hold customer data and therefore MUST have an RLS policy.
@@ -123,4 +127,8 @@ TENANT_SCOPED_TABLES = [
     "assessment_template_questions",
     "assessments",
     "assessment_answers",
+    # Phase 12 — the vendor register (§8(2)).
+    "vendors",
+    "vendor_documents",
+    "vendor_systems",
 ]

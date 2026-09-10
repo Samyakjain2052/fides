@@ -25,6 +25,7 @@ const NAV = [
   { to: "/admin/consent-validation", label: "Consent Validation", icon: "✓", roles: ["admin"], module: "consent" },
   { to: "/admin/grievances", label: "Grievance Queue", icon: "✉", roles: ["admin", "grievance_officer"], module: "grievance" },
   { to: "/admin/breaches", label: "Breach Management", icon: "⚠", roles: ["admin"], module: "breach" },
+  { to: "/admin/vendors", label: "Vendors", icon: "🏢", roles: ["admin", "auditor"], module: "vendors" },
   { to: "/admin/assessments", label: "Assessments", icon: "📝", roles: ["admin", "auditor"], module: "assessments" },
   { to: "/admin/audit", label: "Audit Logs", icon: "🔒", roles: ["admin", "auditor"], module: "audit" },
   { to: "/admin/roles", label: "Users & Roles", icon: "👥", roles: ["admin"], module: "users" },

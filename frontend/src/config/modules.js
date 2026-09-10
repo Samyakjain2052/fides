@@ -82,6 +82,10 @@ export const MODULE_STATUS = {
   // questionnaires ship with the product, everything is stored in
   // PostgreSQL under RLS, and the sign-off goes into the audit chain.
   assessments: "live",
+  // The vendor register (§8(2)). Live, with one honest limitation stated
+  // on the screen itself: there is no risk score, because a number per
+  // vendor is the output of a research operation and not of a form.
+  vendors: "live",
 };
 
 export const MODULE_LABELS = {
@@ -100,6 +104,7 @@ export const MODULE_LABELS = {
   users: "Users & roles",
   connections: "Connections",
   assessments: "Assessments (DPIA & RoPA)",
+  vendors: "Vendors & processors",
 };
 
 /**

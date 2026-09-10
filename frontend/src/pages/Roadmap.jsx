@@ -124,6 +124,14 @@ export default function Roadmap() {
 }
 
 const LIVE_DETAIL = {
+  vendors:
+    "Every processor and third party that holds your data, with their "  +
+    "agreement, where the data sits, who to ask for a deletion and how "  +
+    "long they take. §8(2) keeps you responsible for their processing. "  +
+    "Each vendor gets a list of specific things to fix rather than a "  +
+    "score — a number per vendor is the output of a research operation, "  +
+    "and generating one from a form would invent an authority we do not "  +
+    "have.",
   assessments:
     "Data Protection Impact Assessments (§10), Records of Processing "  +
     "Activities, vendor reviews and discovery surveys. The questionnaires "  +

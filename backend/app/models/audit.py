@@ -240,6 +240,16 @@ class AuditAction:
     ASSESSMENT_APPROVED = "assessment.approved"
     ASSESSMENT_REJECTED = "assessment.rejected"
 
+    # Vendors — §8(2). Approving a processor is a decision about somebody
+    # else's data with a named person behind it, so the decision and its reason
+    # are recorded rather than only the resulting state.
+    VENDOR_CREATED = "vendor.created"
+    VENDOR_UPDATED = "vendor.updated"
+    VENDOR_DECIDED = "vendor.decided"
+    # A privacy policy or sub-processor list edited since anybody read it may
+    # have changed what the vendor does with the data.
+    VENDOR_DOCUMENT_CHANGED = "vendor.document_changed"
+
     CONNECTION_CREATED = "connection.created"
     CONNECTION_UPDATED = "connection.updated"
     CONNECTION_TESTED = "connection.tested"

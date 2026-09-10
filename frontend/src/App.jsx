@@ -37,6 +37,7 @@ import DsarFulfilment from "./pages/admin/DsarFulfilment";
 import Assessments from "./pages/admin/Assessments";
 import AssessmentDetail from "./pages/admin/AssessmentDetail";
 import AssessmentTemplates from "./pages/admin/AssessmentTemplates";
+import Vendors from "./pages/admin/Vendors";
 import ConsentQueue from "./pages/admin/ConsentQueue";
 import GrievanceQueue from "./pages/admin/GrievanceQueue";
 import BreachManagement from "./pages/admin/BreachManagement";
@@ -159,6 +160,17 @@ export default function App() {
         {/* Auditors read assessments — a DPIA is exactly the document an
             audit exists to inspect, and inspecting it changes nothing. The
             approve-only controls are hidden by capability inside the page. */}
+        {/* Auditors read the vendor register for the same reason they read
+            assessments: a processor list is exactly what an audit inspects.
+            The decision controls need vendor:manage. */}
+        <Route
+          path="vendors"
+          element={
+            <RequireRole allow={["admin", "auditor"]}>
+              <Vendors />
+            </RequireRole>
+          }
+        />
         <Route
           path="assessments"
           element={
