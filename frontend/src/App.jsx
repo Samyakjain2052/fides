@@ -34,6 +34,9 @@ import AdminDashboard from "./pages/admin/AdminDashboard";
 import DSARQueue from "./pages/admin/DSARQueue";
 import DsarDataMap from "./pages/admin/DsarDataMap";
 import DsarFulfilment from "./pages/admin/DsarFulfilment";
+import Assessments from "./pages/admin/Assessments";
+import AssessmentDetail from "./pages/admin/AssessmentDetail";
+import AssessmentTemplates from "./pages/admin/AssessmentTemplates";
 import ConsentQueue from "./pages/admin/ConsentQueue";
 import GrievanceQueue from "./pages/admin/GrievanceQueue";
 import BreachManagement from "./pages/admin/BreachManagement";
@@ -153,6 +156,29 @@ export default function App() {
         />
         <Route path="roles" element={<RequireRole allow={["admin"]}><UserRoleManagement /></RequireRole>} />
         <Route path="connections" element={<RequireRole allow={["admin"]}><Connections /></RequireRole>} />
+        {/* Auditors read assessments — a DPIA is exactly the document an
+            audit exists to inspect, and inspecting it changes nothing. The
+            approve-only controls are hidden by capability inside the page. */}
+        <Route
+          path="assessments"
+          element={
+            <RequireRole allow={["admin", "auditor"]}>
+              <Assessments />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="assessments/templates"
+          element={<RequireRole allow={["admin"]}><AssessmentTemplates /></RequireRole>}
+        />
+        <Route
+          path="assessments/:assessmentId"
+          element={
+            <RequireRole allow={["admin", "auditor", "grievance_officer"]}>
+              <AssessmentDetail />
+            </RequireRole>
+          }
+        />
         <Route path="retention" element={<RequireRole allow={["admin"]}><DataRetentionPolicy /></RequireRole>} />
         <Route path="notifications" element={<RequireRole allow={["admin"]}><NotificationCenter /></RequireRole>} />
         <Route

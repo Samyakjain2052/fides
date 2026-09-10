@@ -93,6 +93,19 @@ async def create_tenant(
     from app.services import notification_service
 
     await notification_service.seed_default_templates(session, tenant_id=tenant.id)
+
+    # The shipped questionnaires — DPIA, RoPA, vendor review, app discovery.
+    #
+    # Installed at creation for the same reason as the notification templates:
+    # a workspace whose compliance tooling arrives empty puts the burden of
+    # authoring a §10 DPIA on the customer before they have done anything, and
+    # the questionnaire is the part we can reasonably be expected to know.
+    # Idempotent, so it is also safe to run against existing workspaces.
+    from app.services import assessment_service
+
+    await assessment_service.seed_built_in(
+        session, tenant_id=tenant.id, created_by=admin.id
+    )
     return tenant, admin
 
 

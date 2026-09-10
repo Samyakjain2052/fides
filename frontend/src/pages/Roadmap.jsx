@@ -124,6 +124,15 @@ export default function Roadmap() {
 }
 
 const LIVE_DETAIL = {
+  assessments:
+    "Data Protection Impact Assessments (§10), Records of Processing "  +
+    "Activities, vendor reviews and discovery surveys. The questionnaires "  +
+    "ship with the product. A published questionnaire is frozen — its "  +
+    "questions are what people were asked — and editing one creates the "  +
+    "next version rather than rewriting history under existing answers. "  +
+    "Questions are assigned individually, because a DPIA spans legal, "  +
+    "engineering and procurement. Sign-off requires a stated conclusion, "  +
+    "which goes into the audit chain.",
   auth:
     "Create an organisation, sign in, and manage roles. Passwords are Argon2id, " +
     "sessions are short-lived tokens with rotating refresh cookies, and one " +

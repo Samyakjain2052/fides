@@ -5,6 +5,12 @@ autogenerates, so a new table can never be silently left out of a migration.
 """
 
 from app.models.api_key import ApiKey
+from app.models.assessment import (
+    Assessment,
+    AssessmentAnswer,
+    AssessmentTemplate,
+    TemplateQuestion,
+)
 from app.models.audit import AuditAction, AuditEvent
 from app.models.breach import Breach, BreachAffectedPrincipal, BreachEvent
 from app.models.consent import Consent, DataPrincipal, Notice, Purpose
@@ -25,6 +31,9 @@ from app.models.user import RefreshToken, User
 __all__ = [
     "ApiKey",
     "ApiRequestLog",
+    "Assessment",
+    "AssessmentAnswer",
+    "AssessmentTemplate",
     "AuditAction",
     "AuditEvent",
     "Breach",
@@ -51,6 +60,7 @@ __all__ = [
     "RetentionPolicy",
     "RefreshToken",
     "StoredFile",
+    "TemplateQuestion",
     "Tenant",
     "UserInvitation",
     "User",
@@ -108,4 +118,9 @@ TENANT_SCOPED_TABLES = [
     # in an object store, encrypted, and RLS here is what stops one customer
     # resolving another customer's file id to a downloadable object.
     "stored_files",
+    # Phase 11 — assessments: DPIA (§10), RoPA, vendor reviews.
+    "assessment_templates",
+    "assessment_template_questions",
+    "assessments",
+    "assessment_answers",
 ]

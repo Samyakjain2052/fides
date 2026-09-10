@@ -78,6 +78,10 @@ export const MODULE_STATUS = {
   notifications: "live",
   users: "live",
   connections: "live",
+  // DPIA (§10), RoPA, vendor reviews and discovery surveys. Live: the
+  // questionnaires ship with the product, everything is stored in
+  // PostgreSQL under RLS, and the sign-off goes into the audit chain.
+  assessments: "live",
 };
 
 export const MODULE_LABELS = {
@@ -95,6 +99,7 @@ export const MODULE_LABELS = {
   notifications: "Notifications",
   users: "Users & roles",
   connections: "Connections",
+  assessments: "Assessments (DPIA & RoPA)",
 };
 
 /**

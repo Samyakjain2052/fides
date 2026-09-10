@@ -58,6 +58,24 @@ class Capability(StrEnum):
     # only — deliberately not granted to the auditor, whose read-only remit does
     # not extend to a list of a company's production systems.
     CONNECTION_MANAGE = "connection:manage"
+
+    # Assessments — DPIA (§10), RoPA, vendor reviews.
+    #
+    # Split three ways rather than one `assessment:manage`, because the three
+    # acts have genuinely different consequences:
+    #
+    #   read      see the questionnaires and their answers. Granted to the
+    #             auditor: a DPIA is exactly the sort of document an audit
+    #             exists to inspect, and inspecting it changes nothing.
+    #   respond   answer questions assigned to you. The widest grant, because a
+    #             DPIA spans legal, engineering and procurement — the people who
+    #             know the answers are not all administrators.
+    #   approve   sign one off. Somebody putting their name to a conclusion
+    #             about risk, which is a narrower thing than filling in a form.
+    ASSESSMENT_READ = "assessment:read"
+    ASSESSMENT_RESPOND = "assessment:respond"
+    ASSESSMENT_APPROVE = "assessment:approve"
+
     TENANT_MANAGE = "tenant:manage"
 
 
@@ -88,16 +106,23 @@ _MATRIX: dict[Role, frozenset[Capability]] = {
         Capability.AUDIT_READ, Capability.AUDIT_VERIFY, Capability.REPORT_GENERATE,
         Capability.USER_MANAGE, Capability.APIKEY_MANAGE, Capability.TENANT_MANAGE,
         Capability.CONNECTION_MANAGE,
+        Capability.ASSESSMENT_READ, Capability.ASSESSMENT_RESPOND,
+        Capability.ASSESSMENT_APPROVE,
     }),
     # Read-only by construction: an auditor who could change what they audit is
     # not an auditor.
     Role.AUDITOR: _SELF | frozenset({
         Capability.AUDIT_READ, Capability.AUDIT_VERIFY,
         Capability.REPORT_GENERATE, Capability.CONSENT_READ,
+        # A DPIA is exactly the document an audit exists to inspect.
+        Capability.ASSESSMENT_READ,
     }),
     Role.GRIEVANCE_OFFICER: _SELF | frozenset({
         Capability.GRIEVANCE_READ, Capability.GRIEVANCE_PROCESS,
         Capability.GRIEVANCE_ESCALATE,
+        # Frequently asked to answer the rights and complaints sections of
+        # a DPIA, which is their subject rather than the admin's.
+        Capability.ASSESSMENT_READ, Capability.ASSESSMENT_RESPOND,
     }),
 }
 

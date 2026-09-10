@@ -223,6 +223,23 @@ class AuditAction:
     # to act is a fact worth producing with a date on it.
     DSAR_THIRD_PARTY_NOTIFIED = "dsar.third_party_notified"
 
+    # Assessments — DPIA (§10), RoPA, vendor reviews.
+    #
+    # The APPROVED payload carries the conclusion, because for a DPIA the
+    # conclusion is the entire output: an assessment with every question
+    # answered and no stated finding has documented a process and decided
+    # nothing.
+    #
+    # TEMPLATE_VERSIONED is here because a questionnaire that changed is the
+    # thing that makes an old answer ambiguous. Recording the version bump means
+    # "which questions was this answered against" stays answerable.
+    ASSESSMENT_TEMPLATE_PUBLISHED = "assessment.template_published"
+    ASSESSMENT_TEMPLATE_VERSIONED = "assessment.template_versioned"
+    ASSESSMENT_CREATED = "assessment.created"
+    ASSESSMENT_SUBMITTED = "assessment.submitted"
+    ASSESSMENT_APPROVED = "assessment.approved"
+    ASSESSMENT_REJECTED = "assessment.rejected"
+
     CONNECTION_CREATED = "connection.created"
     CONNECTION_UPDATED = "connection.updated"
     CONNECTION_TESTED = "connection.tested"
