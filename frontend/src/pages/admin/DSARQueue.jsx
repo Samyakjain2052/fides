@@ -26,6 +26,7 @@
 import { Link } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { changeStatus, getRequest, queueRows, retryDispatch } from "../../api/dsar";
+import { embedLink, embedSnippet } from "../../api/publicRights";
 import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/common/StatusBadge";
 import SLACountdown from "../../components/common/SLACountdown";
@@ -35,10 +36,16 @@ import ConfirmModal from "../../components/common/ConfirmModal";
 // Server vocabulary. `erasure` and `correction`, not `erase` and `correct` — the
 // old screen filtered on names the API never returns, so those filters matched
 // nothing.
+// §12(1) names correction, completion and updating separately, so the filters
+// do too — a queue that cannot distinguish "fix a wrong value" from "supply a
+// missing one" cannot be used to find the work that needs a particular kind of
+// change made.
 const TYPE_FILTERS = [
   { id: "", label: "All" },
   { id: "access", label: "Access" },
   { id: "correction", label: "Correction" },
+  { id: "completion", label: "Completion" },
+  { id: "updating", label: "Updating" },
   { id: "erasure", label: "Erasure" },
 ];
 
@@ -64,8 +71,98 @@ const SORTS = [
   { id: "status", label: "Status" },
 ];
 
+/**
+ * "Get the code" — the link and the snippet for a customer's own website.
+ *
+ * Collapsed by default. It is setup rather than daily work, and a DPO opening
+ * the queue on a Tuesday morning does not need an embed snippet at the top of
+ * it — but a queue with no requests in it and no visible way to receive any is
+ * a dead end, which is why the link is always shown.
+ */
+function EmbedPanel({ workspace }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState("");
+
+  const link = embedLink({ workspace });
+  const snippet = embedSnippet({ workspace });
+
+  const copy = async (what, value) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(what);
+      setTimeout(() => setCopied(""), 1500);
+    } catch {
+      /* clipboard blocked (non-https, permissions) — the text is selectable */
+    }
+  };
+
+  return (
+    <div className="card p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-ink">
+            Where people send requests
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            Anyone can raise a request here without an account — which is the
+            point, since somebody asking you to delete their data often never
+            had one.
+          </p>
+          <a
+            href={link}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="mt-2 block break-all font-mono text-xs text-teal underline"
+          >
+            {link}
+          </a>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <button
+            type="button"
+            className="btn-secondary text-sm"
+            onClick={() => copy("link", link)}
+          >
+            {copied === "link" ? "Copied" : "Copy link"}
+          </button>
+          <button
+            type="button"
+            className="btn-ghost text-sm"
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? "Hide code" : "Get the code"}
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="mt-3 space-y-2 border-t border-line pt-3">
+          <p className="text-xs text-muted">
+            Paste this into your own website — a privacy page, or a footer link.
+            It renders in an iframe, which means your page cannot read what
+            somebody types into the form and our markup cannot interfere with
+            yours. Your Content-Security-Policy decides whether it loads at all,
+            which is the right way round.
+          </p>
+          <pre className="overflow-x-auto rounded-lg border border-line bg-canvas p-3 text-xs text-ink">
+            {snippet}
+          </pre>
+          <button
+            type="button"
+            className="btn-secondary text-sm"
+            onClick={() => copy("snippet", snippet)}
+          >
+            {copied === "snippet" ? "Copied" : "Copy the snippet"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export default function DSARQueue() {
-  const { notify } = useApp();
+  const { notify, workspace } = useApp();
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [type, setType] = useState("");
@@ -201,6 +298,15 @@ export default function DSARQueue() {
           {error}
         </div>
       )}
+
+      {/* ------------------------------------------------ public intake -- */}
+      {/*
+          Where requests actually come from, once this is deployed. Until the
+          public form existed the only route in was the portal behind a login,
+          which served existing customers and nobody else — and the people most
+          likely to need §11 or §12 are the least likely to have an account.
+      */}
+      {workspace?.slug && <EmbedPanel workspace={workspace.slug} />}
 
       <div className="card space-y-3 p-4">
         <div className="flex flex-wrap gap-2">

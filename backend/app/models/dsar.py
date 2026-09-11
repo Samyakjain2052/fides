@@ -118,6 +118,19 @@ class DsarRequest(UUIDMixin, TenantMixin, TimestampMixin, Base):
     verification_method: Mapped[str | None] = mapped_column(String(32))
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    #: Keyed hash of the emailed confirmation token, never the token. Set
+    #: only for a request that arrived through the unauthenticated public
+    #: form, where the address is a claim until somebody proves they control
+    #: the mailbox.
+    verification_token_hash: Mapped[str | None] = mapped_column(String(64))
+
+    #: True when it came in through the public form rather than the portal.
+    #: It matters for triage: a portal request has a session behind it, and
+    #: a public one has an unproven address until it is confirmed.
+    arrived_publicly: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
     requested_by_actor: Mapped[str] = mapped_column(
         String(16), nullable=False, default="principal"
     )

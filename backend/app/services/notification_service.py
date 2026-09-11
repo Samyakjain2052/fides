@@ -765,6 +765,20 @@ DEFAULT_TEMPLATES: dict[str, tuple[str, str]] = {
         "We have not attached it to this email. It contains all of your personal "
         "data, and anyone who obtained the email could read it.\n\n{{organisation}}",
     ),
+    "dsar.confirm": (
+        "Confirm your data request {{reference}}",
+        "We have received a {{type}} request for your personal data "
+        "({{reference}}).\n\n"
+        "Before we look anything up or change anything, please confirm this "
+        "address belongs to you:\n\n    {{confirm_url}}\n\n"
+        "The request is already logged and we must respond by {{deadline}} — "
+        "confirming does not restart that clock. But we will not act on it "
+        "until you do, because acting on an unconfirmed request would mean "
+        "disclosing or deleting somebody's data on the strength of an email "
+        "address anybody could type.\n\n"
+        "If you did not make this request, ignore this message and nothing "
+        "will happen.\n\n{{organisation}}",
+    ),
     "nomination.recorded": (
         "You have been nominated under the Digital Personal Data Protection Act",
         "{{nominee_name}},\n\n"

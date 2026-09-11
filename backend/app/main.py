@@ -14,13 +14,14 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api.public import (
     public_banner_router,
     public_grievance_router,
+    public_rights_router,
     public_v1_router,
 )
 from app.api.v1 import api_router
@@ -69,6 +70,55 @@ app.add_middleware(
                    "Idempotency-Key"],
     expose_headers=["X-Request-Id"],
 )
+
+
+# Paths a customer's own website is expected to call from a browser, from an
+# origin we cannot know in advance.
+#
+# The main CORS policy above is an allowlist WITH credentials, and it has to
+# stay that way — the refresh cookie depends on it, which is why the config
+# validator refuses `*` there. These two paths are the opposite case: they are
+# unauthenticated statutory intake, they must work from any customer's domain,
+# and they must NOT carry credentials.
+#
+# Wildcard origin and `allow_credentials` off go together and are not
+# separable: a browser refuses `*` alongside credentials, and that refusal is
+# the mechanism that makes these endpoints CSRF-safe by construction. Nothing
+# reachable here can act on a signed-in session, because no session travels.
+_PUBLIC_CORS_PREFIXES = ("/public/v1/rights", "/public/v1/grievance")
+
+_PUBLIC_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "600",
+    # No Access-Control-Allow-Credentials. See above.
+    "Vary": "Origin",
+}
+
+
+@app.middleware("http")
+async def public_intake_cors(request: Request, call_next):
+    """Wildcard CORS, for the two unauthenticated statutory paths only.
+
+    Registered after the main CORS middleware, which in Starlette means it runs
+    OUTSIDE it — so a preflight for one of these paths is answered here rather
+    than being rejected by the allowlist it is not on.
+    """
+    path = request.url.path
+    if not path.startswith(_PUBLIC_CORS_PREFIXES):
+        return await call_next(request)
+
+    if request.method == "OPTIONS":
+        # Answered here rather than passed down: the allowlist middleware would
+        # reject a preflight from an origin it does not know, which is every
+        # customer's website.
+        return Response(status_code=204, headers=_PUBLIC_CORS_HEADERS)
+
+    response = await call_next(request)
+    for header, value in _PUBLIC_CORS_HEADERS.items():
+        response.headers[header] = value
+    return response
 
 
 @app.middleware("http")
@@ -144,3 +194,4 @@ app.include_router(api_router, prefix=settings.api_prefix)
 app.include_router(public_v1_router)
 app.include_router(public_banner_router)
 app.include_router(public_grievance_router)
+app.include_router(public_rights_router)

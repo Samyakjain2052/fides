@@ -105,6 +105,12 @@ TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
     # under §14, and a link that implies the nomination is invalid without it
     # would misstate the right.
     "nomination.recorded": ("nominee_name", "scope", "organisation"),
+    # A request raised through the public form. Separate from `dsar.received`
+    # because it asks the person to DO something, and burying a required
+    # action inside an acknowledgement is how it gets ignored — the same
+    # reasoning `grievance.confirm` already follows.
+    "dsar.confirm": ("reference", "type", "confirm_url", "deadline",
+                     "organisation"),
 }
 
 

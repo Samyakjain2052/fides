@@ -13,14 +13,21 @@ Two routers, because there are two kinds of caller:
 * `grievance` — no credential at all. DPDP §13 is a right, and a key you must
   obtain first is a barrier in front of it. Read that module's docstring for what
   stands in for the credential.
+* `rights` — likewise, for §11 and §12. A person whose data a company holds
+  may have no account with them at all, and the people most likely to need
+  the right are the least likely to have one. Same substitutes for the
+  credential: confirmed address before anything executes, and throttles built
+  from rows already on the table rather than from stored client IPs.
 """
 
 from app.api.public.banner import router as public_banner_router
 from app.api.public.grievance import router as public_grievance_router
+from app.api.public.rights import router as public_rights_router
 from app.api.public.v1 import router as public_v1_router
 
 __all__ = [
     "public_banner_router",
     "public_grievance_router",
+    "public_rights_router",
     "public_v1_router",
 ]

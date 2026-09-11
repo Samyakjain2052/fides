@@ -148,6 +148,15 @@ async def submit(
     correction_payload: dict[str, Any] | None = None,
     requested_by_actor: str = "principal",
     nomination_id: uuid.UUID | None = None,
+    # Set by the public intake route. Carries two consequences: the request
+    # is not dispatched until confirmed, and the confirmation email is sent
+    # instead of the ordinary acknowledgement.
+    arrived_publicly: bool = False,
+    verification_token_hash: str | None = None,
+    #: The link the confirmation email carries. Built by the caller from
+    #: `public_base_url` — never from the incoming request's own host, which
+    #: is how invitation links ended up pointing at an internal FQDN.
+    public_confirm_url: str | None = None,
     # Staff override, for the case where somebody genuinely does need a
     # second request of the same kind open — a correction to a different
     # field while the first is still being made, most plausibly. Never
@@ -237,6 +246,8 @@ async def submit(
         requested_by_actor=requested_by_actor,
         correction_payload=correction_payload,
         nomination_id=nomination_id,
+        arrived_publicly=arrived_publicly,
+        verification_token_hash=verification_token_hash,
     )
     session.add(request)
     await session.flush()
@@ -266,22 +277,148 @@ async def submit(
     # notification row rather than failing the request that has already happened.
     from app.services import notification_service
 
+    # A publicly-raised request gets the CONFIRMATION email instead of the
+    # acknowledgement. Sending both would bury the one action the person has to
+    # take inside a message that reads as "nothing needed from you" — the same
+    # reasoning `grievance.confirm` already follows.
+    if arrived_publicly and public_confirm_url:
+        key = "dsar.confirm"
+        context = {
+            "reference": request.reference,
+            "type": type,
+            "confirm_url": public_confirm_url,
+            "deadline": deadline.date().isoformat(),
+        }
+    else:
+        key = "dsar.received"
+        context = {
+            "reference": request.reference,
+            "type": type,
+            "deadline": deadline.date().isoformat(),
+        }
+
     await notification_service.send_now(
         session,
         notification=await notification_service.enqueue(
             session,
             tenant_id=tenant_id,
-            key="dsar.received",
+            key=key,
             to_address=principal.email,
-            context={
-                "reference": request.reference,
-                "type": type,
-                "deadline": deadline.date().isoformat(),
-            },
+            context=context,
             entity_type="dsar_request",
             entity_id=request.id,
             principal_id=principal_id,
         ),
+    )
+    return request
+
+
+# --------------------------------------------------------------------------- #
+# Public intake: confirming the address
+# --------------------------------------------------------------------------- #
+
+def public_token() -> tuple[str, str]:
+    """A confirmation token and its keyed hash.
+
+    Keyed with the JWT secret rather than a bare SHA-256, so a stolen database
+    does not yield a brute-forceable set of live confirmation links. Same
+    discipline as invitations and password resets.
+    """
+    import hashlib
+    import hmac
+    import secrets
+
+    secret = secrets.token_urlsafe(32)
+    digest = hmac.new(
+        _settings.jwt_secret.encode(), secret.encode(), hashlib.sha256
+    ).hexdigest()
+    return secret, digest
+
+
+def _public_token_hash(secret: str) -> str:
+    import hashlib
+    import hmac
+
+    return hmac.new(
+        _settings.jwt_secret.encode(), (secret or "").encode(), hashlib.sha256
+    ).hexdigest()
+
+
+#: One message for every way confirmation can fail — wrong, spent, or never
+#: existed. A caller must not be able to tell which, because each distinction is
+#: a fact about somebody else's rights request.
+PUBLIC_CONFIRM_GENERIC = (
+    "That confirmation link is not valid. It may have expired, already been "
+    "used, or been replaced by a newer request. Raise the request again."
+)
+
+
+async def confirm_public(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    actor: Actor,
+    reference: str,
+    token: str,
+) -> DsarRequest:
+    """Redeem a confirmation token, which is what lets the request execute.
+
+    Both the reference AND the token must match. The reference alone is
+    guessable — DSAR-2026-0007 — and the token alone would be enough if the
+    index were not unique, so requiring both means a guessed reference is
+    useless without the emailed secret.
+
+    Marks the request verified and spends the token. The CALLER dispatches to
+    the engine afterwards, deliberately: `dispatch_to_engine` refuses an
+    unconfirmed public request, so the ordering here is the safety property, and
+    keeping the two separate makes it visible at the call site.
+    """
+    request = await session.scalar(
+        select(DsarRequest).where(
+            DsarRequest.reference == reference.strip().upper(),
+            DsarRequest.verification_token_hash.is_not(None),
+        )
+    )
+    if request is None:
+        raise DsarRefused(PUBLIC_CONFIRM_GENERIC)
+
+    import hmac as _hmac
+
+    if not _hmac.compare_digest(
+        request.verification_token_hash or "", _public_token_hash(token)
+    ):
+        raise DsarRefused(PUBLIC_CONFIRM_GENERIC)
+
+    if not request.is_open:
+        raise DsarRefused(
+            f"{request.reference} is already {request.status}, so there is "
+            "nothing left to confirm."
+        )
+
+    now = datetime.now(UTC)
+    request.verified_at = now
+    request.verification_method = "email"
+    # Spent. Leaving the hash in place would keep a redeemable credential on a
+    # row that no longer needs one.
+    request.verification_token_hash = None
+
+    await audit_service.record(
+        session, tenant_id=tenant_id, actor=actor,
+        action=AuditAction.DSAR_STATUS_CHANGED,
+        entity_type="dsar_request", entity_id=request.id,
+        payload={
+            "reference": request.reference,
+            "confirmed": True,
+            "method": "email",
+            # No token, not even hashed. An audit trail an auditor reads is not
+            # a place to put a credential's index.
+            "arrived_publicly": True,
+        },
+    )
+    await _event(
+        session, tenant_id=tenant_id, request=request, actor=actor,
+        note="Email address confirmed by the requester; the request may now "
+             "be executed",
     )
     return request
 
@@ -295,6 +432,21 @@ async def dispatch_to_engine(
     stays a tracked manual workflow rather than being quietly dropped.
     """
     if request.type not in _ENGINE_ACTION:
+        return request
+
+    # A request that arrived through the unauthenticated public form is a claim
+    # about an email address until somebody proves they control the mailbox.
+    # Dispatching one would disclose or delete a person's data on the strength
+    # of an address anybody could type into a form on a customer's website.
+    #
+    # Checked HERE rather than only at the call site, because this is the single
+    # function that makes data move — and a guard placed anywhere else can be
+    # bypassed by the next caller who forgets it.
+    if request.arrived_publicly and request.verified_at is None:
+        logger.info(
+            "not dispatching %s: raised publicly and not yet confirmed",
+            request.reference,
+        )
         return request
 
     principal = await session.scalar(

@@ -19,6 +19,7 @@ import ResetPassword from "./pages/auth/ResetPassword";
 import AcceptInvitation from "./pages/auth/AcceptInvitation";
 import Signup from "./pages/auth/Signup";
 import Roadmap from "./pages/Roadmap";
+import RightsForm, { ConfirmRequest } from "./pages/public/RightsForm";
 
 import UserDashboard from "./pages/user/UserDashboard";
 import ConsentBanner from "./pages/user/ConsentBanner";
@@ -102,6 +103,13 @@ export default function App() {
 
       {/* Consent surfaces sit outside the app chrome: a first-time visitor sees
           these before they have an account, so they must not require auth. */}
+      {/* Public rights intake. Unauthenticated on purpose: a person whose
+          data a company holds may have no account with them, and the people
+          most likely to need §11 or §12 are the least likely to have one.
+          This is also what the embeddable snippet frames. */}
+      <Route path="/rights" element={<RightsForm />} />
+      <Route path="/confirm-request" element={<ConfirmRequest />} />
+
       <Route path="/consent-banner" element={<ConsentBannerStandalone />} />
       <Route path="/cookie-consent" element={<CookieConsentStandalone />} />
 
