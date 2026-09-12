@@ -914,3 +914,164 @@ async def test_the_thread_is_isolated_between_tenants(
         assert await dsar_fulfilment_service.thread(
             session, request_id=request_id
         ) == []
+
+
+# --------------------------------------------------------------------------- #
+# The disclosure must read the CONNECTIONS, not only the engine
+#
+# This is a regression suite for a bug that shipped: `preview` and `assemble`
+# read the Fides engine and nothing else, so a request fulfilled entirely
+# through the connections path — the case the whole feature exists for —
+# produced an empty package and a refusal saying nothing was found, while the
+# action items on the same screen showed a record had been retrieved. Three
+# views of one request disagreed about whether the person's data existed.
+# --------------------------------------------------------------------------- #
+
+async def _connected_postgres(session, tenant):
+    from app.core.crypto import seal
+    from app.models.connection import Connection
+
+    row = Connection(
+        tenant_id=tenant["id"],
+        connector_id="postgresql",
+        label="Connection",
+        status="connected",
+        config_sealed=seal({"password": "x"}),
+        config_public={"host": "db.internal"},
+        hints={},
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+def _fake_collect(monkeypatch, rows):
+    """Stand in for a real database read, without standing one up."""
+    from app.connectors import discovery
+
+    async def _collect(connector_id, config, identifiers):
+        return rows
+
+    monkeypatch.setattr(discovery, "collect", _collect)
+
+
+async def test_the_preview_includes_data_from_connections(
+    app_session_factory, tenant_a, monkeypatch
+):
+    """The bug, directly. No engine at all — only a connection."""
+    await _fake_engine(monkeypatch, data={})
+    _fake_collect(monkeypatch, {
+        "users": [{"email": "asha@example.com", "city": "Pune", "pan": "ABCDE1234F"}],
+    })
+
+    request_id = await _request(app_session_factory, tenant_a)
+    async with app_session_factory() as session:
+        async with session.begin():
+            await set_tenant_context(session, tenant_a["id"])
+            await _connected_postgres(session, tenant_a)
+            row = await dsar_service.get(session, tenant_a["id"], request_id)
+            result = await dsar_fulfilment_service.preview(
+                session, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                request=row,
+            )
+
+    assert result["field_count"] > 0, "connection data was not read"
+    # Labelled by connection, so the person can tell which system it came from.
+    assert any("Connection · users" in c for c in result["collections"])
+    # And staff still do not see the sensitive value.
+    by_field = {r["field"]: r["value"] for r in result["rows"]}
+    assert by_field["pan"] == disclosure.EXCLUDED
+    assert by_field["city"] == "Pune"
+
+
+async def test_a_package_can_be_assembled_from_connections_alone(
+    app_session_factory, tenant_a, monkeypatch
+):
+    """No engine. This is the path the product was built to support."""
+    await _fake_engine(monkeypatch, data={})
+    _fake_collect(monkeypatch, {
+        "users": [{"email": "asha@example.com", "phone": "+91 99999 11111"}],
+    })
+
+    request_id = await _request(app_session_factory, tenant_a)
+    async with app_session_factory() as session:
+        async with session.begin():
+            await set_tenant_context(session, tenant_a["id"])
+            await _connected_postgres(session, tenant_a)
+            row = await dsar_service.get(session, tenant_a["id"], request_id)
+            stored, summary = await dsar_fulfilment_service.assemble(
+                session, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                request=row, confirm_reference=row.reference,
+            )
+            _, blob = await file_service.fetch(session, file_id=stored.id)
+
+    assert summary["field_count"] > 0
+    with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+        csv_text = archive.read("summary.csv").decode("utf-8-sig")
+    # The person gets the real values.
+    assert "+91 99999 11111" in csv_text
+
+
+async def test_engine_and_connection_data_are_merged_not_replaced(
+    app_session_factory, tenant_a, monkeypatch
+):
+    """A company can have both, and both belong in the disclosure."""
+    await _fake_engine(monkeypatch, data={"crm:contacts": [{"email": "a@b.com"}]})
+    _fake_collect(monkeypatch, {"orders": [{"email": "a@b.com", "item": "Book"}]})
+
+    request_id = await _request(app_session_factory, tenant_a)
+    async with app_session_factory() as session:
+        async with session.begin():
+            await set_tenant_context(session, tenant_a["id"])
+            await _connected_postgres(session, tenant_a)
+            row = await dsar_service.get(session, tenant_a["id"], request_id)
+            result = await dsar_fulfilment_service.preview(
+                session, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                request=row,
+            )
+
+    collections = result["collections"]
+    assert "crm:contacts" in collections
+    assert any("orders" in c for c in collections)
+
+
+async def test_an_unreachable_system_is_reported_rather_than_read_as_empty(
+    app_session_factory, tenant_a, monkeypatch
+):
+    """"We could not look" and "there is nothing" are different answers.
+
+    Conflating them is wrong in the dangerous direction: it invites an admin to
+    tell somebody the company holds nothing about them.
+    """
+    from app.connectors import discovery
+
+    await _fake_engine(monkeypatch, data={})
+
+    async def _broken(connector_id, config, identifiers):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(discovery, "collect", _broken)
+
+    request_id = await _request(app_session_factory, tenant_a)
+    async with app_session_factory() as session:
+        async with session.begin():
+            await set_tenant_context(session, tenant_a["id"])
+            await _connected_postgres(session, tenant_a)
+            row = await dsar_service.get(session, tenant_a["id"], request_id)
+
+            result = await dsar_fulfilment_service.preview(
+                session, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                request=row,
+            )
+            assert result["unreachable"] == ["Connection"]
+
+            # And assembling says so, instead of "nothing was found".
+            with pytest.raises(DsarRefused) as err:
+                await dsar_fulfilment_service.assemble(
+                    session, tenant_id=tenant_a["id"], actor=_actor(tenant_a),
+                    request=row, confirm_reference=row.reference,
+                )
+    message = str(err.value)
+    assert "could not be read" in message
+    assert "Connection" in message
+    assert "that is a failure, not a nil result" in message.lower()

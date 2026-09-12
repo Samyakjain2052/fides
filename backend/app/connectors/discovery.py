@@ -20,9 +20,17 @@ full customer record because a request arrived is processing it for a new
 purpose. The same reasoning `PurgeRunItem` already follows: it records
 table, entity id, action and skip reason, never a value.
 
-Reading actual rows is a separate, gated, audited act — see
-`sample_rows`, which exists for the cases where a match genuinely cannot be
-confirmed any other way, and is off unless a workspace turns it on.
+Reading actual rows is a separate act with a separate justification — see
+`collect`, at the bottom of this file. It exists for one purpose: §11 gives a
+person the right to a summary of their own personal data, and a disclosure
+package built from column names would satisfy nothing. What keeps the two apart
+is who sees the result. `discover` feeds screens an OPERATOR looks at, so it
+returns metadata; `collect` feeds a package that goes to the data principal,
+and staff see only `disclosure.preview` of it — with the sensitive values
+excluded.
+
+(This paragraph previously promised a `sample_rows` function that was never
+written. It is now `collect`, and it does exist.)
 
 THE HEURISTIC IS A HEURISTIC, AND SAYS SO
 
@@ -542,6 +550,310 @@ async def discover(
         logger.exception("discovery failed",
                          extra={"context": {"connector": connector_id}})
         return SystemFinding(ok=False, error=f"Discovery failed: {type(exc).__name__}")
+
+
+# --------------------------------------------------------------------------- #
+# Collection — reading the actual values, for a §11 disclosure
+#
+# THE ONE PLACE IN THIS MODULE THAT READS CONTENT, and it needs its own
+# justification because everything above it deliberately refuses to.
+#
+# `discover` returns metadata because a rights request authorises ACTING on
+# somebody's data, not browsing it, and an admin who opens a full customer
+# record because a request arrived is processing it for a new purpose. None of
+# that reasoning applies here. §11 gives the person a right to a summary of
+# their personal data; the values ARE the answer, and a disclosure package built
+# from column names would satisfy nothing.
+#
+# What keeps the distinction real is who sees the result: this feeds
+# `disclosure.build_zip`, which goes to the data principal. Staff get
+# `disclosure.preview`, which excludes the sensitive values. So the values are
+# read, packaged and handed to the person they belong to without ever being
+# rendered on an operator's screen.
+#
+# BOUNDED, because a disclosure is not a database dump. A person with 400,000
+# rows in an events table is owed a summary of their personal data, not a zip
+# that fails to build — and an unbounded SELECT against a customer's production
+# database while they wait is its own kind of incident.
+# --------------------------------------------------------------------------- #
+
+#: Per table. Beyond this the package reports the true total and includes the
+#: first N rows, which is honest and useful; silently truncating would not be.
+MAX_ROWS_PER_TABLE = 500
+
+#: Across the whole system, so one pathological table cannot exhaust the budget
+#: that every other table in the same database needs.
+MAX_ROWS_PER_SYSTEM = 5_000
+
+
+def _split_qualified(table: str) -> tuple[str | None, str]:
+    """`public.orders` -> ("public", "orders"); `orders` -> (None, "orders").
+
+    `TableFinding.table` omits the schema when it is `public`, so this has to
+    handle both shapes. Splitting on the LAST dot, because a schema name cannot
+    contain one but this way a stray dot in a table name does not misparse.
+    """
+    if "." in table:
+        schema, _, name = table.rpartition(".")
+        return schema, name
+    return None, table
+
+
+async def _collect_postgresql(
+    config: dict[str, Any], findings: list[TableFinding],
+    identifiers: dict[str, str],
+) -> dict[str, Any]:
+    import asyncpg
+
+    host = (config.get("host") or "").strip()
+    resolve_and_check(host, _int(config.get("port"), 5432))
+
+    conn = await asyncio.wait_for(
+        asyncpg.connect(
+            host=host,
+            port=_int(config.get("port"), 5432),
+            user=(config.get("user") or "").strip() or None,
+            password=config.get("password") or None,
+            database=(config.get("database") or "").strip() or None,
+            ssl="require" if _truthy(config.get("tls", "true")) else False,
+            statement_cache_size=0,
+        ),
+        timeout=TIMEOUT_SECONDS,
+    )
+
+    out: dict[str, Any] = {}
+    budget = MAX_ROWS_PER_SYSTEM
+    try:
+        for finding in findings:
+            if budget <= 0:
+                break
+            value = identifiers.get(finding.matched_identifier)
+            if not value:
+                continue
+
+            schema, name = _split_qualified(finding.table)
+            qualified = (
+                f"{_pg_quote(schema)}.{_pg_quote(name)}" if schema
+                else _pg_quote(name)
+            )
+            limit = min(MAX_ROWS_PER_TABLE, budget)
+            try:
+                rows = await conn.fetch(
+                    f"SELECT * FROM {qualified} "
+                    f"WHERE {_pg_quote(finding.matched_column)}::text = $1 "
+                    f"LIMIT {limit}",
+                    value,
+                )
+            except Exception:  # noqa: BLE001
+                # Readable enough to count during discovery, not readable now —
+                # a column-level grant, most likely. Skipped rather than
+                # failing the whole disclosure, and the row count from
+                # discovery still appears in the action item.
+                continue
+
+            if rows:
+                out[finding.table] = [_jsonable(dict(r)) for r in rows]
+                budget -= len(rows)
+    finally:
+        await conn.close()
+    return out
+
+
+async def _collect_mysql(
+    config: dict[str, Any], findings: list[TableFinding],
+    identifiers: dict[str, str],
+) -> dict[str, Any]:
+    """Synchronous driver in a thread, matching `_discover_mysql`.
+
+    pymysql rather than an async client because that is what this module
+    already depends on — adding a second MySQL driver to read rows we can
+    already count would be a new dependency for no new capability.
+    """
+    import pymysql
+
+    host = (config.get("host") or "").strip()
+    resolve_and_check(host, _int(config.get("port"), 3306))
+
+    def _run() -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "host": host,
+            "port": _int(config.get("port"), 3306),
+            "user": (config.get("user") or "").strip() or None,
+            "password": config.get("password") or "",
+            "database": (config.get("database") or "").strip() or None,
+            "connect_timeout": int(TIMEOUT_SECONDS),
+            "read_timeout": int(DISCOVERY_TIMEOUT),
+            "cursorclass": pymysql.cursors.DictCursor,
+        }
+        if _truthy(config.get("tls", "true")):
+            kwargs["ssl"] = {}
+
+        out: dict[str, Any] = {}
+        budget = MAX_ROWS_PER_SYSTEM
+        conn = pymysql.connect(**kwargs)
+        try:
+            with conn.cursor() as cur:
+                for finding in findings:
+                    if budget <= 0:
+                        break
+                    value = identifiers.get(finding.matched_identifier)
+                    if not value:
+                        continue
+                    _, name = _split_qualified(finding.table)
+                    limit = min(MAX_ROWS_PER_TABLE, budget)
+                    try:
+                        cur.execute(
+                            f"SELECT * FROM {_my_quote(name)} "
+                            f"WHERE {_my_quote(finding.matched_column)} = %s "
+                            f"LIMIT {limit}",
+                            (value,),
+                        )
+                        rows = cur.fetchall()
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if rows:
+                        out[finding.table] = [_jsonable(dict(r)) for r in rows]
+                        budget -= len(rows)
+        finally:
+            conn.close()
+        return out
+
+    return await asyncio.wait_for(
+        asyncio.to_thread(_run), timeout=DISCOVERY_TIMEOUT
+    )
+
+
+async def _collect_mongodb(
+    config: dict[str, Any], findings: list[TableFinding],
+    identifiers: dict[str, str],
+) -> dict[str, Any]:
+    """pymongo in a thread, matching `_discover_mongodb`."""
+    from pymongo import MongoClient
+
+    host = (config.get("host") or "").strip()
+    srv = _truthy(config.get("srv", "false"))
+    resolve_and_check(host.replace("mongodb+srv://", ""),
+                      _int(config.get("port"), 27017))
+
+    def _run() -> dict[str, Any]:
+        ms = int(TIMEOUT_SECONDS * 1000)
+        kwargs: dict[str, Any] = {
+            "serverSelectionTimeoutMS": ms,
+            "connectTimeoutMS": ms,
+            "socketTimeoutMS": int(DISCOVERY_TIMEOUT * 1000),
+        }
+        if srv:
+            kwargs["host"] = f"mongodb+srv://{host.replace('mongodb+srv://', '')}"
+        else:
+            kwargs["host"] = host
+            kwargs["port"] = _int(config.get("port"), 27017)
+            if _truthy(config.get("tls", "true")):
+                kwargs["tls"] = True
+        user = (config.get("user") or "").strip()
+        if user:
+            kwargs["username"] = user
+            kwargs["password"] = config.get("password") or ""
+            kwargs["authSource"] = (config.get("auth_source") or "admin").strip()
+
+        out: dict[str, Any] = {}
+        budget = MAX_ROWS_PER_SYSTEM
+        client = MongoClient(**kwargs)
+        try:
+            database = client[(config.get("database") or "").strip()]
+            for finding in findings:
+                if budget <= 0:
+                    break
+                value = identifiers.get(finding.matched_identifier)
+                if not value:
+                    continue
+                limit = min(MAX_ROWS_PER_TABLE, budget)
+                try:
+                    docs = list(
+                        database[finding.table]
+                        .find({finding.matched_column: value})
+                        .limit(limit)
+                    )
+                except Exception:  # noqa: BLE001
+                    continue
+                if docs:
+                    out[finding.table] = [_jsonable(d) for d in docs]
+                    budget -= len(docs)
+        finally:
+            client.close()
+        return out
+
+    return await asyncio.wait_for(
+        asyncio.to_thread(_run), timeout=DISCOVERY_TIMEOUT
+    )
+
+
+def _jsonable(row: dict[str, Any]) -> dict[str, Any]:
+    """Make a driver row safe to serialise.
+
+    Dates, UUIDs, Decimals and Mongo ObjectIds all come back as types `json`
+    refuses. Converted to strings here rather than in the packager, because the
+    packager should not have to know which database a value came from.
+    """
+    import datetime as _dt
+    import decimal
+
+    out: dict[str, Any] = {}
+    for key, value in row.items():
+        if value is None or isinstance(value, str | int | float | bool):
+            out[str(key)] = value
+        elif isinstance(value, _dt.datetime | _dt.date | _dt.time):
+            out[str(key)] = value.isoformat()
+        elif isinstance(value, decimal.Decimal):
+            # str, not float: a money value that silently loses precision on the
+            # way into somebody's disclosure is worse than one that reads as text.
+            out[str(key)] = str(value)
+        elif isinstance(value, bytes):
+            out[str(key)] = f"<{len(value)} bytes of binary data>"
+        elif isinstance(value, dict | list):
+            out[str(key)] = value
+        else:
+            out[str(key)] = str(value)
+    return out
+
+
+COLLECTORS = {
+    "postgresql": _collect_postgresql,
+    "mysql": _collect_mysql,
+    "mongodb": _collect_mongodb,
+}
+
+
+async def collect(
+    connector_id: str, config: dict[str, Any], identifiers: dict[str, str]
+) -> dict[str, Any]:
+    """The actual rows this person appears in, for a disclosure package.
+
+    Returns `{table: [row, ...]}` — the shape `disclosure.flatten` expects.
+    Empty when nothing matched, when the connector has no collector, or when
+    every matching table turned out to be unreadable.
+
+    Runs `discover` first rather than re-implementing the matching, so the
+    tables disclosed are exactly the tables the data map and the action items
+    reported. Two passes over the same database is a small price for the three
+    screens agreeing about what exists.
+    """
+    fn = COLLECTORS.get(connector_id)
+    if fn is None:
+        return {}
+
+    found = await discover(connector_id, config, identifiers)
+    if not found.ok or not found.findings:
+        return {}
+
+    try:
+        return await fn(config, found.findings, identifiers)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "collection failed", extra={"context": {"connector": connector_id}}
+        )
+        # An unreadable system is reported by the caller as unknown rather than
+        # empty — the same distinction `data_map_service.build` already draws.
+        raise
 
 
 # --------------------------------------------------------------------------- #

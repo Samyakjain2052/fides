@@ -45,9 +45,12 @@ from typing import Any
 import httpx
 from sqlalchemy import select
 
+from app.connectors import discovery
 from app.core.config import get_settings
+from app.core.crypto import CredentialSealError, open_sealed
 from app.core.errors import Conflict, NotFound, ValidationProblem
 from app.models.audit import AuditAction
+from app.models.connection import Connection
 from app.models.consent import DataPrincipal
 from app.models.dsar import DsarRequest
 from app.models.dsar_message import DsarMessage
@@ -392,12 +395,11 @@ def message_as_dict(row: DsarMessage, attachments: list[StoredFile]) -> dict[str
 # --------------------------------------------------------------------------- #
 
 async def _engine_data(request: DsarRequest) -> dict[str, Any]:
-    """Whatever the engine found, or nothing.
+    """Whatever the Fides engine found, or nothing.
 
-    A request that never reached the engine — a correction, or one handled
-    entirely through the connections path — returns an empty mapping rather than
-    raising. "The engine had nothing" and "there is nothing" are different, and
-    the caller decides what to do about it; see `assemble`.
+    One of TWO sources — see `gather`. A request that never reached the engine
+    returns an empty mapping rather than raising: "the engine had nothing" and
+    "there is nothing" are different answers.
     """
     if not request.engine_ref:
         return {}
@@ -411,13 +413,107 @@ async def _engine_data(request: DsarRequest) -> dict[str, Any]:
             response.raise_for_status()
             return (response.json() or {}).get("data") or {}
     except Exception as exc:  # noqa: BLE001
-        # Not fatal. A package assembled from the data map alone is still a
+        # Not fatal. A package assembled from the connections alone is still a
         # disclosure, and refusing to produce anything because one source is
         # unreachable serves nobody.
         logger.warning(
             "engine fetch failed while assembling %s: %s", request.reference, exc
         )
         return {}
+
+
+async def _connection_data(
+    session, *, request: DsarRequest, principal: DataPrincipal
+) -> tuple[dict[str, Any], list[str]]:
+    """What this person's data actually is, in the connected systems.
+
+    Returns (data, unreachable) — the second being the systems that could not be
+    read, because "we did not look there" and "there is nothing there" are
+    different facts and a disclosure that conflates them is wrong in the more
+    dangerous direction.
+
+    Collections are keyed `"<connection label> · <table>"` so a person opening
+    the package can tell which system each row came from, rather than seeing
+    three tables all called `users`.
+    """
+    from app.services.data_map_service import _identifiers
+
+    identifiers = _identifiers(principal)
+    if not any(identifiers.values()):
+        return {}, []
+
+    rows = (
+        await session.execute(
+            select(Connection)
+            .where(Connection.status == "connected")
+            .order_by(Connection.connector_id, Connection.label)
+        )
+    ).scalars().all()
+
+    data: dict[str, Any] = {}
+    unreachable: list[str] = []
+
+    for row in rows:
+        try:
+            config = {**row.config_public, **open_sealed(row.config_sealed)}
+        except CredentialSealError:
+            unreachable.append(row.label)
+            continue
+
+        try:
+            found = await discovery.collect(row.connector_id, config, identifiers)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "collection failed for %s while assembling %s: %s",
+                row.label, request.reference, exc,
+            )
+            unreachable.append(row.label)
+            continue
+
+        for table, records in found.items():
+            data[f"{row.label} · {table}"] = records
+
+    return data, unreachable
+
+
+async def gather(
+    session, *, request: DsarRequest
+) -> tuple[dict[str, Any], list[str]]:
+    """Everything this person's disclosure should contain, from both sources.
+
+    THE BUG THIS FIXES, stated plainly because it was mine: `preview` and
+    `assemble` used to read the engine and nothing else. The connected systems —
+    the ones the data map searches and the ones the action items fan out over —
+    were never consulted. So a request fulfilled entirely through the
+    connections path, which is exactly the case this whole feature was built to
+    support, produced an empty package and a refusal saying nothing was found.
+    Three screens disagreed about whether a person's data existed.
+
+    Merging rather than preferring one source: a company can have both, and a
+    record held in Postgres and also surfaced by the engine is one record from
+    the person's point of view but two different systems from the fiduciary's.
+    Both are labelled, so the package says where each came from.
+    """
+    principal = await session.scalar(
+        select(DataPrincipal).where(DataPrincipal.id == request.principal_id)
+    )
+    if principal is None:
+        raise NotFound("The person this request belongs to is no longer on record.")
+
+    data = dict(await _engine_data(request))
+    connected, unreachable = await _connection_data(
+        session, request=request, principal=principal
+    )
+    # Engine keys are prefixed too when they would collide, which they should
+    # not — engine collections carry a dataset prefix already — but a silent
+    # overwrite here would drop somebody's records out of their own disclosure.
+    for key, value in connected.items():
+        if key in data:
+            data[f"{key} (connection)"] = value
+        else:
+            data[key] = value
+
+    return data, unreachable
 
 
 async def preview(
@@ -434,8 +530,13 @@ async def preview(
             "request produces a disclosure package."
         )
 
-    data = await _engine_data(request)
+    data, unreachable = await gather(session, request=request)
     result = disclosure.preview(data)
+    # Surfaced, never swallowed. A preview that shows nothing because a system
+    # was unreachable looks identical to one that shows nothing because the
+    # person has no data there — and the admin is about to make a decision on
+    # exactly that distinction.
+    result["unreachable"] = unreachable
 
     await audit_service.record(
         session, tenant_id=tenant_id, actor=actor,
@@ -489,7 +590,7 @@ async def assemble(
             "disclose."
         )
 
-    data = await _engine_data(request)
+    data, unreachable = await gather(session, request=request)
     summary = disclosure.preview(data)
 
     if not summary["field_count"]:
@@ -497,6 +598,17 @@ async def assemble(
         # you" — but it must be a deliberate one, because the same emptiness is
         # what an unreachable engine produces. Making the caller say so out loud
         # is the difference between a nil return and a silent failure.
+        if unreachable:
+            # Not the same refusal at all. Something failed, and telling the
+            # admin "nothing was found" would invite them to conclude the
+            # person has no data here.
+            raise DsarRefused(
+                "Nothing could be packaged, and "
+                f"{len(unreachable)} system(s) could not be read: "
+                f"{', '.join(unreachable)}. That is a failure, not a nil "
+                "result — fix the connection and try again rather than telling "
+                "this person you hold nothing about them."
+            )
         raise DsarRefused(
             "No personal data was found for this person, so there is nothing to "
             "package. If that is the correct answer, reply to the requester "
@@ -561,6 +673,9 @@ async def assemble(
             "attachments": len(attachments),
             "expires_at": request.package_available_until.isoformat(),
             "replaced_previous": previous is not None,
+            # On the record, because a disclosure assembled while a system was
+            # down is an incomplete disclosure and somebody may have to say so.
+            "unreachable_systems": unreachable,
         },
     )
     await _event(

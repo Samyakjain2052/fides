@@ -47,7 +47,15 @@ function StatusPill({ status }) {
 
 /** The close form for one item. Local state, so two open at once do not share. */
 function CloseForm({ item, onClose, onCancel, busy }) {
-  const [outcome, setOutcome] = useState("no_records_matched");
+  // No default, deliberately.
+  //
+  // This used to open on "Searched — nothing matched", which is both the least
+  // alarming option and the one that most understates what happened. Somebody
+  // who wrote a perfectly accurate sentence ("retrieved 1 matching user profile
+  // record") and did not touch the dropdown closed the item as a nil result —
+  // and the item then contradicted itself in the audit trail. Making the person
+  // pick costs one click and removes a whole class of wrong record.
+  const [outcome, setOutcome] = useState("");
   const [attestation, setAttestation] = useState("");
   const [records, setRecords] = useState(0);
   const [basis, setBasis] = useState("");
@@ -61,6 +69,7 @@ function CloseForm({ item, onClose, onCancel, busy }) {
   const contradiction = nilResult && Number(records) > 0;
 
   const ready =
+    outcome !== "" &&
     attestation.trim().length > 0 &&
     !contradiction &&
     (!needsBasis || basis.trim().length > 0);
@@ -77,6 +86,7 @@ function CloseForm({ item, onClose, onCancel, busy }) {
           value={outcome}
           onChange={(e) => setOutcome(e.target.value)}
         >
+          <option value="">Choose what you found…</option>
           {OUTCOMES.map((o) => (
             <option key={o.id} value={o.id}>
               {o.label}
@@ -86,7 +96,7 @@ function CloseForm({ item, onClose, onCancel, busy }) {
         {chosen && <p className="mt-1 text-xs text-muted">{chosen.hint}</p>}
       </div>
 
-      {!nilResult && (
+      {outcome !== "" && !nilResult && (
         <div>
           <label className="label" htmlFor={`records-${item.id}`}>
             How many records
