@@ -1130,3 +1130,393 @@ async def erase(
                                             "table": finding.table}})
         return EraseOutcome(False, finding.table,
                             error=f"Erase failed: {type(exc).__name__}")
+
+
+# --------------------------------------------------------------------------- #
+# Correction — §12(1)
+#
+# The symmetric operation to erasure, and a more dangerous one. Erasure removes;
+# correction WRITES a value somebody typed into a form into a customer's
+# production database. Four guards make that safe enough to run, and all four
+# are enforced here rather than at the call site — a guard in a route is a guard
+# the next route forgets.
+#
+#   1. THE COLUMN MUST BE ONE DISCOVERY ALREADY CLASSIFIED AS PERSONAL DATA.
+#      `finding.would_mask` is exactly that set. Correcting a name is §12(1);
+#      rewriting `amount` on an invoice is not a privacy right, it is fraud, and
+#      an operator who can name any column eventually names that one.
+#
+#   2. THE OLD VALUE IS READ BEFORE THE WRITE AND RETURNED.
+#      A correction with no before-value is unauditable: "we changed it" with no
+#      way to say from what. This is the evidence the manual workflow never had.
+#
+#   3. A ROW CEILING. An identifier matching two hundred rows means the match is
+#      wrong, not that two hundred people share a name. Better to refuse and
+#      make somebody look than to rewrite two hundred records.
+#
+#   4. DRY RUN AND LIVE SHARE ONE CODE PATH. A preview computed by different
+#      code from the write is worse than no preview, because it is believed.
+#      Same argument the retention module makes, and the same `dry_run` flag.
+# --------------------------------------------------------------------------- #
+
+#: Above this many matching rows a correction refuses rather than proceeds.
+#: A rights request concerns ONE person; a match this wide means the identifier
+#: column is not the identifier we think it is.
+CORRECTION_ROW_CEILING = 25
+
+
+@dataclass
+class CorrectOutcome:
+    ok: bool
+    table: str
+    column: str = ""
+    rows_matched: int = 0
+    rows_affected: int = 0
+    #: What is there now. Capped and de-duplicated — this is for a human reading
+    #: a receipt, not a copy of the column.
+    old_values: list[str] = field(default_factory=list)
+    new_value: str = ""
+    dry_run: bool = False
+    error: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok, "table": self.table, "column": self.column,
+            "rows_matched": self.rows_matched,
+            "rows_affected": self.rows_affected,
+            "old_values": self.old_values, "new_value": self.new_value,
+            "dry_run": self.dry_run, "error": self.error,
+        }
+
+
+def _correction_refusal(
+    finding: TableFinding, column: str, dry_run: bool
+) -> CorrectOutcome | None:
+    """Guard 1, before any connection is opened.
+
+    Returns an outcome to hand straight back, or None if the column is allowed.
+    """
+    if column not in finding.columns:
+        return CorrectOutcome(
+            False, finding.table, column, dry_run=dry_run,
+            error=(
+                f"{column!r} is not a column this system reported. Re-run "
+                "discovery — the schema may have changed since it was read."
+            ),
+        )
+    if column not in finding.would_mask:
+        return CorrectOutcome(
+            False, finding.table, column, dry_run=dry_run,
+            error=(
+                f"{column!r} does not hold personal data about this person, so "
+                "a rights request cannot change it. Correcting a name or an "
+                "address is §12(1); rewriting a business record is not."
+            ),
+        )
+    return None
+
+
+def _sample(values: list[Any], limit: int = 5) -> list[str]:
+    """Distinct, stringified, capped — for a receipt a human reads."""
+    seen: list[str] = []
+    for v in values:
+        text = "" if v is None else str(v)
+        if text not in seen:
+            seen.append(text)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
+async def correct_postgresql(
+    config: dict[str, Any],
+    finding: TableFinding,
+    identifier_value: str,
+    column: str,
+    new_value: str,
+    *,
+    dry_run: bool = False,
+) -> CorrectOutcome:
+    import asyncpg
+
+    refusal = _correction_refusal(finding, column, dry_run)
+    if refusal is not None:
+        return refusal
+
+    host = (config.get("host") or "").strip()
+    try:
+        resolve_and_check(host, _int(config.get("port"), 5432))
+    except HostNotAllowed as exc:
+        return CorrectOutcome(False, finding.table, column, dry_run=dry_run,
+                              error=str(exc))
+
+    schema, _, table = (
+        finding.table.partition(".") if "." in finding.table
+        else ("public", "", finding.table)
+    )
+    table = table or finding.table
+    qualified = f"{_pg_quote(schema)}.{_pg_quote(table)}"
+    where = f"{_pg_quote(finding.matched_column)}::text = $1"
+
+    try:
+        conn = await asyncio.wait_for(
+            asyncpg.connect(
+                host=host, port=_int(config.get("port"), 5432),
+                user=(config.get("user") or "").strip() or None,
+                password=config.get("password") or None,
+                database=(config.get("database") or "").strip() or None,
+                ssl="require" if _truthy(config.get("tls", "true")) else False,
+                statement_cache_size=0,
+            ),
+            timeout=TIMEOUT_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CorrectOutcome(False, finding.table, column, dry_run=dry_run,
+                              error=f"{type(exc).__name__}: {exc}"[:200])
+
+    try:
+        # Guard 2 and 3, in one read. Done inside the same connection as the
+        # write so the count cannot go stale between them.
+        rows = await conn.fetch(
+            f"SELECT {_pg_quote(column)} AS v FROM {qualified} WHERE {where}",
+            identifier_value,
+        )
+        matched = len(rows)
+        old = _sample([r["v"] for r in rows])
+
+        if matched == 0:
+            return CorrectOutcome(
+                False, finding.table, column, 0, 0, old, new_value, dry_run,
+                error="Nothing here matches that person any more.",
+            )
+        if matched > CORRECTION_ROW_CEILING:
+            return CorrectOutcome(
+                False, finding.table, column, matched, 0, old, new_value, dry_run,
+                error=(
+                    f"That identifier matches {matched} rows here, over the "
+                    f"limit of {CORRECTION_ROW_CEILING}. A rights request "
+                    "concerns one person — check the matched column before "
+                    "changing anything."
+                ),
+            )
+
+        if dry_run:
+            return CorrectOutcome(True, finding.table, column, matched, 0,
+                                  old, new_value, dry_run=True)
+
+        status = await conn.execute(
+            f"UPDATE {qualified} SET {_pg_quote(column)} = $2 WHERE {where}",
+            identifier_value, new_value,
+        )
+        affected = int(status.rsplit(" ", 1)[-1]) if status else 0
+        return CorrectOutcome(True, finding.table, column, matched, affected,
+                              old, new_value, dry_run=False)
+    except Exception as exc:  # noqa: BLE001
+        return CorrectOutcome(False, finding.table, column, dry_run=dry_run,
+                              error=f"{type(exc).__name__}: {exc}"[:200])
+    finally:
+        await conn.close()
+
+
+async def correct_mysql(
+    config: dict[str, Any],
+    finding: TableFinding,
+    identifier_value: str,
+    column: str,
+    new_value: str,
+    *,
+    dry_run: bool = False,
+) -> CorrectOutcome:
+    import pymysql
+
+    refusal = _correction_refusal(finding, column, dry_run)
+    if refusal is not None:
+        return refusal
+
+    host = (config.get("host") or "").strip()
+    try:
+        resolve_and_check(host, _int(config.get("port"), 3306))
+    except HostNotAllowed as exc:
+        return CorrectOutcome(False, finding.table, column, dry_run=dry_run,
+                              error=str(exc))
+
+    def _run() -> CorrectOutcome:
+        kwargs: dict[str, Any] = {
+            "host": host, "port": _int(config.get("port"), 3306),
+            "user": (config.get("user") or "").strip() or None,
+            "password": config.get("password") or "",
+            "database": (config.get("database") or "").strip() or None,
+            "connect_timeout": int(TIMEOUT_SECONDS),
+        }
+        if _truthy(config.get("tls", "true")):
+            kwargs["ssl"] = {}
+        conn = pymysql.connect(**kwargs)
+        try:
+            tbl = _my_quote(finding.table)
+            where = f"{_my_quote(finding.matched_column)} = %s"
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {_my_quote(column)} FROM {tbl} WHERE {where}",
+                    (identifier_value,),
+                )
+                fetched = cur.fetchall()
+            matched = len(fetched)
+            old = _sample([r[0] for r in fetched])
+
+            if matched == 0:
+                return CorrectOutcome(
+                    False, finding.table, column, 0, 0, old, new_value, dry_run,
+                    error="Nothing here matches that person any more.",
+                )
+            if matched > CORRECTION_ROW_CEILING:
+                return CorrectOutcome(
+                    False, finding.table, column, matched, 0, old, new_value,
+                    dry_run,
+                    error=(
+                        f"That identifier matches {matched} rows here, over the "
+                        f"limit of {CORRECTION_ROW_CEILING}."
+                    ),
+                )
+            if dry_run:
+                return CorrectOutcome(True, finding.table, column, matched, 0,
+                                      old, new_value, dry_run=True)
+
+            with conn.cursor() as cur:
+                affected = cur.execute(
+                    f"UPDATE {tbl} SET {_my_quote(column)} = %s WHERE {where}",
+                    (new_value, identifier_value),
+                )
+            conn.commit()
+            return CorrectOutcome(True, finding.table, column, matched,
+                                  int(affected or 0), old, new_value,
+                                  dry_run=False)
+        finally:
+            conn.close()
+
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_run),
+                                      timeout=DISCOVERY_TIMEOUT)
+    except Exception as exc:  # noqa: BLE001
+        return CorrectOutcome(False, finding.table, column, dry_run=dry_run,
+                              error=f"{type(exc).__name__}: {exc}"[:200])
+
+
+async def correct_mongodb(
+    config: dict[str, Any],
+    finding: TableFinding,
+    identifier_value: str,
+    column: str,
+    new_value: str,
+    *,
+    dry_run: bool = False,
+) -> CorrectOutcome:
+    from pymongo import MongoClient
+
+    refusal = _correction_refusal(finding, column, dry_run)
+    if refusal is not None:
+        return refusal
+
+    host = (config.get("host") or "").strip()
+    srv = _truthy(config.get("srv", "false"))
+    try:
+        resolve_and_check(host.replace("mongodb+srv://", ""),
+                          _int(config.get("port"), 27017))
+    except HostNotAllowed as exc:
+        return CorrectOutcome(False, finding.table, column, dry_run=dry_run,
+                              error=str(exc))
+
+    def _run() -> CorrectOutcome:
+        ms = int(TIMEOUT_SECONDS * 1000)
+        kwargs: dict[str, Any] = {
+            "serverSelectionTimeoutMS": ms, "connectTimeoutMS": ms,
+        }
+        if srv:
+            kwargs["host"] = f"mongodb+srv://{host.replace('mongodb+srv://', '')}"
+        else:
+            kwargs["host"] = host
+            kwargs["port"] = _int(config.get("port"), 27017)
+            if _truthy(config.get("tls", "true")):
+                kwargs["tls"] = True
+        user = (config.get("user") or "").strip()
+        if user:
+            kwargs["username"] = user
+            kwargs["password"] = config.get("password") or ""
+            kwargs["authSource"] = (config.get("auth_source") or "admin").strip()
+
+        client = MongoClient(**kwargs)
+        try:
+            db = client[(config.get("database") or "").strip()]
+            col = db[finding.table]
+            query = {finding.matched_column: identifier_value}
+
+            docs = list(col.find(query, {column: 1}).limit(
+                CORRECTION_ROW_CEILING + 1
+            ))
+            matched = col.count_documents(query)
+            old = _sample([d.get(column) for d in docs])
+
+            if matched == 0:
+                return CorrectOutcome(
+                    False, finding.table, column, 0, 0, old, new_value, dry_run,
+                    error="Nothing here matches that person any more.",
+                )
+            if matched > CORRECTION_ROW_CEILING:
+                return CorrectOutcome(
+                    False, finding.table, column, matched, 0, old, new_value,
+                    dry_run,
+                    error=(
+                        f"That identifier matches {matched} documents here, "
+                        f"over the limit of {CORRECTION_ROW_CEILING}."
+                    ),
+                )
+            if dry_run:
+                return CorrectOutcome(True, finding.table, column, matched, 0,
+                                      old, new_value, dry_run=True)
+
+            result = col.update_many(query, {"$set": {column: new_value}})
+            return CorrectOutcome(True, finding.table, column, matched,
+                                  int(result.modified_count), old, new_value,
+                                  dry_run=False)
+        finally:
+            client.close()
+
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_run),
+                                      timeout=DISCOVERY_TIMEOUT)
+    except Exception as exc:  # noqa: BLE001
+        return CorrectOutcome(False, finding.table, column, dry_run=dry_run,
+                              error=f"{type(exc).__name__}: {exc}"[:200])
+
+
+CORRECTORS = {
+    "postgresql": correct_postgresql,
+    "mysql": correct_mysql,
+    "mongodb": correct_mongodb,
+}
+
+
+async def correct(
+    connector_id: str,
+    config: dict[str, Any],
+    finding: TableFinding,
+    identifier_value: str,
+    column: str,
+    new_value: str,
+    *,
+    dry_run: bool = False,
+) -> CorrectOutcome:
+    fn = CORRECTORS.get(connector_id)
+    if fn is None:
+        return CorrectOutcome(
+            False, finding.table, column, dry_run=dry_run,
+            error="No correction exists for this connector yet.",
+        )
+    try:
+        return await fn(config, finding, identifier_value, column, new_value,
+                        dry_run=dry_run)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("correct failed",
+                         extra={"context": {"connector": connector_id,
+                                            "table": finding.table}})
+        return CorrectOutcome(False, finding.table, column, dry_run=dry_run,
+                              error=f"Correction failed: {type(exc).__name__}")

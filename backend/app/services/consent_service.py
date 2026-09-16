@@ -226,6 +226,34 @@ async def grant(
             "expires_at": expires_at.isoformat() if expires_at else None,
         },
     )
+
+    # §4.1.1's "Real-Time Synchronization": a fiduciary can begin processing the
+    # moment consent exists rather than polling the check endpoint on a timer.
+    #
+    # `consent.granted` for a first grant and a re-grant alike. A receiver
+    # holding a withdrawal from last month needs to know this supersedes it, and
+    # distinguishing "new" from "again" would put the burden of that reasoning on
+    # every subscriber instead of on the one field that settles it — `given_at`.
+    from app.services import webhook_service
+
+    principal = await session.scalar(
+        select(DataPrincipal).where(DataPrincipal.id == principal_id)
+    )
+    await webhook_service.emit(
+        session,
+        tenant_id=tenant_id,
+        event="consent.granted",
+        data={
+            "principal_ref": principal.external_id if principal else None,
+            "purpose": purpose.key,
+            "purpose_name": purpose.name,
+            "given_at": consent.given_at.isoformat(),
+            "expires_at": expires_at.isoformat() if expires_at else None,
+            "notice_version": notice.version,
+        },
+        entity_type="consent",
+        entity_id=consent.id,
+    )
     return consent
 
 
@@ -306,6 +334,33 @@ async def withdraw(
             principal_id=principal_id,
             language=consent.language,
         ),
+    )
+
+    # And tell the systems doing the processing, which is the half that makes
+    # the withdrawal take effect rather than merely be recorded. §6(6) says
+    # processing ceases; a ledger that reaches nothing cannot bring that about.
+    #
+    # Queues rows, sends nothing. A subscriber that is down must never be the
+    # reason a person's withdrawal fails — the right is exercised when they ask,
+    # and propagating it is our problem.
+    from app.services import webhook_service
+
+    await webhook_service.emit(
+        session,
+        tenant_id=tenant_id,
+        event="consent.withdrawn",
+        data={
+            # Their identifier in the CUSTOMER's namespace, not ours. A receiver
+            # has no way to act on a DataShield uuid — the whole instruction is
+            # "the person you know as X", and external_id is the only field that
+            # means anything on their side.
+            "principal_ref": principal.external_id if principal else None,
+            "purpose": purpose.key,
+            "purpose_name": purpose.name,
+            "withdrawn_at": consent.withdrawn_at.isoformat(),
+        },
+        entity_type="consent",
+        entity_id=consent.id,
     )
     return consent
 
@@ -620,3 +675,190 @@ async def record_provenance(
         },
     )
     return row
+
+
+# --------------------------------------------------------------------------- #
+# Renewal — BRD §4.1.4
+#
+# Expiry itself is still computed, never swept. Nothing below writes `status`:
+# a consent's validity depends on the clock, not on whether a worker ran. What
+# these do is make sure the person is ASKED before it lapses, and that the
+# systems relying on it are told after.
+# --------------------------------------------------------------------------- #
+
+#: How long before expiry the reminder goes out. The BRD's example is 30 days,
+#: and it is a sensible default rather than a rule: a consent with a 14-day life
+#: would otherwise be reminded about before it was granted, which `remind_before`
+#: guards against below.
+RENEWAL_NOTICE_DAYS = 30
+
+
+async def remind_before_expiry(
+    session: AsyncSession, *, tenant_id: uuid.UUID, days: int = RENEWAL_NOTICE_DAYS
+) -> int:
+    """Email everyone whose consent lapses inside `days`. Once each.
+
+    Idempotent through `renewal_notified_at`, which is why a daily job does not
+    send a daily email for a month about the same expiry.
+
+    Consents shorter than the notice window are skipped rather than reminded
+    immediately. A message saying "your consent expires soon" arriving in the
+    same minute it was granted reads as a bug to the person receiving it, and
+    teaches them to ignore the ones that matter.
+    """
+    from app.services import notification_service
+
+    now = datetime.now(UTC)
+    horizon = now + timedelta(days=days)
+
+    rows = await session.execute(
+        select(Consent, Purpose, DataPrincipal)
+        .join(Purpose, Purpose.id == Consent.purpose_id)
+        .join(DataPrincipal, DataPrincipal.id == Consent.principal_id)
+        .where(
+            Consent.tenant_id == tenant_id,
+            Consent.status == "active",
+            Consent.expires_at.isnot(None),
+            Consent.expires_at > now,
+            Consent.expires_at <= horizon,
+            Consent.renewal_notified_at.is_(None),
+        )
+    )
+
+    sent = 0
+    for consent, purpose, principal in rows.all():
+        # A consent whose WHOLE LIFE is shorter than the notice window sits
+        # inside that window from the moment it is granted, so reminding about
+        # it means emailing somebody seconds after they said yes.
+        #
+        # Compared as a span, not against `now`. The first version of this read
+        # `given_at > horizon - days`, which reduces to `given_at > now` and is
+        # therefore false for every consent ever granted — a guard that never
+        # fired, and looked like it did.
+        if (
+            consent.given_at
+            and consent.expires_at - consent.given_at <= timedelta(days=days)
+        ):
+            # Stamped anyway, so it is considered once and then left alone
+            # rather than re-examined on every daily run for the rest of its
+            # life.
+            consent.renewal_notified_at = now
+            continue
+
+        await notification_service.enqueue(
+            session,
+            tenant_id=tenant_id,
+            key="consent.expiring",
+            to_address=principal.email,
+            context={
+                "purpose": purpose.name,
+                "expires_on": consent.expires_at.date().isoformat(),
+                "days_left": str(max(0, (consent.expires_at - now).days)),
+            },
+            entity_type="consent",
+            entity_id=consent.id,
+            principal_id=principal.id,
+            language=consent.language,
+        )
+        consent.renewal_notified_at = now
+        sent += 1
+
+    return sent
+
+
+async def announce_expiries(
+    session: AsyncSession, *, tenant_id: uuid.UUID
+) -> int:
+    """Tell subscribers about consents that have lapsed. Once each.
+
+    An expiry is a stop, exactly like a withdrawal — the lawful basis is gone
+    and processing has to cease — and a processor that is only told about
+    explicit withdrawals will carry on running against consent that quietly ran
+    out. That is the same §6(6) failure with a slower fuse.
+
+    Its own event rather than `consent.withdrawn`, because a receiver may
+    reasonably treat them differently: a withdrawal is a decision to respect, an
+    expiry is a prompt to ask again.
+    """
+    from app.services import webhook_service
+
+    now = datetime.now(UTC)
+    rows = await session.execute(
+        select(Consent, Purpose, DataPrincipal)
+        .join(Purpose, Purpose.id == Consent.purpose_id)
+        .join(DataPrincipal, DataPrincipal.id == Consent.principal_id)
+        .where(
+            Consent.tenant_id == tenant_id,
+            Consent.status == "active",
+            Consent.expires_at.isnot(None),
+            Consent.expires_at <= now,
+            Consent.expiry_announced_at.is_(None),
+        )
+    )
+
+    announced = 0
+    for consent, purpose, principal in rows.all():
+        await audit_service.record(
+            session,
+            tenant_id=tenant_id,
+            actor=Actor(type="system", id=None, label="expiry-sweep"),
+            action=AuditAction.CONSENT_EXPIRED,
+            entity_type="consent",
+            entity_id=consent.id,
+            payload={
+                "principal_id": str(consent.principal_id),
+                "purpose_key": purpose.key,
+                "expired_at": consent.expires_at.isoformat(),
+            },
+        )
+        await webhook_service.emit(
+            session,
+            tenant_id=tenant_id,
+            event="consent.expired",
+            data={
+                "principal_ref": principal.external_id,
+                "purpose": purpose.key,
+                "purpose_name": purpose.name,
+                "expired_at": consent.expires_at.isoformat(),
+            },
+            entity_type="consent",
+            entity_id=consent.id,
+        )
+        consent.expiry_announced_at = now
+        announced += 1
+
+    return announced
+
+
+async def renew(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    actor: Actor,
+    principal_id: uuid.UUID,
+    purpose_id: uuid.UUID,
+    method: str = "checkbox",
+    source: str | None = "renewal",
+) -> Consent:
+    """Extend a consent by taking it again. As simple as granting (§4.1.4).
+
+    Deliberately a thin wrapper over `grant` rather than an `expires_at` bump,
+    and the difference is the whole point: renewal is a fresh act of consent, so
+    it re-points at whatever notice version is current NOW and re-stamps
+    `given_at`. Extending the date on a consent given against text that has
+    since been revised would manufacture agreement to wording nobody read.
+
+    The reminder stamps are cleared, so the next cycle reminds again.
+    """
+    consent = await grant(
+        session,
+        tenant_id=tenant_id,
+        actor=actor,
+        principal_id=principal_id,
+        purpose_id=purpose_id,
+        method=method,
+        source=source,
+    )
+    consent.renewal_notified_at = None
+    consent.expiry_announced_at = None
+    return consent

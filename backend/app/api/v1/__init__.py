@@ -18,6 +18,7 @@ from app.api.v1 import (
     reports,
     retention,
     vendors,
+    webhooks,
 )
 
 api_router = APIRouter()
@@ -36,3 +37,4 @@ api_router.include_router(notifications.router)
 api_router.include_router(reports.router)
 api_router.include_router(retention.router)
 api_router.include_router(vendors.router)
+api_router.include_router(webhooks.router)

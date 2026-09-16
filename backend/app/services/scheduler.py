@@ -253,6 +253,77 @@ async def warn_before_purge() -> tuple[int, int]:
     return await _for_each_tenant(work)
 
 
+async def consent_renewals() -> tuple[int, int]:
+    """Remind people before their consent lapses, and tell subscribers after.
+
+    Two halves of BRD §4.1.4 in one job because they walk the same rows and run
+    on the same daily cadence.
+
+    Neither half writes `status`. Expiry in this product is computed against the
+    clock — `consent_service.overview` and `check` both say so — and a sweep
+    that rewrote the row would make a consent's validity depend on whether a
+    worker had run rather than on what time it is. These only record what has
+    been said to whom.
+    """
+    from app.services import consent_service
+
+    async def work(session: AsyncSession, tenant_id: uuid.UUID) -> int:
+        reminded = await consent_service.remind_before_expiry(
+            session, tenant_id=tenant_id
+        )
+        announced = await consent_service.announce_expiries(
+            session, tenant_id=tenant_id
+        )
+        return reminded + announced
+
+    return await _for_each_tenant(work)
+
+
+async def deliver_webhooks() -> tuple[int, int]:
+    """Attempt every webhook delivery that is due.
+
+    The job that makes a withdrawal take effect. `consent_service.withdraw`
+    queues rows and returns; nothing has actually been told to stop until this
+    runs, so its interval is the real latency of "processing ceases" — which is
+    why it is the shortest in this registry.
+
+    Bounded per tenant, like the notification drain: a customer whose processor
+    is timing out on every send must not hold up the withdrawal alerts of every
+    other customer behind them.
+    """
+    from app.services import webhook_service
+
+    async def work(session: AsyncSession, tenant_id: uuid.UUID) -> int:
+        delivered = 0
+        for _ in range(10):  # at most 10 batches per tenant per tick
+            result = await webhook_service.drain_tenant(
+                session, tenant_id=tenant_id, limit=20
+            )
+            if not result["claimed"]:
+                break
+            delivered += result["delivered"]
+        return delivered
+
+    return await _for_each_tenant(work)
+
+
+async def escalate_webhooks() -> tuple[int, int]:
+    """Raise alerts that a processor accepted and never confirmed acting on.
+
+    The failure this exists to surface has no other symptom: our sends succeed,
+    the delivery log looks healthy, and the processor carries on mailing somebody
+    who withdrew. Nobody discovers that by looking at a dashboard of green rows —
+    only by counting the ones that were never acknowledged, which is what this
+    does.
+    """
+    from app.services import webhook_service
+
+    async def work(session: AsyncSession, tenant_id: uuid.UUID) -> int:
+        return await webhook_service.sweep_escalations(session, tenant_id=tenant_id)
+
+    return await _for_each_tenant(work)
+
+
 async def check_connections() -> tuple[int, int]:
     """Probe connections whose last check has gone stale.
 
@@ -348,6 +419,43 @@ JOBS: dict[str, Job] = {
             "Probes each configured connection that has gone stale, records the "
             "result, and notifies the DPO once a connection has failed "
             "repeatedly. Deliberately not done on page load — see the function."
+        ),
+    ),
+    "consent.renewals": Job(
+        name="consent.renewals",
+        # Daily. Both halves are idempotent through their own stamps, so a
+        # second run the same day does nothing — and a reminder is a message to
+        # a person, which is not a thing to send on a fifteen-minute loop.
+        interval_seconds=86_400,
+        run=consent_renewals,
+        description=(
+            "Reminds people whose consent is about to lapse, and tells "
+            "subscribers about the ones that already have. Changes no "
+            "consent's status — expiry is computed, not swept."
+        ),
+    ),
+    "webhooks.deliver": Job(
+        name="webhooks.deliver",
+        # The shortest interval here, and deliberately: this is the latency of
+        # "processing ceases" after somebody withdraws. A minute is already a
+        # compromise — anything shorter starts costing a poll per tenant for a
+        # queue that is usually empty.
+        interval_seconds=60,
+        run=deliver_webhooks,
+        description=(
+            "Posts queued consent and rights alerts to each subscribed Data "
+            "Fiduciary or Processor, signed, with retries. This is what makes a "
+            "withdrawal reach the systems doing the processing."
+        ),
+    ),
+    "webhooks.escalate": Job(
+        name="webhooks.escalate",
+        interval_seconds=3_600,
+        run=escalate_webhooks,
+        description=(
+            "Flags alerts a processor accepted but never confirmed acting on, "
+            "past that endpoint's acknowledgement window, and tells the DPO. "
+            "Idempotent — a delivery escalates once."
         ),
     ),
     "retention.prepurge_warn": Job(

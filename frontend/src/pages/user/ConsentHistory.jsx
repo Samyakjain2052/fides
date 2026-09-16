@@ -65,20 +65,50 @@ export default function ConsentHistory() {
     return [...map.entries()];
   }, [filtered]);
 
-  const exportRows = (format) => {
-    const header = "log_id,purpose,action,timestamp,method,version,consent_status,hash";
-    const lines = filtered.map((r) =>
-      [r.log_id, r.purpose, r.action_type, r.timestamp, r.method, r.version, r.consent_status, r.audit_hash].join(",")
-    );
-    const body = [header, ...lines].join("\n");
-    const blob = new Blob([body], { type: format === "csv" ? "text/csv" : "text/plain" });
+  // RFC 4180 quoting. Not pedantry: a purpose named "Marketing, offers and
+  // partners" previously split into two columns and shifted every field after
+  // it, silently, in a file somebody exports precisely because they want a
+  // record they can rely on.
+  const csvCell = (value) => {
+    const text = value === null || value === undefined ? "" : String(value);
+    return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  };
+
+  const exportCsv = () => {
+    const columns = [
+      "log_id", "purpose", "action", "timestamp",
+      "method", "version", "consent_status", "hash",
+    ];
+    const body = [
+      columns.join(","),
+      ...filtered.map((r) =>
+        [
+          r.log_id, r.purpose, r.action_type, r.timestamp,
+          r.method, r.version, r.consent_status, r.audit_hash,
+        ].map(csvCell).join(",")
+      ),
+    ].join("\r\n");
+
+    const blob = new Blob([body], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `consent-history.${format === "csv" ? "csv" : "txt"}`;
+    a.download = "consent-history.csv";
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  // The browser's own print-to-PDF, not a generated file.
+  //
+  // This button used to produce a .txt with a `.pdf` label swapped onto it,
+  // which is the one thing a consent history must not do — hand somebody a file
+  // that is not what it says it is. The honest options were a PDF library in
+  // the bundle or the printer, and the printer wins: every browser can save the
+  // dialogue's output as a real PDF, it renders the table the reader is
+  // actually looking at, and it costs no dependency.
+  //
+  // `@media print` in index.css hides the app chrome and the filter controls.
+  const exportPdf = () => window.print();
 
   return (
     <div className="space-y-5">
@@ -89,11 +119,11 @@ export default function ConsentHistory() {
             Every consent action ever taken on your account, in order.
           </p>
         </div>
-        <div className="flex gap-2">
-          <button type="button" className="btn-secondary" onClick={() => exportRows("pdf")}>
-            Export PDF
+        <div className="no-print flex gap-2">
+          <button type="button" className="btn-secondary" onClick={exportPdf}>
+            Save as PDF
           </button>
-          <button type="button" className="btn-secondary" onClick={() => exportRows("csv")}>
+          <button type="button" className="btn-secondary" onClick={exportCsv}>
             Export CSV
           </button>
         </div>

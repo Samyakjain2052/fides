@@ -397,6 +397,24 @@ def test_there_is_no_job_that_destroys_data():
         # check that touched customer rows would be doing something other than
         # checking connectivity.
         "connections.healthcheck",
+        # These two SEND rather than destroy, and the distinction this test
+        # draws still holds. `deliver` posts an alert that has already been
+        # decided — the person withdrew, the row is written, the audit entry
+        # exists — and the only thing it writes is the delivery log. `escalate`
+        # stamps a flag and queues a message to the DPO.
+        #
+        # Worth being precise about what makes delivery safe to run unattended,
+        # because it does put a person's identifier on the wire: it cannot
+        # invent an alert. Every row it sends was queued by an act somebody
+        # already took, so the worst an unattended run can do is repeat
+        # something true, to a URL an admin registered.
+        "webhooks.deliver",
+        "webhooks.escalate",
+        # Sends a reminder and emits an alert. Emphatically does NOT expire
+        # anything: expiry here is computed against the clock on every read, and
+        # a job that wrote `status` would make a consent's validity depend on
+        # whether a worker ran. It only records what has been said to whom.
+        "consent.renewals",
     }
     for name in scheduler.JOBS:
         assert "purge" not in name or "warn" in name

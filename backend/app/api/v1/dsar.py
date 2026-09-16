@@ -294,6 +294,105 @@ async def erase_across_systems(
     )
 
 
+class CorrectBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: Which connected system, which table, which column. Named explicitly
+    #: rather than inferred: the mapping between "Full name" on a rights form
+    #: and `users.full_name` in a schema is a human judgement, and guessing it
+    #: is how the wrong column gets rewritten.
+    connection_id: uuid.UUID
+    table: str = Field(..., max_length=255)
+    column: str = Field(..., max_length=128)
+    new_value: str = Field(..., min_length=1, max_length=1000)
+
+    #: Defaults to a preview. The opposite of `erase`, where discovery has
+    #: already shown the admin what will be touched — here the most likely
+    #: mistake is the column mapping, so looking first is the default and
+    #: writing is the deliberate act.
+    dry_run: bool = True
+    #: Required only when `dry_run` is false.
+    confirm_reference: str | None = Field(None, max_length=32)
+
+
+@router.get("/{request_id}/correction-plan",
+            summary="Where this correction should land, and whether it is unambiguous")
+async def correction_plan(
+    request_id: uuid.UUID,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    """Reads every connected system and grades each possible target. Writes nothing.
+
+    `confirmed` means the column name matches the requested field AND the value
+    stored there is what the person said is there. `candidates` are near
+    misses — the name fits but the value disagrees, or several columns fit.
+
+    `auto_applicable` is true only for exactly one confirmed match and no
+    candidates, which is the only case with no judgement left in it. Everything
+    else is a decision, and this endpoint exists so somebody can make it with
+    the facts in front of them.
+    """
+    return await data_map_service.plan_correction(
+        current.session, tenant_id=current.tenant_id, request_id=request_id,
+    )
+
+
+@router.post("/{request_id}/auto-correct",
+             summary="Apply the correction if the plan leaves nothing to decide")
+async def auto_correct_request(
+    request_id: uuid.UUID,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    """Runs on its own when a correction request is verified — this is the retry.
+
+    Applies the change only when the person's stated current value matches
+    exactly one column in exactly one system. Otherwise it returns the plan with
+    `applied: null`, which is an answer rather than a failure: "two columns could
+    be the one you mean" is a real outcome, and choosing between them silently is
+    what this deliberately will not do.
+    """
+    return await data_map_service.auto_correct(
+        current.session, tenant_id=current.tenant_id, actor=current.actor,
+        request_id=request_id,
+    )
+
+
+@router.post("/{request_id}/correct",
+             summary="Carry out a §12(1) correction in a connected system")
+async def correct_in_system(
+    request_id: uuid.UUID,
+    body: CorrectBody,
+    current: Annotated[CurrentUser, Depends(require(Capability.DSAR_PROCESS))],
+) -> dict[str, Any]:
+    """Preview by default; writes only when `dry_run` is false.
+
+    A preview returns the values that are there now and changes nothing — and
+    it deliberately leaves no trace on the timeline, because looking is not an
+    act and a timeline full of previews buries the line that says what changed.
+
+    A live call records both values. That is the point of automating this at
+    all: the manual workflow's only record was a sentence somebody typed, and
+    "we corrected it" cannot answer "from what?".
+
+    Refuses to write to a column discovery did not classify as personal data
+    about this person. Correcting a name is §12(1); rewriting an invoice total
+    is not a privacy right.
+
+    Does not mark the request completed — whether every system in scope was
+    reached is the admin's judgement to record.
+    """
+    return await data_map_service.correct(
+        current.session, tenant_id=current.tenant_id, actor=current.actor,
+        request_id=request_id,
+        connection_id=body.connection_id,
+        table=body.table,
+        column=body.column,
+        new_value=body.new_value,
+        confirm_reference=body.confirm_reference,
+        dry_run=body.dry_run,
+    )
+
+
 @router.get("/{request_id}", response_model=DsarDetail, summary="One request and its timeline")
 async def get_request(
     request_id: uuid.UUID,

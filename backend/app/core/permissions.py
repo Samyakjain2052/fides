@@ -59,6 +59,21 @@ class Capability(StrEnum):
     # not extend to a list of a company's production systems.
     CONNECTION_MANAGE = "connection:manage"
 
+    # Outbound alerts. Admin only, and its own capability rather than folding
+    # into CONNECTION_MANAGE, because the direction of trust is reversed: a
+    # connection lets us read a customer's system, while an endpoint makes us a
+    # *sender* into somebody else's. Whoever holds this chooses the URL that
+    # every future withdrawal alert is posted to — point it somewhere else and
+    # a person's identifier and their purposes go there instead, with our
+    # signature on it.
+    WEBHOOK_MANAGE = "webhook:manage"
+
+    # Read the delivery log without being able to change where alerts go.
+    # Granted to the auditor: "was this processor told to stop, and did they
+    # confirm" is exactly the question an audit exists to answer, and answering
+    # it changes nothing.
+    WEBHOOK_READ = "webhook:read"
+
     # Assessments — DPIA (§10), RoPA, vendor reviews.
     #
     # Split three ways rather than one `assessment:manage`, because the three
@@ -116,6 +131,7 @@ _MATRIX: dict[Role, frozenset[Capability]] = {
         Capability.ASSESSMENT_READ, Capability.ASSESSMENT_RESPOND,
         Capability.ASSESSMENT_APPROVE,
         Capability.VENDOR_READ, Capability.VENDOR_MANAGE,
+        Capability.WEBHOOK_MANAGE, Capability.WEBHOOK_READ,
     }),
     # Read-only by construction: an auditor who could change what they audit is
     # not an auditor.
@@ -124,6 +140,9 @@ _MATRIX: dict[Role, frozenset[Capability]] = {
         Capability.REPORT_GENERATE, Capability.CONSENT_READ,
         # A DPIA is exactly the document an audit exists to inspect.
         Capability.ASSESSMENT_READ, Capability.VENDOR_READ,
+        # Whether withdrawals actually reached the processors, and whether they
+        # confirmed. Read-only: see WEBHOOK_READ.
+        Capability.WEBHOOK_READ,
     }),
     Role.GRIEVANCE_OFFICER: _SELF | frozenset({
         Capability.GRIEVANCE_READ, Capability.GRIEVANCE_PROCESS,
@@ -170,6 +189,17 @@ class Scope(StrEnum):
 
     DSAR_WRITE = "dsar:write"
     PRINCIPAL_READ = "principal:read"
+
+    # Confirming that an alert we sent was acted on — BRD §4.4.2's "Action
+    # Confirmation". Its own scope, and the narrowest one here: a key that can
+    # only ever say "yes, we stopped" about a delivery we already made can do
+    # nothing else, which is what makes it safe to hand to whichever internal
+    # service actually performs the suppression.
+    #
+    # Note what it CANNOT do. It cannot read the alert, list deliveries, or
+    # discover what it was not sent — acknowledgement needs the delivery id,
+    # and the only way to hold one is to have received it.
+    WEBHOOK_ACK = "webhook:ack"
 
 
 ALL_SCOPES = frozenset(Scope)

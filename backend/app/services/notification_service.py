@@ -881,6 +881,29 @@ DEFAULT_TEMPLATES: dict[str, tuple[str, str]] = {
         "deletion on {{purge_date}}.\n\nNo action is needed from you.\n\n"
         "{{organisation}}",
     ),
+    "consent.expiring": (
+        "Your consent for {{purpose}} expires on {{expires_on}}",
+        "You gave us permission to use your data for {{purpose}}. That "
+        "permission runs out on {{expires_on}} — {{days_left}} days from now.\n\n"
+        "If you do nothing, it simply lapses and we stop. You do not need to "
+        "take any action to make that happen.\n\n"
+        "If you would like it to continue, you can renew it in your privacy "
+        "settings. You can also withdraw it now rather than waiting.\n\n"
+        "{{organisation}}",
+    ),
+    "webhook.escalated": (
+        "A processor has not confirmed a consent alert: {{endpoint}}",
+        "We sent a {{event}} alert to {{endpoint}} on {{sent_at}}. Their server "
+        "accepted it, but {{hours}} hours later they have not confirmed that "
+        "they acted on it.\n\n"
+        "Why this matters: accepting the alert is not the same as stopping. "
+        "If this was a withdrawal, the person has exercised their right and "
+        "the processing may still be running at the other end — and that is "
+        "your responsibility under §8(2), not theirs.\n\n"
+        "What to check: whether the receiving system is calling back to "
+        "acknowledge, and whether it in fact stopped. Unacknowledged alerts "
+        "are listed under Webhooks.\n\n{{organisation}}",
+    ),
 }
 
 

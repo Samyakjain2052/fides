@@ -238,3 +238,24 @@ class Consent(UUIDMixin, TenantMixin, TimestampMixin, Base):
     # Where it came from: "preference-centre", "signup-banner", a service name
     # for API-collected consent. Answers "which of our systems asked?".
     source: Mapped[str | None] = mapped_column(String(128))
+
+    # Renewal (BRD §4.1.4). Two separate stamps, and neither touches `status`.
+    #
+    # Expiry in this product is COMPUTED against the clock, never swept into the
+    # row — `overview` and `check` both say so, and a background job that
+    # rewrote `status` would make a consent's validity depend on whether a
+    # worker had run rather than on what time it is. These columns exist only so
+    # the reminder and the alert happen once each; they are bookkeeping about
+    # what we have told people, not about whether the consent is valid.
+    #
+    # `renewal_notified_at` is what stops a daily job sending a daily email
+    # about the same expiry for a month.
+    renewal_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    #: When `consent.expired` was emitted to subscribers. Separate from the
+    #: reminder because they fire at different moments — one before, one after —
+    #: and a single column could not record both.
+    expiry_announced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )

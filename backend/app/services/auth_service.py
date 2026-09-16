@@ -168,6 +168,20 @@ async def authenticate(
         )
         raise AuthenticationError(_GENERIC_FAILURE)
 
+    # The password is right. If a second factor is owed, NO session is issued
+    # here — a short-lived challenge token stands in until a code is presented.
+    #
+    # Raised before the counters are cleared, deliberately. This transaction
+    # rolls back, so a correct password on an account approaching its lockout
+    # threshold does not reset the count until the login actually completes.
+    # Somebody who has the password and not the device must not be able to hold
+    # the lockout off indefinitely.
+    if user.mfa_enabled:
+        from app.services import mfa_service
+
+        token, expires = mfa_service.mint_challenge(user)
+        raise mfa_service.MfaRequired(token, expires)
+
     # Success: clear the counters and transparently upgrade the hash if our cost
     # parameters have increased since it was written.
     user.failed_login_count = 0
@@ -319,6 +333,75 @@ async def issue_session(
     return pair
 
 
+async def complete_mfa(
+    session: AsyncSession,
+    *,
+    challenge_token: str,
+    code: str,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> TokenPair:
+    """The second half of a login that owed a second factor.
+
+    Runs on an unscoped session, like `authenticate`: the tenant comes from the
+    challenge token, and the tenant context is set from it before anything is
+    read. The token is signed by us and short-lived, so trusting its `tenant_id`
+    to *select* a scope is sound — and RLS is still what enforces that scope,
+    exactly as it is for a password login.
+    """
+    from app.db.session import set_tenant_context
+    from app.services import mfa_service
+
+    user_id, tenant_id = mfa_service.read_challenge(challenge_token)
+    await set_tenant_context(session, tenant_id)
+
+    user = await mfa_service.user_for_challenge(session, user_id=user_id)
+
+    # A failed code counts towards lockout. Without this the second factor is a
+    # six-digit number an attacker holding the password may guess without limit,
+    # which is a million tries against a value that changes every thirty
+    # seconds — and they get a fresh challenge for each attempt.
+    try:
+        method = await mfa_service.verify_challenge(
+            session, tenant_id=tenant_id, user=user, code=code,
+            ip=ip, user_agent=user_agent,
+        )
+    except AuthenticationError:
+        # Its own transaction, which commits before we re-raise — so the counter
+        # survives this request rolling back. `mfa_service.verify_challenge`
+        # deliberately writes no audit entry of its own; see the note there on
+        # the advisory-lock deadlock that caused.
+        await _record_failed_attempt(
+            tenant_id=tenant_id, user_id=user.id, email=user.email,
+            ip=ip, user_agent=user_agent, reason="invalid_mfa_code",
+        )
+        raise
+
+    now = datetime.now(UTC)
+    user.failed_login_count = 0
+    user.locked_until = None
+    user.last_login_at = now
+
+    pair = await _issue_tokens(
+        session, user=user, family_id=uuid.uuid4(), ip=ip, user_agent=user_agent
+    )
+
+    await audit_service.record(
+        session,
+        tenant_id=tenant_id,
+        actor=Actor(type="user", id=user.id, label=user.email, ip=ip,
+                    user_agent=user_agent),
+        action=AuditAction.LOGIN_SUCCEEDED,
+        entity_type="user",
+        entity_id=user.id,
+        # `mfa_method` distinguishes the ordinary case from the one worth
+        # looking at: a login on a recovery code means the enrolled device was
+        # not involved.
+        payload={"role": user.role, "mfa": True, "mfa_method": method},
+    )
+    return pair
+
+
 async def _issue_tokens(
     session: AsyncSession,
     *,
@@ -376,6 +459,11 @@ async def _record_failed_attempt(
     email: str,
     ip: str | None,
     user_agent: str | None,
+    #: What was wrong. A wrong password and a wrong second-factor code are very
+    #: different events — the second means somebody already has the password —
+    #: and an audit trail that renders them identically cannot tell you which
+    #: one you are looking at.
+    reason: str = "invalid_credentials",
 ) -> None:
     from app.db.session import tenant_session
 
@@ -399,7 +487,7 @@ async def _record_failed_attempt(
             entity_id=user_id,
             # No password, no hash, not even its length. An audit trail that helps
             # an attacker who later reads it is a liability.
-            payload={"reason": "invalid_credentials", "attempt": user.failed_login_count},
+            payload={"reason": reason, "attempt": user.failed_login_count},
         )
 
 

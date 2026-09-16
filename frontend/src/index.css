@@ -44,3 +44,56 @@
            bg-canvas px-2 py-0.5 text-xs font-medium text-muted;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Print.
+
+   "Save as PDF" on the consent history is the browser's print dialogue, so the
+   printed page IS the deliverable — not a screenshot of an app. What a person
+   is saving is evidence of what they consented to and when, and a sidebar, a
+   filter row and a pagination control on that document make it look like a
+   screengrab rather than a record.
+
+   `.no-print` marks anything that is a control rather than content.
+   --------------------------------------------------------------------------- */
+@media print {
+  .no-print,
+  nav,
+  aside,
+  header button,
+  .btn-primary,
+  .btn-secondary,
+  .btn-ghost {
+    display: none !important;
+  }
+
+  /* The app paints its own background; a printer would render it as a grey
+     wash over every page and drink an ink cartridge doing it. */
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .card {
+    border: 1px solid #ccc !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+
+  /* A consent history is a long table. Repeating the head on every sheet is
+     what makes page four readable on its own. */
+  thead {
+    display: table-header-group;
+  }
+
+  tr {
+    break-inside: avoid;
+  }
+
+  /* Scroll containers have no meaning on paper — without this, anything past
+     the viewport width is simply cut off the page. */
+  .overflow-x-auto,
+  .overflow-y-auto {
+    overflow: visible !important;
+  }
+}

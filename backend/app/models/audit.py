@@ -91,6 +91,29 @@ class AuditAction:
     ACCOUNT_LOCKED = "auth.account_locked"
     PASSWORD_CHANGED = "auth.password_changed"
 
+    # Second factor (BRD §4.6.1, §4.7).
+    #
+    # RECOVERY_USED is the loud one. A recovery code means somebody got in
+    # without the enrolled device — which is either a lost phone or an attacker
+    # who obtained a printed code, and the two are indistinguishable at the
+    # moment it happens. It carries the remaining count, because running out is
+    # the thing to act on before it happens rather than after.
+    #
+    # DISABLED is here for the obvious reason: turning the control off is the
+    # first thing anybody who takes over an account wants to do.
+    # There is deliberately NO `mfa_challenge_failed` here. A wrong code is
+    # recorded as LOGIN_FAILED with `reason: invalid_mfa_code`, on the same
+    # counter and in the same transaction as a wrong password — which is what
+    # makes it count towards the lockout. A separate action would have needed a
+    # second audit write on the request's own transaction, and that deadlocks
+    # against the lock the failure recorder takes. A constant nothing ever
+    # writes is worse than absent: somebody filters for it and concludes there
+    # have been no failed challenges.
+    MFA_ENABLED = "auth.mfa_enabled"
+    MFA_DISABLED = "auth.mfa_disabled"
+    MFA_RECOVERY_USED = "auth.mfa_recovery_used"
+    MFA_RECOVERY_REGENERATED = "auth.mfa_recovery_regenerated"
+
     # tenant administration
     TENANT_CREATED = "tenant.created"
     TENANT_UPDATED = "tenant.updated"
@@ -185,6 +208,11 @@ class AuditAction:
     # names and counts, never a value.
     DSAR_DATA_MAP_BUILT = "dsar.data_map_built"
     DSAR_CONNECTED_ERASURE = "dsar.connected_erasure"
+    # §12(1). Carries BOTH the old and the new value, which is the whole reason
+    # it exists: correction used to be a manual workflow whose only record was a
+    # sentence somebody typed, and "we corrected it" cannot answer "from what?".
+    # A dry run writes nothing here — looking is not an act.
+    DSAR_CONNECTED_CORRECTION = "dsar.connected_correction"
 
     # Fulfilment. Each of these is a disclosure or a decision about one, and
     # the payloads carry counts, hashes and reasons — never a disclosed value.
@@ -265,3 +293,21 @@ class AuditAction:
     CONNECTION_UPDATED = "connection.updated"
     CONNECTION_TESTED = "connection.tested"
     CONNECTION_DELETED = "connection.deleted"
+
+    # Outbound alerts to fiduciaries and processors (BRD §4.4.2).
+    #
+    # Registering an endpoint is auditable because the URL is where a person's
+    # identifier and an instruction about their data will be sent from now on;
+    # changing it changes who receives that. Rotation is here because the old
+    # secret stops working the instant it happens, and "our alerts started
+    # failing at 14:02" wants an entry at 14:02.
+    #
+    # ESCALATED is the one that matters in an inquiry. It is the record that a
+    # processor was told to stop and never confirmed it did — the gap between a
+    # withdrawal being honoured on paper and being honoured in fact.
+    WEBHOOK_ENDPOINT_CREATED = "webhook.endpoint_created"
+    WEBHOOK_ENDPOINT_ENABLED = "webhook.endpoint_enabled"
+    WEBHOOK_ENDPOINT_DISABLED = "webhook.endpoint_disabled"
+    WEBHOOK_ENDPOINT_DELETED = "webhook.endpoint_deleted"
+    WEBHOOK_SECRET_ROTATED = "webhook.secret_rotated"
+    WEBHOOK_ESCALATED = "webhook.escalated"

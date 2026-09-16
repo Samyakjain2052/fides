@@ -426,18 +426,29 @@ async def confirm_public(
 async def dispatch_to_engine(
     session: AsyncSession, *, tenant_id: uuid.UUID, actor: Actor, request: DsarRequest
 ) -> DsarRequest:
-    """Hand an access/erasure request to the Fides gateway.
+    """Hand a request to whatever can actually carry it out.
 
-    Correction never reaches here — the engine has no correction action, so it
-    stays a tracked manual workflow rather than being quietly dropped.
+    Access and erasure go to the Fides gateway. Correction does not — the
+    engine has no correction action — and used to stop here, which left §12(1)
+    as a tracked manual workflow: the product knew what was asked, tracked the
+    deadline, and did nothing about the data.
+
+    It now goes to `data_map_service.auto_correct`, which writes directly to the
+    connected systems. That is a narrower path than it sounds: it applies itself
+    only when the current value the person stated matches exactly one column in
+    exactly one system, and otherwise leaves a plan for a human. See that
+    function for why the person's own account of the data is what makes this
+    verification rather than guesswork.
+
+    The unconfirmed-public-request guard below covers BOTH, and has to: a
+    correction dispatched on an unverified address writes a stranger's chosen
+    value into somebody's record, which is worse than disclosing it.
     """
-    if request.type not in _ENGINE_ACTION:
-        return request
-
     # A request that arrived through the unauthenticated public form is a claim
     # about an email address until somebody proves they control the mailbox.
-    # Dispatching one would disclose or delete a person's data on the strength
-    # of an address anybody could type into a form on a customer's website.
+    # Dispatching one would disclose, delete or rewrite a person's data on the
+    # strength of an address anybody could type into a form on a customer's
+    # website.
     #
     # Checked HERE rather than only at the call site, because this is the single
     # function that makes data move — and a guard placed anywhere else can be
@@ -447,6 +458,49 @@ async def dispatch_to_engine(
             "not dispatching %s: raised publicly and not yet confirmed",
             request.reference,
         )
+        return request
+
+    # §12(1). Not the engine's to do, so it is done here against the connected
+    # systems directly.
+    if request.type in CORRECTION_TYPES:
+        from app.services import data_map_service
+
+        try:
+            outcome = await data_map_service.auto_correct(
+                session, tenant_id=tenant_id, actor=actor, request_id=request.id
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Same treatment as a gateway failure: the request is not lost, the
+            # reason is on its timeline, and a human can carry it out by hand.
+            request.engine_error = f"{type(exc).__name__}: {exc}"[:500]
+            await session.flush()
+            await _event(
+                session, tenant_id=tenant_id, request=request, actor=actor,
+                note=f"Automatic correction could not run: {exc}"[:500],
+                automated=True,
+            )
+            return request
+
+        if outcome.get("applied") is None:
+            # A real answer, not a failure. Recorded so the DPO opening this
+            # sees WHY it is waiting for them rather than an empty timeline.
+            await _event(
+                session, tenant_id=tenant_id, request=request, actor=actor,
+                note=(
+                    "Correction not applied automatically: "
+                    f"{outcome.get('why_not_automatic')}. "
+                    f"{len(outcome.get('confirmed') or [])} confirmed and "
+                    f"{len(outcome.get('candidates') or [])} possible target(s) "
+                    "are listed for review."
+                )[:500],
+                automated=True,
+            )
+        return request
+
+    # Everything the engine can do. Kept as an explicit check after the
+    # correction branch so a future sixth request type falls through to nothing
+    # rather than being handed to the gateway under someone else's action name.
+    if request.type not in _ENGINE_ACTION:
         return request
 
     principal = await session.scalar(

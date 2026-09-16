@@ -391,3 +391,146 @@ async def accept_invitation(
         workspace=WorkspaceOut.model_validate(pair.tenant),
         capabilities=caps,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Second factor — BRD §4.6.1 (admin accounts) and §4.7 (audit-log access)
+#
+# Enrolment is deliberately two calls, and so is login. See `mfa_service` for
+# why collapsing either one is how a user gets locked out of their own account.
+# --------------------------------------------------------------------------- #
+
+class MfaVerify(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    challenge_token: str
+    #: A TOTP code or a recovery code. One field, because making the user say
+    #: which kind they are holding is a question they should not have to answer
+    #: on the day they are already locked out.
+    code: str = Field(..., min_length=4, max_length=32)
+
+
+class MfaCode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(..., min_length=4, max_length=32)
+
+
+class MfaPassword(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+@router.post(
+    "/mfa/verify",
+    response_model=TokenResponse,
+    summary="Finish a sign-in that needed a code",
+)
+async def mfa_verify(
+    payload: MfaVerify,
+    request: Request,
+    response: Response,
+    session: UnscopedSession,
+) -> TokenResponse:
+    """Exchange a challenge token plus a code for a session.
+
+    A wrong code counts towards the account lockout. Without that the second
+    factor is a six-digit number that somebody holding the password could guess
+    without limit, taking a fresh challenge for every attempt.
+    """
+    pair = await auth_service.complete_mfa(
+        session,
+        challenge_token=payload.challenge_token,
+        code=payload.code,
+        ip=client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    _set_refresh_cookie(response, pair.refresh_token, pair.refresh_expires_at)
+    return TokenResponse(
+        access_token=pair.access_token,
+        expires_at=pair.access_expires_at,
+        user=UserOut.model_validate(pair.user),
+        workspace=WorkspaceOut.model_validate(pair.tenant),
+        capabilities=sorted(c.value for c in capabilities_for(pair.user.role)),
+    )
+
+
+@router.get("/mfa", summary="Is a second factor on for this account?")
+async def mfa_status(current: CurrentUserDep) -> dict:
+    from app.services import mfa_service
+
+    return await mfa_service.status(current.user)
+
+
+@router.post("/mfa/enrol", summary="Start turning on a second factor")
+async def mfa_enrol(current: CurrentUserDep) -> dict:
+    """Returns the secret and an `otpauth://` URI for a QR code.
+
+    Nothing is enabled yet. The account is unchanged until a code computed from
+    this secret comes back to `/mfa/enrol/confirm`, which is what stops somebody
+    who closes the tab halfway from locking themselves out.
+    """
+    from app.services import mfa_service
+
+    return await mfa_service.begin_enrolment(
+        current.session, tenant_id=current.tenant_id, user=current.user
+    )
+
+
+@router.post("/mfa/enrol/confirm", summary="Finish turning on a second factor")
+async def mfa_enrol_confirm(payload: MfaCode, current: CurrentUserDep) -> dict:
+    """Verifies a code, switches MFA on, and returns the recovery codes — once.
+
+    They are Argon2-hashed on the way in and cannot be shown again. Losing both
+    the device and these codes means an administrator has to turn MFA off for
+    the account, which requires the account password.
+    """
+    from app.services import mfa_service
+
+    codes = await mfa_service.confirm_enrolment(
+        current.session,
+        tenant_id=current.tenant_id,
+        actor=current.actor,
+        user=current.user,
+        code=payload.code,
+    )
+    return {
+        "enabled": True,
+        "recovery_codes": codes,
+        "recovery_codes_shown_once": True,
+    }
+
+
+@router.post("/mfa/disable", summary="Turn off the second factor")
+async def mfa_disable(payload: MfaPassword, current: CurrentUserDep) -> dict:
+    """Requires the account password, not the current code.
+
+    An unlocked session on an unattended laptop is precisely what MFA exists to
+    survive, and a second factor that a borrowed session can remove is not one.
+    """
+    from app.services import mfa_service
+
+    await mfa_service.disable(
+        current.session,
+        tenant_id=current.tenant_id,
+        actor=current.actor,
+        user=current.user,
+        password=payload.password,
+    )
+    return {"enabled": False}
+
+
+@router.post("/mfa/recovery-codes", summary="Issue a fresh set of recovery codes")
+async def mfa_recovery_codes(payload: MfaPassword, current: CurrentUserDep) -> dict:
+    """Every previous code stops working. Password-gated, like disabling."""
+    from app.services import mfa_service
+
+    codes = await mfa_service.regenerate_recovery_codes(
+        current.session,
+        tenant_id=current.tenant_id,
+        actor=current.actor,
+        user=current.user,
+        password=payload.password,
+    )
+    return {"recovery_codes": codes, "recovery_codes_shown_once": True}

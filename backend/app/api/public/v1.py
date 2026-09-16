@@ -368,3 +368,58 @@ async def list_public_purposes(
             }
         )
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Webhook acknowledgement — BRD §4.4.2, "Action Confirmation"
+# --------------------------------------------------------------------------- #
+
+class WebhookAck(BaseModel):
+    """What the receiver did about an alert we sent."""
+
+    note: str | None = Field(
+        None,
+        max_length=500,
+        description="What you did, in your words. Kept as evidence of a claim "
+                    "you made — we cannot verify it, and do not pretend to.",
+        examples=["Suppressed in Mailchimp and purged the segment cache."],
+    )
+
+
+@router.post(
+    "/webhooks/deliveries/{delivery_id}/ack",
+    summary="Confirm you acted on an alert",
+)
+async def acknowledge_delivery(
+    delivery_id: uuid.UUID,
+    body: WebhookAck,
+    caller: Annotated[CurrentApiKey, Depends(require_scope(Scope.WEBHOOK_ACK))],
+) -> dict[str, Any]:
+    """Records that you stopped, not merely that you received.
+
+    Your server returning 2xx tells us the bytes arrived. It says nothing about
+    whether any processing stopped, and those are the two facts a Data Fiduciary
+    has to be able to tell apart under §8(2) — so they are stored separately and
+    this is how the second one gets set.
+
+    Until it is, the alert counts as unacknowledged, and past the endpoint's
+    window it is escalated to the DPO. That is deliberate: an alert nobody
+    confirmed is the failure mode with no other symptom.
+
+    Idempotent. A retry keeps the FIRST timestamp, because that is when
+    processing actually stopped — not when your retry queue drained.
+    """
+    from app.services import webhook_service
+
+    delivery = await webhook_service.acknowledge(
+        caller.session,
+        tenant_id=caller.tenant_id,
+        delivery_id=delivery_id,
+        note=body.note,
+    )
+    return {
+        "delivery_id": str(delivery.id),
+        "event": delivery.event,
+        "acknowledged_at": delivery.acknowledged_at.isoformat(),
+        "status": delivery.status,
+    }

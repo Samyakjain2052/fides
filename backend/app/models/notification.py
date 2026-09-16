@@ -58,6 +58,10 @@ TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
     "dsar.completed": ("reference", "type", "organisation"),
     "dsar.rejected": ("reference", "type", "reason", "organisation"),
     "consent.withdrawn": ("purpose", "organisation", "effective_from"),
+    # §4.1.4. Sent before the lapse, not after: the point is to let somebody
+    # decide, and a notice that arrives once the consent has already gone is an
+    # announcement rather than a choice.
+    "consent.expiring": ("purpose", "expires_on", "days_left", "organisation"),
     "grievance.received": ("reference", "category", "deadline", "organisation"),
     "grievance.escalated": ("reference", "category", "days_open", "organisation"),
     "grievance.resolved": ("reference", "resolution", "organisation"),
@@ -87,6 +91,17 @@ TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
     "user.password_reset": ("reset_url", "expires_in", "organisation"),
     "connection.failing": (
         "connection", "system", "failures", "since", "reason", "organisation",
+    ),
+    # Also to the DPO. A processor that accepts every withdrawal alert and
+    # confirms none of them is the failure mode with no symptom: our sends
+    # succeed, their systems keep processing, and nobody finds out until a
+    # person who withdrew in March asks why they were mailed in June.
+    #
+    # No `principal` placeholder, deliberately. The alert concerns one person,
+    # and naming them would put an identifier into a staff mailbox to tell an
+    # operator something that is true of the integration rather than of them.
+    "webhook.escalated": (
+        "endpoint", "event", "sent_at", "hours", "organisation",
     ),
     # Correspondence on a rights request. Note what is NOT available here:
     # there is no `body` and no `preview` placeholder, so a customer editing

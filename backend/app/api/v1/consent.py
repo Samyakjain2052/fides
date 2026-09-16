@@ -353,6 +353,34 @@ async def withdraw_consent(
     )
 
 
+@router.post(
+    "/consents/renew", response_model=ConsentOut,
+    summary="Renew a consent before it lapses (§4.1.4)",
+)
+async def renew_consent(
+    body: ConsentWithdraw,
+    current: Annotated[CurrentUser, Depends(require(Capability.CONSENT_READ))],
+) -> Consent:
+    """Takes the consent again rather than extending the date on the old one.
+
+    The distinction matters: a renewal re-points at whatever notice version is
+    published now and re-stamps `given_at`. Moving `expires_at` on a consent
+    given against text that has since been revised would manufacture agreement
+    to wording nobody ever read.
+
+    Reuses `ConsentWithdraw`'s shape — principal, purpose, optional note — for
+    the obvious reason that renewing and withdrawing identify a consent the same
+    way.
+    """
+    return await consent_service.renew(
+        current.session,
+        tenant_id=current.tenant_id,
+        actor=current.actor,
+        principal_id=body.principal_id,
+        purpose_id=body.purpose_id,
+    )
+
+
 @router.get(
     "/consents/check", response_model=ConsentCheckOut,
     summary="Do I have consent right now?",

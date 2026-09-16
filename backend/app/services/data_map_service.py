@@ -352,3 +352,421 @@ async def erase(
         "failures": len(failures),
         "all_succeeded": not failures,
     }
+
+
+class CorrectionRefused(Conflict):
+    """A lawful or safety reason this correction cannot be carried out."""
+
+
+async def correct(
+    session,
+    *,
+    tenant_id: uuid.UUID,
+    actor: Actor,
+    request_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    table: str,
+    column: str,
+    new_value: str,
+    confirm_reference: str | None = None,
+    dry_run: bool = True,
+    _automatic: bool = False,
+) -> dict[str, Any]:
+    """Carry out a §12(1) correction in a connected system.
+
+    Correction was a tracked manual workflow because the engine has no
+    correction action. That was honest but thin: the record of what happened was
+    a sentence somebody typed, which is a claim rather than evidence. This makes
+    the change and records what it actually changed — the old value, the new
+    one, the row count, and who decided it.
+
+    DRY RUN IS THE DEFAULT, and that is the opposite of `erase`.
+
+    Erasure is preceded by discovery, so the admin has already seen what will be
+    touched. A correction names one column and one new value, and the thing most
+    likely to be wrong is the mapping between "Full name" on a form and
+    `users.full_name` in a schema. So the first call shows what is there now and
+    changes nothing; only an explicit `dry_run=False` writes. Both go down the
+    same code path in `discovery.correct`, because a preview computed by
+    different code from the write is worse than no preview.
+
+    ONE COLUMN PER CALL, deliberately. A request that corrects a name in three
+    systems is three decisions, each with its own receipt, not one bulk action
+    whose failure halfway through leaves an unknown state.
+    """
+    request, principal = await _request_and_principal(session, request_id=request_id)
+
+    if request.type not in ("correction", "completion", "updating"):
+        raise CorrectionRefused(
+            f"{request.reference} is a {request.type} request. Correcting data "
+            "on the strength of one would be acting beyond what was asked."
+        )
+
+    if not (new_value or "").strip():
+        raise CorrectionRefused(
+            "A correction needs a new value. To remove a value rather than "
+            "change it, the person is asking for erasure, which is a different "
+            "right with different exemptions."
+        )
+
+    # Only the live write needs the reference typed back. Requiring it for a
+    # preview would train people to type it without reading, which is precisely
+    # what the guard exists to prevent.
+    #
+    # `_automatic` is the one exemption, and it is narrower than it looks: the
+    # only caller is `auto_correct`, which reaches here solely when the person's
+    # own statement of the current value matched exactly one column in exactly
+    # one system. The guard protects against an unconsidered click, and there is
+    # no click — the consideration happened when the request was verified and
+    # the database agreed with what the requester said was in it.
+    if not dry_run and not _automatic:
+        if (confirm_reference or "").strip().upper() != request.reference.upper():
+            raise CorrectionRefused(
+                f"To apply this change, type the request's reference "
+                f"({request.reference}) to confirm. This writes to a live "
+                "system and there is no undo."
+            )
+
+    row = await session.scalar(
+        select(Connection).where(Connection.id == connection_id)
+    )
+    if row is None:
+        raise NotFound("No such connection.")
+    if row.status != "connected":
+        raise CorrectionRefused(
+            f"{row.label} is not connected, so nothing can be written to it. "
+            "Test the connection first."
+        )
+
+    try:
+        config = {**row.config_public, **open_sealed(row.config_sealed)}
+    except CredentialSealError as exc:
+        raise CorrectionRefused(f"Could not read that connection: {exc}") from exc
+
+    # Re-discovered rather than trusting a table name from the request body.
+    # The finding carries what may be written — `would_mask` is the allowlist
+    # `discovery.correct` enforces — and a stale one would let a column that is
+    # no longer personal data be rewritten.
+    identifiers = _identifiers(principal)
+    found = await discovery.discover(row.connector_id, config, identifiers)
+    if not found.ok:
+        raise CorrectionRefused(
+            found.error or "That system could not be searched just now."
+        )
+
+    finding = next((f for f in found.findings if f.table == table), None)
+    if finding is None:
+        raise CorrectionRefused(
+            f"{table} does not hold anything matching this person, so there is "
+            "nothing here to correct."
+        )
+
+    outcome = await discovery.correct(
+        row.connector_id, config, finding,
+        identifiers.get(finding.matched_identifier, ""),
+        column, new_value, dry_run=dry_run,
+    )
+
+    if dry_run:
+        # No event, no audit entry. Looking is not an act, and a timeline full
+        # of "somebody previewed this" buries the line that says what changed.
+        return {
+            "request": request.reference,
+            "connection": row.label,
+            **outcome.as_dict(),
+        }
+
+    from app.services.dsar_service import _event
+
+    how = "automatically" if _automatic else "by hand"
+    if outcome.ok:
+        note = (
+            f"{row.label} · {table}.{column}: changed "
+            f"{outcome.rows_affected} row(s) from "
+            f"{', '.join(outcome.old_values) or '(empty)'} to {new_value} "
+            f"({how})"
+        )
+    else:
+        note = f"{row.label} · {table}.{column}: FAILED — {outcome.error}"
+
+    await _event(
+        session, tenant_id=tenant_id, request=request, actor=actor,
+        note=note, automated=False,
+    )
+
+    await audit_service.record(
+        session, tenant_id=tenant_id, actor=actor,
+        action=AuditAction.DSAR_CONNECTED_CORRECTION,
+        entity_type="dsar_request", entity_id=request.id,
+        payload={
+            "reference": request.reference,
+            "connection": row.label,
+            "table": table,
+            "column": column,
+            # BOTH values. A correction recorded without the old one cannot
+            # answer "changed from what?", which is the question an auditor
+            # asks and the manual workflow could never answer.
+            "old_values": outcome.old_values,
+            "new_value": new_value,
+            "rows_affected": outcome.rows_affected,
+            "ok": outcome.ok,
+            "error": outcome.error,
+            # Which of the two happened. An automatic write had no human in
+            # front of it, and an inquiry into a wrong correction starts by
+            # asking exactly that — so it is a field, not something to infer
+            # from the actor being a system account.
+            "automatic": _automatic,
+        },
+    )
+
+    return {
+        "request": request.reference,
+        "connection": row.label,
+        **outcome.as_dict(),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Automatic correction — §12(1) without a human hunting for the column
+#
+# `correct()` above does the writing, and expects somebody to have already
+# worked out WHICH connection, table and column. That is the tedious half, and
+# the half a person gets wrong: "Full name" on a rights form has to be matched
+# to `users.full_name` in one schema and `customers.name` in another.
+#
+# WHAT MAKES THIS SAFE RATHER THAN A GUESS
+#
+# The request already states the CURRENT value — §12(1) asks what is wrong, so
+# the person has told us what is there. That turns column matching from a guess
+# into a verification: a column whose stored value equals what they said is
+# almost certainly the cell they are talking about, and a column whose name
+# looks right but whose value disagrees is almost certainly not.
+#
+# So a plan has two grades, and only one of them applies itself:
+#
+#   confirmed   the column name matches the requested field AND the stored
+#               value equals the `current` the person stated. Unambiguous —
+#               exactly one of these means there is nothing left to decide.
+#   candidate   the name matches but the value does not, or several columns
+#               match. A human picks, because picking is the actual judgement.
+#
+# Anything that is not a single confirmed match waits. Automation that resolves
+# ambiguity by choosing is how the wrong person's name gets rewritten.
+# --------------------------------------------------------------------------- #
+
+import re as _re
+
+
+def _normalise_field(name: str) -> str:
+    """`Full name`, `full_name` and `fullName` are the same field."""
+    return _re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+#: Words a rights form uses for a column a schema names differently. Small and
+#: explicit rather than a fuzzy-match library: a near-miss here rewrites the
+#: wrong column, and "close enough" is not a standard to write to a production
+#: database against.
+_FIELD_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "name": ("fullname", "name", "customername", "displayname"),
+    "fullname": ("fullname", "name", "customername", "displayname"),
+    "firstname": ("firstname", "givenname", "fname"),
+    "lastname": ("lastname", "surname", "familyname", "lname"),
+    "phone": ("phone", "phonenumber", "mobile", "mobilenumber", "contactnumber",
+              "telephone", "msisdn"),
+    "mobile": ("phone", "phonenumber", "mobile", "mobilenumber", "contactnumber"),
+    "email": ("email", "emailaddress", "mail", "contactemail"),
+    "address": ("address", "addressline1", "street", "postaladdress"),
+    "city": ("city", "town"),
+    "pincode": ("pincode", "postalcode", "zip", "zipcode", "postcode"),
+    "dob": ("dob", "dateofbirth", "birthdate"),
+}
+
+
+def _field_matches(requested: str, column: str) -> bool:
+    want = _normalise_field(requested)
+    have = _normalise_field(column)
+    if not want or not have:
+        return False
+    if want == have:
+        return True
+    return have in _FIELD_SYNONYMS.get(want, ())
+
+
+async def plan_correction(
+    session,
+    *,
+    tenant_id: uuid.UUID,
+    request_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Work out where the requested change should land. Writes nothing.
+
+    Reads every connected system, matches the requested field against the
+    columns discovery classified as this person's personal data, and grades each
+    hit against the `current` value the person stated.
+
+    Returns the plan. `auto_applicable` is true only when exactly one confirmed
+    match exists across every system — which is the one case with no judgement
+    left in it.
+    """
+    request, principal = await _request_and_principal(session, request_id=request_id)
+
+    if request.type not in ("correction", "completion", "updating"):
+        raise CorrectionRefused(
+            f"{request.reference} is a {request.type} request, so there is no "
+            "correction to plan."
+        )
+
+    payload = request.correction_payload or {}
+    # The public form nests it one level; the API takes it flat. Accept both
+    # rather than making the shape a thing callers have to know.
+    inner = payload.get("correction") if isinstance(payload.get("correction"), dict) else payload
+    field = str(inner.get("field") or "").strip()
+    stated_current = str(inner.get("current") or "").strip()
+    corrected = str(inner.get("corrected") or "").strip()
+
+    if not field or not corrected:
+        raise CorrectionRefused(
+            "This request does not say which field to change and what to. "
+            "Without both, there is nothing to plan."
+        )
+
+    identifiers = _identifiers(principal)
+    rows = (
+        await session.execute(
+            select(Connection).where(Connection.status == "connected")
+        )
+    ).scalars().all()
+
+    confirmed: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    unreachable: list[dict[str, Any]] = []
+
+    for row in rows:
+        try:
+            config = {**row.config_public, **open_sealed(row.config_sealed)}
+        except CredentialSealError as exc:
+            unreachable.append({"connection": row.label, "error": str(exc)})
+            continue
+
+        found = await discovery.discover(row.connector_id, config, identifiers)
+        if not found.ok:
+            unreachable.append({
+                "connection": row.label,
+                "error": found.error or "could not be searched",
+            })
+            continue
+
+        for finding in found.findings:
+            for column in finding.would_mask:
+                if not _field_matches(field, column):
+                    continue
+
+                # A dry run, so this reads the stored value through exactly the
+                # code path that would write it.
+                probe = await discovery.correct(
+                    row.connector_id, config, finding,
+                    identifiers.get(finding.matched_identifier, ""),
+                    column, corrected, dry_run=True,
+                )
+                if not probe.ok:
+                    unreachable.append({
+                        "connection": row.label, "table": finding.table,
+                        "column": column, "error": probe.error,
+                    })
+                    continue
+
+                hit = {
+                    "connection_id": str(row.id),
+                    "connection": row.label,
+                    "table": finding.table,
+                    "column": column,
+                    "rows_matched": probe.rows_matched,
+                    "current_values": probe.old_values,
+                    "new_value": corrected,
+                }
+
+                # The verification. Compared case-insensitively and trimmed,
+                # because a person retyping their own name from a screen is not
+                # reproducing whitespace exactly — but not fuzzily beyond that.
+                agrees = bool(stated_current) and any(
+                    v.strip().lower() == stated_current.lower()
+                    for v in probe.old_values
+                )
+                if agrees and probe.rows_matched == 1:
+                    confirmed.append(hit)
+                else:
+                    hit["why_not_confirmed"] = (
+                        "the stored value is not what the request says is there"
+                        if stated_current and not agrees
+                        else "the request did not say what the current value is"
+                        if not stated_current
+                        else f"{probe.rows_matched} rows match here, not one"
+                    )
+                    candidates.append(hit)
+
+    return {
+        "request": request.reference,
+        "type": request.type,
+        "field": field,
+        "stated_current": stated_current,
+        "new_value": corrected,
+        "confirmed": confirmed,
+        "candidates": candidates,
+        "unreachable": unreachable,
+        # The only case with no judgement left in it.
+        "auto_applicable": len(confirmed) == 1 and not candidates,
+        "why_not_automatic": (
+            None if len(confirmed) == 1 and not candidates
+            else "nothing in the connected systems matches this field and value"
+            if not confirmed and not candidates
+            else f"{len(confirmed)} confirmed and {len(candidates)} possible "
+                 "match(es) — which one is right is a judgement, not a lookup"
+        ),
+    }
+
+
+async def auto_correct(
+    session,
+    *,
+    tenant_id: uuid.UUID,
+    actor: Actor,
+    request_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Plan, and carry it out when the plan leaves nothing to decide.
+
+    This is what makes a correction request behave like an access or erasure
+    one: it is confirmed, and then it happens. The difference is that access and
+    erasure have no target to choose — a correction does, so this applies itself
+    only when the person's own account of the current value and the database
+    agree, in exactly one place.
+
+    When they do not, the plan is returned and the request waits for a human.
+    That is not a failure and is not reported as one: "two columns could be the
+    one you mean" is a real answer, and choosing between them silently is the
+    thing worth avoiding.
+    """
+    plan = await plan_correction(
+        session, tenant_id=tenant_id, request_id=request_id
+    )
+    if not plan["auto_applicable"]:
+        return {**plan, "applied": None}
+
+    target = plan["confirmed"][0]
+    result = await correct(
+        session,
+        tenant_id=tenant_id,
+        actor=actor,
+        request_id=request_id,
+        connection_id=uuid.UUID(target["connection_id"]),
+        table=target["table"],
+        column=target["column"],
+        new_value=plan["new_value"],
+        # The reference guard exists so an irreversible act does not follow from
+        # an unremarkable click. There is no click here — the act follows from a
+        # verified request whose own account of the data the database confirmed,
+        # and the audit entry records that it was automatic.
+        confirm_reference=None,
+        dry_run=False,
+        _automatic=True,
+    )
+    return {**plan, "applied": result}

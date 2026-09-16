@@ -5,7 +5,16 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,8 +37,32 @@ class User(UUIDMixin, TenantMixin, TimestampMixin, Base):
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # MFA (BRD §4.6.1 for admin accounts, §4.7 for audit-log access).
+    #
+    # `mfa_enabled` flips only after a code has been verified, never at
+    # enrolment. A user who scans the QR, never finishes, and is marked enabled
+    # is locked out of their own account by a secret they do not have.
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    mfa_secret: Mapped[str | None] = mapped_column(String(255))
+
+    #: SEALED, not plaintext and not hashed. A TOTP secret is the one credential
+    #: here that must be recoverable — verifying a code means recomputing the
+    #: HMAC from it — so it takes the same AES-GCM treatment as a connector
+    #: credential. Widened from String(255) when it stopped being a bare base32
+    #: string: the ciphertext is longer than the plaintext.
+    mfa_secret: Mapped[str | None] = mapped_column(Text())
+
+    #: The highest TOTP counter already accepted. A code is valid for up to
+    #: ninety seconds across the skew window, which is ample time for somebody
+    #: who read it over a shoulder to reuse it — so a counter at or below this
+    #: is refused even when the digest is correct.
+    mfa_last_counter: Mapped[int | None] = mapped_column(Integer)
+
+    #: Argon2 hashes of single-use recovery codes. Hashed, because unlike the
+    #: TOTP secret these only ever need verifying — and a readable list of them
+    #: in the database is a readable list of ways past MFA.
+    mfa_recovery_hashes: Mapped[list[str] | None] = mapped_column(JSONB)
+
+    mfa_enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Reserved now so adding OIDC later is not a migration on a hot table.
     external_idp: Mapped[str | None] = mapped_column(String(64))

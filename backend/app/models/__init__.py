@@ -29,6 +29,11 @@ from app.models.publishable_key import ConsentProvenance, PublishableKey
 from app.models.tenant import Tenant
 from app.models.user import RefreshToken, User
 from app.models.vendor import Vendor, VendorDocument, VendorSystem
+from app.models.webhook import (
+    WEBHOOK_EVENTS,
+    WebhookDelivery,
+    WebhookEndpoint,
+)
 
 __all__ = [
     "ApiKey",
@@ -70,6 +75,9 @@ __all__ = [
     "Vendor",
     "VendorDocument",
     "VendorSystem",
+    "WEBHOOK_EVENTS",
+    "WebhookDelivery",
+    "WebhookEndpoint",
 ]
 
 # Tables that hold customer data and therefore MUST have an RLS policy.
@@ -135,4 +143,10 @@ TENANT_SCOPED_TABLES = [
     "vendors",
     "vendor_documents",
     "vendor_systems",
+    # Phase 13 — outbound alerts to fiduciaries and processors. The delivery log
+    # is evidence that a withdrawal was propagated, so it is tenant-scoped for
+    # the same reason the audit chain is: one customer proving what they did must
+    # never involve reading what another customer did.
+    "webhook_endpoints",
+    "webhook_deliveries",
 ]
