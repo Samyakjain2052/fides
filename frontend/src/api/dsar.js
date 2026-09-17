@@ -64,6 +64,51 @@ export function retryDispatch(id) {
   return apiFetch(`/dsar/${id}/retry`, { method: "POST" });
 }
 
+// --------------------------------------------------------------------------
+// §12(1) correction.
+//
+// Three calls because there are three different acts, and collapsing them would
+// hide which one happened:
+//
+//   plan      read every connected system and grade what could be the target.
+//             Writes nothing, leaves no trace — looking is not an act.
+//   auto      apply it IF the plan leaves nothing to decide. Runs on its own
+//             when the request is verified; this is the retry.
+//   correct   apply one named change the operator chose. Needs the reference
+//             typed back, because this one has a human behind it.
+// --------------------------------------------------------------------------
+
+/** Where the change could land, and whether any of it is unambiguous. */
+export function correctionPlan(id) {
+  return apiFetch(`/dsar/${id}/correction-plan`);
+}
+
+/** Apply only if exactly one confirmed target and no near misses. */
+export function autoCorrect(id) {
+  return apiFetch(`/dsar/${id}/auto-correct`, { method: "POST" });
+}
+
+/**
+ * One named change. `dryRun` defaults true — the opposite of erasure, because
+ * the thing most likely to be wrong here is which column was meant.
+ */
+export function correctInSystem(
+  id,
+  { connectionId, table, column, newValue, dryRun = true, confirmReference },
+) {
+  return apiFetch(`/dsar/${id}/correct`, {
+    method: "POST",
+    body: {
+      connection_id: connectionId,
+      table,
+      column,
+      new_value: newValue,
+      dry_run: dryRun,
+      confirm_reference: confirmReference,
+    },
+  });
+}
+
 // The access package moved to ./fulfilment.js.
 //
 // It used to be fetched here as JSON and turned into a .json file in the

@@ -29,6 +29,7 @@
 // ============================================================================
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import CorrectionPanel from "../../components/dsar/CorrectionPanel";
 import { actionItems } from "../../api/actionItems";
 import { listUsers } from "../../api/auth";
 import { getRequest } from "../../api/dsar";
@@ -596,31 +597,25 @@ export default function DsarFulfilment() {
           subtitle={`A ${request.type} request is not answered with a disclosure package.`}
           done={closed}
         >
-          <p className="text-sm text-muted">
-            {request.type === "erasure" ? (
-              <>
-                Erasure happens on the data map, where you can see which systems
-                hold this person and choose what must be retained.{" "}
-                <Link
-                  to={`/admin/dsar/${requestId}/data-map`}
-                  className="text-teal underline"
-                >
-                  Open the data map →
-                </Link>
-              </>
-            ) : (
-              <>
-                Correction is a manual workflow — the engine has no correction
-                action. Make the change in the source system, then tell the
-                person what you changed using the conversation above and complete
-                the request.
-              </>
-            )}
-          </p>
-          {request.correction_payload && (
-            <pre className="mt-3 overflow-x-auto rounded-lg border border-line bg-canvas p-3 text-xs">
-              {JSON.stringify(request.correction_payload, null, 2)}
-            </pre>
+          {request.type === "erasure" ? (
+            <p className="text-sm text-muted">
+              Erasure happens on the data map, where you can see which systems
+              hold this person and choose what must be retained.{" "}
+              <Link
+                to={`/admin/dsar/${requestId}/data-map`}
+                className="text-teal underline"
+              >
+                Open the data map →
+              </Link>
+            </p>
+          ) : (
+            // §12(1). This used to be a paragraph saying "make the change in
+            // the source system" and a JSON dump of what was asked — which left
+            // the only record of what happened as a sentence somebody typed
+            // into the conversation. The panel makes the change and shows what
+            // it changed it FROM, which is the question that sentence could
+            // never answer.
+            <CorrectionPanel request={request} requestId={requestId} />
           )}
         </Section>
       )}

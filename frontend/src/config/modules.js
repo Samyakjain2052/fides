@@ -26,8 +26,10 @@ export const MODULE_STATUS = {
 
   // Real: a Data Principal submits an access or erasure request and it executes
   // against the Fides engine in this repo, fanning out to four datastores.
-  // Correction and identity verification are the exceptions — see MODULE_CAVEATS,
-  // because a bare "DSAR is live" would overclaim.
+  // §12(1) correction takes a different route — the engine has no correction
+  // action, so it writes to the connected systems directly — but it is no
+  // longer the exception it was. Identity verification still is: see
+  // MODULE_CAVEATS, because a bare "DSAR is live" would overclaim.
   dsar: "live",
 
   // Separate key on purpose. Submitting and tracking a request is real; the
@@ -187,9 +189,12 @@ export const MODULE_CAVEATS = {
     + "is still simulated, not a real verification — the queue reports whether "
     + "verification actually happened rather than assuming it did.",
   dsar:
-    "Access and erasure run for real against four datastores. Two parts are not: " +
-    "correction is sample data (the engine has no correction action yet), and " +
-    "the OTP / DigiLocker identity check is simulated, not a real verification.",
+    "Access and erasure run for real against four datastores. Correction, " +
+    "completion and updating (§12(1)) now write to the connected systems too — " +
+    "not through the engine, which has no correction action, but directly, and " +
+    "only where the current value the person stated matches what is actually " +
+    "stored. Anything ambiguous waits for a person rather than guessing. The " +
+    "one part still simulated is the OTP / DigiLocker identity check.",
   // "live" describes the FEATURE, not the catalogue, and the distinction is the
   // whole point of this caveat. Storing credentials, encrypting them, testing a
   // connection and auditing all of it is real. Connecting to forty named systems
