@@ -685,21 +685,52 @@ async def plan_correction(
                     "new_value": corrected,
                 }
 
-                # The verification. Compared case-insensitively and trimmed,
-                # because a person retyping their own name from a screen is not
-                # reproducing whitespace exactly — but not fuzzily beyond that.
-                agrees = bool(stated_current) and any(
-                    v.strip().lower() == stated_current.lower()
-                    for v in probe.old_values
-                )
+                # The verification, and it differs by type because the three
+                # §12(1) rights make different claims about what is there now.
+                #
+                # completion says "this is MISSING". The checksum is therefore
+                # that the stored value really is absent — not that it equals
+                # something the person stated, because for completion there is
+                # nothing to state. Without this branch, completion could never
+                # confirm and every "add my phone number" waited for a human
+                # forever, which is the same non-answer the manual workflow gave.
+                #
+                # correction and updating both say "this is WRONG, and here is
+                # what it says". The stored value has to match that. Compared
+                # case-insensitively and trimmed, because somebody retyping
+                # their own name off a screen does not reproduce whitespace —
+                # but not fuzzily beyond that.
+                is_empty = all(not v.strip() for v in probe.old_values)
+
+                if request.type == "completion":
+                    agrees = is_empty
+                    mismatch = (
+                        "something is already stored here, so this is a "
+                        "correction rather than a completion"
+                    )
+                else:
+                    # BOTH sides trimmed here, not just the stored one.
+                    # `stated_current` is already stripped upstream, and a
+                    # comparison that decides whether to write to a production
+                    # database should not depend on that having happened — a
+                    # caller passing an untrimmed value would silently never
+                    # match, sending every correction to a human with no
+                    # indication why.
+                    want = stated_current.strip().lower()
+                    agrees = bool(want) and any(
+                        v.strip().lower() == want for v in probe.old_values
+                    )
+                    mismatch = (
+                        "the request did not say what the current value is"
+                        if not stated_current
+                        else "the stored value is not what the request says is there"
+                    )
+
                 if agrees and probe.rows_matched == 1:
                     confirmed.append(hit)
                 else:
                     hit["why_not_confirmed"] = (
-                        "the stored value is not what the request says is there"
-                        if stated_current and not agrees
-                        else "the request did not say what the current value is"
-                        if not stated_current
+                        mismatch if not agrees
                         else f"{probe.rows_matched} rows match here, not one"
                     )
                     candidates.append(hit)

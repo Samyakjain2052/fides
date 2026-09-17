@@ -330,3 +330,110 @@ def test_matching_is_by_synonym_not_by_substring():
 
     assert not _field_matches("name", "nameserver")
     assert not _field_matches("name", "username")
+
+
+# --------------------------------------------------------------------------- #
+# Completion — §12(1)'s third right
+#
+# "This is MISSING, add it." The verification is the mirror image of
+# correction's: instead of "the stored value equals what you said is there", it
+# is "there really is nothing there". Without that branch every completion
+# request waits for a human forever, which is the same non-answer the manual
+# workflow gave.
+# --------------------------------------------------------------------------- #
+
+@needs_pg
+async def test_a_dry_run_reports_an_empty_column_as_empty():
+    """The signal completion's verification rests on.
+
+    A NULL column has to come back as empty rather than as the string "None" or
+    as no entry at all — the planner decides on exactly this.
+    """
+    email = DEMO_EMAIL
+    found = await discovery.discover("postgresql", PG, {"email": email})
+    users = next((f for f in found.findings if f.table.endswith("users")), None)
+    if users is None or "phone" not in users.would_mask:
+        pytest.skip("demo Postgres has no nullable phone column for this person")
+
+    original = (
+        await discovery.correct("postgresql", PG, users, email, "phone",
+                                "probe", dry_run=True)
+    ).old_values
+
+    try:
+        # Empty it, the way a person with no phone on file would look.
+        await discovery.correct("postgresql", PG, users, email, "phone", "",
+                                dry_run=False)
+        probe = await discovery.correct(
+            "postgresql", PG, users, email, "phone", "+919812345678",
+            dry_run=True,
+        )
+        assert probe.ok
+        assert all(not v.strip() for v in probe.old_values), \
+            "an empty column must read as empty, which is what completion checks"
+    finally:
+        await discovery.correct("postgresql", PG, users, email, "phone",
+                                original[0] if original else "", dry_run=False)
+
+
+@needs_pg
+async def test_a_completion_writes_into_an_empty_column():
+    """Adding a value where there was none. The same write path as correction —
+    the difference is entirely in what the planner will confirm."""
+    email = DEMO_EMAIL
+    found = await discovery.discover("postgresql", PG, {"email": email})
+    users = next((f for f in found.findings if f.table.endswith("users")), None)
+    if users is None or "phone" not in users.would_mask:
+        pytest.skip("demo Postgres has no nullable phone column for this person")
+
+    original = (
+        await discovery.correct("postgresql", PG, users, email, "phone",
+                                "probe", dry_run=True)
+    ).old_values
+
+    added = "+919800000123"
+    try:
+        await discovery.correct("postgresql", PG, users, email, "phone", "",
+                                dry_run=False)
+        out = await discovery.correct("postgresql", PG, users, email, "phone",
+                                      added, dry_run=False)
+        assert out.ok
+        assert out.rows_affected >= 1
+        # The receipt says it came from nothing, which is what makes a
+        # completion distinguishable from a correction after the fact.
+        assert all(not v.strip() for v in out.old_values)
+
+        after = await discovery.correct("postgresql", PG, users, email, "phone",
+                                        "probe", dry_run=True)
+        assert after.old_values == [added]
+    finally:
+        await discovery.correct("postgresql", PG, users, email, "phone",
+                                original[0] if original else "", dry_run=False)
+
+
+def test_completion_and_correction_verify_opposite_things():
+    """A property test on the planner's branch, without a database.
+
+    completion confirms when the column is EMPTY; correction confirms when it
+    holds what the person said. Getting these the same way round would make
+    every completion wait and every correction fire blind.
+    """
+    # The two predicates as the planner computes them.
+    def completion_agrees(old_values):
+        return all(not v.strip() for v in old_values)
+
+    def correction_agrees(old_values, stated):
+        # Both sides trimmed, mirroring the planner. Relying on the caller to
+        # have stripped is how a correction silently stops confirming.
+        want = stated.strip().lower()
+        return bool(want) and any(
+            v.strip().lower() == want for v in old_values
+        )
+
+    assert completion_agrees([""]) is True
+    assert completion_agrees(["shivam"]) is False
+
+    assert correction_agrees(["shivam"], "shivam") is True
+    assert correction_agrees(["shivam"], "SHIVAM ") is True   # trimmed, folded
+    assert correction_agrees([""], "shivam") is False
+    assert correction_agrees(["shivam"], "") is False
