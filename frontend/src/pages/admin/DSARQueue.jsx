@@ -161,6 +161,41 @@ function EmbedPanel({ workspace }) {
 }
 
 
+/**
+ * What was asked for, in words.
+ *
+ * Was a `JSON.stringify` of the payload. A DPO skimming a queue should not have
+ * to parse braces to learn that somebody's name is spelt wrong, and the raw
+ * shape leaked a field name (`file`) that means nothing to them.
+ */
+function CorrectionAsked({ payload }) {
+  // The public form nests it one level; the API takes it flat. Read both,
+  // rather than making the shape something the screen has to know.
+  const asked =
+    payload.correction && typeof payload.correction === "object"
+      ? payload.correction
+      : payload;
+
+  return (
+    <div className="rounded-lg bg-canvas p-3 text-sm">
+      <p className="text-xs text-muted">What they asked for</p>
+      <p className="mt-1 text-ink">
+        <span className="font-semibold">{asked.field || "—"}</span>
+        {asked.current ? (
+          <>
+            {" — currently "}
+            <span className="font-mono">{asked.current}</span>
+          </>
+        ) : (
+          " — nothing stored"
+        )}
+        {" → "}
+        <span className="font-mono">{asked.corrected || "—"}</span>
+      </p>
+    </div>
+  );
+}
+
 export default function DSARQueue() {
   const { notify, workspace } = useApp();
   const [rows, setRows] = useState([]);
@@ -623,22 +658,22 @@ export default function DSARQueue() {
                 </div>
               )}
 
-              {selected.type === "correction" && (
+              {/* §12(1) — correction, completion and updating. All three, not
+                  just "correction": the queue was checking one of the three
+                  types, so a completion request showed none of this. */}
+              {["correction", "completion", "updating"].includes(selected.type) && (
                 <div className="mt-2 space-y-2">
                   {selected.correction_payload ? (
-                    <div className="rounded-lg bg-canvas p-3 text-sm">
-                      <p className="text-xs text-muted">Requested correction</p>
-                      <pre className="mt-1 whitespace-pre-wrap text-xs text-ink">
-                        {JSON.stringify(selected.correction_payload, null, 2)}
-                      </pre>
-                    </div>
+                    <CorrectionAsked payload={selected.correction_payload} />
                   ) : (
                     <p className="text-sm text-muted">No correction details recorded.</p>
                   )}
-                  <p className="text-xs text-warning">
-                    Correction is a manual workflow — the privacy engine has no
-                    correction action, so somebody has to make the change and then
-                    complete the request.
+                  <p className="text-xs text-muted">
+                    This runs against the connected systems — it does not go
+                    through the privacy engine, which has no correction action.
+                    It applies itself only where the current value the person
+                    stated matches what is actually stored, in exactly one
+                    place. Anything else waits for you on the fulfilment screen.
                   </p>
                 </div>
               )}
